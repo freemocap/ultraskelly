@@ -2,9 +2,8 @@ import asyncio
 import time
 import logging
 from enum import Enum
+from typing import Callable
 
-from adafruit_motor.motor import DCMotor
-from adafruit_motorkit import MotorKit
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import NodeParams, Node
@@ -24,26 +23,34 @@ class MouthState(Enum):
 
 class MouthNodeParams(NodeParams):
     mouth_motor_channel: int = Field(default=2, ge=1, le=4)
-    open_duration: float = Field(default=2.0, description="Time to keep mouth open before closing")
-    close_ramp_duration: float = Field(default=1.5, description="Time to ramp down throttle when closing")
+    lock_timeout: float = Field(default=0.35, gt=0)
+    opening_duration: float = Field(default=0.2, gt=0)
+    spring_return_duration: float = Field(default=0.32, gt=0)
 
 
 class MouthNode(Node):
     """Mouth controller that slowly closes after opening."""
 
     params: MouthNodeParams
-    motor_kit: SkipValidation[MotorKit] = Field(default=None, exclude=True)
-    mouth_motor: SkipValidation[DCMotor] = Field(default=None, exclude=True)
+    clock: Callable[[], float] = Field(default_factory=lambda: time.monotonic, exclude=True)
+
+    motor_kit: SkipValidation[object] = Field(default=None, exclude=True)
+    mouth_motor: SkipValidation[object] = Field(default=None, exclude=True)
     head_servo_subscription: SkipValidation[TopicSubscriptionQueue] = Field(default=None, exclude=True)
 
     # State tracking
     mouth_state: MouthState = Field(default=MouthState.CLOSED)
     state_start_time: float = Field(default=0.0)
     current_throttle: float = Field(default=0.0)
+    last_lock: bool = False
+    lock_received_at: float | None = None
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: MouthNodeParams) -> "MouthNode":
         """Factory method to create and initialize MouthNode."""
+        from adafruit_motor.motor import DCMotor
+        from adafruit_motorkit import MotorKit
+
         motor_kit = MotorKit(address=0x60, pwm_frequency=1600)
 
         # Select motor channel
@@ -81,72 +88,42 @@ class MouthNode(Node):
         )
 
     def _update_mouth_state(self, *, is_locked: bool) -> None:
-        """Update mouth state machine based on head lock status."""
-        current_time = time.time()
-
-        # State machine logic
-        if self.mouth_state == MouthState.CLOSED:
-            if is_locked:
+        """Energize while locked; release immediately and let the spring close."""
+        now = self.clock()
+        if is_locked:
+            if self.mouth_state not in (MouthState.OPENING, MouthState.OPEN):
                 self.mouth_state = MouthState.OPENING
-                self.state_start_time = current_time
-                self.current_throttle = -1.0
-
-        elif self.mouth_state == MouthState.OPENING:
-            if not is_locked:
-                self.mouth_state = MouthState.CLOSING
-                self.state_start_time = current_time
-            elif current_time - self.state_start_time > 0.2:  # Quick open
+                self.state_start_time = now
+            if now - self.state_start_time >= self.params.opening_duration:
                 self.mouth_state = MouthState.OPEN
-                self.state_start_time = current_time
-
-        elif self.mouth_state == MouthState.OPEN:
-            if not is_locked:
+            self.current_throttle = -1.0
+        else:
+            if self.mouth_state not in (MouthState.CLOSING, MouthState.CLOSED):
                 self.mouth_state = MouthState.CLOSING
-                self.state_start_time = current_time
-            elif current_time - self.state_start_time > self.params.open_duration:
-                self.mouth_state = MouthState.CLOSING
-                self.state_start_time = current_time
-
-        elif self.mouth_state == MouthState.CLOSING:
-            elapsed = current_time - self.state_start_time
-            if elapsed >= self.params.close_ramp_duration:
+                self.state_start_time = now
+            if now - self.state_start_time >= self.params.spring_return_duration:
                 self.mouth_state = MouthState.CLOSED
-                self.current_throttle = 0.0
-            else:
-                # Ramp down throttle
-                progress = elapsed / self.params.close_ramp_duration
-                self.current_throttle = -1.0 * (1.0 - progress)
+            self.current_throttle = 0.0
 
-            # If head locks again while closing, reopen
-            if is_locked and self.current_throttle > -0.5:
-                self.mouth_state = MouthState.OPENING
-                self.state_start_time = current_time
+    async def step(self) -> None:
+        while not self.head_servo_subscription.empty():
+            msg: ServoStateMessage = await self.head_servo_subscription.get()
+            self.last_lock = msg.is_locked_x and msg.is_locked_y
+            self.lock_received_at = self.clock()
+        is_locked = (self.last_lock and self.lock_received_at is not None
+                     and self.clock() - self.lock_received_at <= self.params.lock_timeout)
+        self._update_mouth_state(is_locked=is_locked)
+        self.mouth_motor.throttle = self.current_throttle
 
     async def run(self) -> None:
         """Main motor control loop."""
-        logger.info(f"Starting MouthNode [open_duration={self.params.open_duration}s]")
+        logger.info("Starting spring-return MouthNode")
 
         try:
             while not self.stop_event.is_set():
                 await asyncio.sleep(0.01)
 
-                # Process head servo messages
-                is_locked = False
-                while not self.head_servo_subscription.empty():
-                    msg: ServoStateMessage = await self.head_servo_subscription.get()
-                    is_locked = msg.is_locked_x and msg.is_locked_y
-
-                # Update state machine
-                self._update_mouth_state(is_locked=is_locked)
-
-                # Apply throttle based on state
-                if self.mouth_state == MouthState.OPENING or self.mouth_state == MouthState.OPEN:
-                    self.current_throttle = -1.0
-                elif self.mouth_state == MouthState.CLOSED:
-                    self.current_throttle = 0.0
-                # CLOSING state updates throttle in _update_mouth_state
-
-                self.mouth_motor.throttle = self.current_throttle
+                await self.step()
 
         finally:
             self.mouth_motor.throttle = 0.0

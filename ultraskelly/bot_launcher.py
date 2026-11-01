@@ -22,7 +22,6 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
-    get_or_create_pipeline_pubsub_manager,
 )
 
 
@@ -91,7 +90,7 @@ class BotLauncher(BaseModel):
         """Instantiate launcher and nodes based on config."""
         logger.info("Creating nodes from launch config...")
 
-        launcher = cls(config=config, pubsub=get_or_create_pipeline_pubsub_manager())
+        launcher = cls(config=config, pubsub=PubSubTopicManager.create())
         launcher._create_nodes()
         
         return launcher
@@ -123,6 +122,10 @@ class BotLauncher(BaseModel):
         
         # Clear nodes to release resources
         self.nodes.clear()
+
+        # Retire subscriptions and frame references before constructing the next generation.
+        self.pubsub.close()
+        self.pubsub = PubSubTopicManager.create()
         
         # Give hardware time to release resources
         await asyncio.sleep(1.0)

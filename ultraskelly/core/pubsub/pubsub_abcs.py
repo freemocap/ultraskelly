@@ -28,7 +28,7 @@ class PubSubTopicABC(BaseModel, Generic[MessageType]):
     topic_registry: ClassVar[set[type['PubSubTopicABC']]] = set()
 
     message_type: type[TopicMessageABC]
-    publication: TopicPublicationQueue = Field(default_factory=lambda: asyncio.Queue(maxsize=100))
+    publication: TopicPublicationQueue = Field(default_factory=lambda: asyncio.Queue(maxsize=1))
     subscriptions: list[TopicSubscriptionQueue] = Field(default_factory=list)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -44,19 +44,28 @@ class PubSubTopicABC(BaseModel, Generic[MessageType]):
         return cls.topic_registry.copy()
 
     def get_subscription(self) -> TopicSubscriptionQueue:
-        sub = asyncio.Queue(maxsize=100)
+        sub = asyncio.Queue(maxsize=1)
         self.subscriptions.append(sub)
         return sub
 
     async def publish(self, message: MessageType) -> None:
         if not isinstance(message, self.message_type):
             raise TypeError(f"Message must be of type {self.message_type.__name__}, got {type(message).__name__}")
-        await self.publication.put(message)
+        self._put_latest(self.publication, message)
         for sub in self.subscriptions:
-            await sub.put(message)
+            self._put_latest(sub, message)
+
+    @staticmethod
+    def _put_latest(queue: asyncio.Queue, message: TopicMessageABC) -> None:
+        # State streams favor freshness over history. All access stays on one event loop.
+        while not queue.empty():
+            queue.get_nowait()
+        queue.put_nowait(message)
 
     def close(self) -> None:
-        # AsyncIO queues don't need explicit closing
+        for queue in [self.publication, *self.subscriptions]:
+            while not queue.empty():
+                queue.get_nowait()
         self.subscriptions.clear()
 
 
@@ -87,7 +96,7 @@ def create_topic(
     else:
         field_definitions['publication'] = (
             TopicPublicationQueue,
-            Field(default_factory=lambda: asyncio.Queue())
+            Field(default_factory=lambda: asyncio.Queue(maxsize=1))
         )
 
     # Use Pydantic's create_model - the proper v2 way!

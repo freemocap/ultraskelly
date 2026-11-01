@@ -49,7 +49,7 @@ class PubSubTopicManager(BaseModel):
             )
 
         sub = self.topics[topic_type].get_subscription()
-        logger.trace(
+        logger.debug(
             f"Subscribed to topic {topic_type.__name__} "
             f"with {len(self.topics[topic_type].subscriptions)} subscriptions"
         )

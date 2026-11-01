@@ -2,11 +2,9 @@ import asyncio
 import logging
 import time
 from enum import Enum
+from typing import Callable
 
 import numpy as np
-from adafruit_motor.motor import DCMotor
-from adafruit_motorkit import MotorKit
-from adafruit_servokit import ServoKit
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
@@ -47,7 +45,9 @@ class OrientationNodeParams(NodeParams):
     
     # Head servo control
     head_gain: float = Field(default=0.05, gt=0.0, le=1.0)
-    head_deadzone: int = Field(default=100, ge=0)
+    head_deadzone: int = Field(default=100, ge=0, description="Jaw activation half-width in pixels")
+    centering_tolerance: int = Field(default=1, ge=0)
+    target_timeout: float = Field(default=0.35, gt=0)
     
     # Waist motor control
     waist_min_throttle: float = Field(
@@ -115,10 +115,12 @@ class OrientationNode(Node):
     
     params: OrientationNodeParams
     
+    clock: Callable[[], float] = Field(default_factory=lambda: time.monotonic, exclude=True)
+
     # Hardware
-    servo_kit: SkipValidation[ServoKit] = Field(default=None, exclude=True)
-    motor_kit: SkipValidation[MotorKit] = Field(default=None, exclude=True)
-    waist_motor: SkipValidation[DCMotor] = Field(default=None, exclude=True)
+    servo_kit: SkipValidation[object] = Field(default=None, exclude=True)
+    motor_kit: SkipValidation[object] = Field(default=None, exclude=True)
+    waist_motor: SkipValidation[object] = Field(default=None, exclude=True)
     
     # Subscriptions
     target_subscription: SkipValidation[TopicSubscriptionQueue] = Field(default=None, exclude=True)
@@ -133,6 +135,8 @@ class OrientationNode(Node):
     waist_cooldown_end_time: float | None = Field(default=None)
     
     # Target tracking state
+    latest_target: TargetLocationMessage | None = Field(default=None, exclude=True)
+    target_received_at: float | None = Field(default=None)
     last_target_x: int | None = Field(default=None)
     last_target_y: int | None = Field(default=None)
     
@@ -144,6 +148,9 @@ class OrientationNode(Node):
         params: OrientationNodeParams
     ) -> "OrientationNode":
         """Factory method to create and initialize OrientationNode."""
+        from adafruit_motorkit import MotorKit
+        from adafruit_servokit import ServoKit
+
         node = cls(pubsub=pubsub, params=params)
         
         # Initialize servo kit
@@ -196,13 +203,13 @@ class OrientationNode(Node):
         is_locked_y = abs(error_y) <= self.params.head_deadzone
         
         # Update pan servo
-        if not is_locked_x:
+        if abs(error_x) > self.params.centering_tolerance:
             self.pan_angle += error_x * self.params.head_gain
             self.pan_angle = float(np.clip(self.pan_angle, 0.0, 180.0))
             self.servo_kit.servo[self.params.pan_channel].angle = self.pan_angle
         
         # Update tilt servo
-        if not is_locked_y:
+        if abs(error_y) > self.params.centering_tolerance:
             self.tilt_angle += error_y * self.params.head_gain
             self.tilt_angle = float(np.clip(self.tilt_angle, 0.0, 180.0))
             self.servo_kit.servo[self.params.tilt_channel].angle = self.tilt_angle
@@ -214,7 +221,7 @@ class OrientationNode(Node):
         if self.waist_cooldown_end_time is None:
             return False
         
-        current_time = time.time()
+        current_time = self.clock()
         if current_time < self.waist_cooldown_end_time:
             return True
         
@@ -227,14 +234,14 @@ class OrientationNode(Node):
         if self.waist_motor_start_time is None:
             return False
         
-        elapsed = time.time() - self.waist_motor_start_time
+        elapsed = self.clock() - self.waist_motor_start_time
         if elapsed > self.params.waist_max_active_duration:
             logger.warning(
                 f"Waist motor timeout after {elapsed:.1f}s, "
                 f"entering cooldown for {self.params.waist_cooldown_duration}s"
             )
             # Enter cooldown
-            self.waist_cooldown_end_time = time.time() + self.params.waist_cooldown_duration
+            self.waist_cooldown_end_time = self.clock() + self.params.waist_cooldown_duration
             self.waist_motor_start_time = None
             self.waist_mode = WaistControlMode.IDLE
             return True
@@ -294,7 +301,7 @@ class OrientationNode(Node):
         
         # Track motor start time
         if self.waist_motor_start_time is None:
-            self.waist_motor_start_time = time.time()
+            self.waist_motor_start_time = self.clock()
             logger.debug(f"Waist motor starting in {mode.value} mode")
         
         # Calculate base throttle based on mode
@@ -303,7 +310,7 @@ class OrientationNode(Node):
             pan_offset = self.pan_angle - 90.0
             
             # Small deadzone to prevent oscillation when centered
-            if abs(pan_offset) < 15.0:
+            if abs(pan_offset) <= self.params.pan_center_zone:
                 self.waist_motor_start_time = None
                 return 0.0
             
@@ -340,17 +347,45 @@ class OrientationNode(Node):
         scaled_throttle = self.params.waist_min_throttle + (raw_throttle * throttle_range)
         scaled_throttle = min(scaled_throttle, self.params.waist_max_throttle)
         
-        # Apply direction
-        if mode == WaistControlMode.CENTERING:
-            # Move opposite to pan offset to center
-            # final_throttle = scaled_throttle if pan_offset > 0 else -scaled_throttle
-            final_throttle = 0 # turn off centering for now
-        else:  # ASSISTING
-            # Move in direction of pan offset
-            final_throttle = -scaled_throttle if pan_offset > 0 else scaled_throttle
-        
+        # Turn the torso toward the head's gaze in both modes. The camera
+        # loop then counter-rotates the head toward neutral as the waist turns.
+        # Preserve the existing motor polarity: negative drive increases yaw.
+        final_throttle = -scaled_throttle if pan_offset > 0 else scaled_throttle
+
         return float(final_throttle)
     
+    async def step(self) -> None:
+        """Center on new samples; hold lock between samples until a freshness timeout."""
+        fresh = False
+        while not self.target_subscription.empty():
+            self.latest_target = await self.target_subscription.get()
+            self.target_received_at = self.clock()
+            fresh = True
+        msg = self.latest_target
+        valid = (msg is not None and msg.x is not None and msg.y is not None
+                 and self.target_received_at is not None
+                 and self.clock() - self.target_received_at <= self.params.target_timeout)
+        locked_x = locked_y = False
+        if valid:
+            if fresh:
+                locked_x, locked_y = self._update_head_servos(target_x=msg.x, target_y=msg.y)
+            else:
+                locked_x = abs(msg.x - self.params.target_x - self.params.x_offset) <= self.params.head_deadzone
+                locked_y = abs(msg.y - self.params.target_y - self.params.y_offset) <= self.params.head_deadzone
+            mode = self._determine_waist_mode(is_locked_x=locked_x)
+            self.waist_motor.throttle = self._calculate_waist_throttle(mode=mode, target_x=msg.x)
+            self.waist_mode = mode if self.waist_motor.throttle else WaistControlMode.IDLE
+            self.last_target_x, self.last_target_y = msg.x, msg.y
+        else:
+            self.waist_motor.throttle = 0.0
+            self.waist_mode = WaistControlMode.IDLE
+            self.waist_motor_start_time = None
+        # Publish explicit loss as well as valid lock state so the jaw can release.
+        await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
+            pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=90.0,
+            is_locked_x=locked_x, is_locked_y=locked_y, is_locked_roll=False,
+        ))
+
     async def run(self) -> None:
         """Main control loop."""
         logger.info(
@@ -361,61 +396,8 @@ class OrientationNode(Node):
         
         try:
             while not self.stop_event.is_set():
-                # Get latest target (drain queue to get most recent)
-                latest_msg: TargetLocationMessage | None = None
-                while not self.target_subscription.empty():
-                    latest_msg = await self.target_subscription.get()
-                
-                # Process target if we have one
-                if latest_msg and latest_msg.x is not None and latest_msg.y is not None:
-                    # Update head servos first
-                    is_locked_x, is_locked_y = self._update_head_servos(
-                        target_x=latest_msg.x,
-                        target_y=latest_msg.y
-                    )
-                    
-                    # Determine waist mode
-                    waist_mode = self._determine_waist_mode(is_locked_x=is_locked_x)
-                    
-                    # Calculate and apply waist throttle
-                    waist_throttle = self._calculate_waist_throttle(
-                        mode=waist_mode,
-                        target_x=latest_msg.x
-                    )
-                    self.waist_motor.throttle = waist_throttle
-                    
-                    # Store state
-                    self.waist_mode = waist_mode
-                    self.last_target_x = latest_msg.x
-                    self.last_target_y = latest_msg.y
-                    
-                    # Log status when active
-                    if abs(waist_throttle) > 0.01 or waist_mode != WaistControlMode.IDLE:
-                        logger.debug(
-                            f"Orientation: pan={self.pan_angle:.1f}°, "
-                            f"locked_x={is_locked_x}, waist_mode={waist_mode.value}, "
-                            f"throttle={waist_throttle:.2f}"
-                        )
-                    
-                    # Publish servo state
-                    await self.pubsub.publish(
-                        ServoStateTopic,
-                        ServoStateMessage(
-                            pan_angle=self.pan_angle,
-                            tilt_angle=self.tilt_angle,
-                            roll_angle=90.0,  # Not used in this node
-                            is_locked_x=is_locked_x,
-                            is_locked_y=is_locked_y,
-                            is_locked_roll=False
-                        )
-                    )
-                
-                else:
-                    # No target, stop waist
-                    self.waist_motor.throttle = 0.0
-                    self.waist_mode = WaistControlMode.IDLE
-                    self.waist_motor_start_time = None
-                
+                await self.step()
+
                 # Short sleep for responsive control
                 await asyncio.sleep(0.01)  # 100Hz update rate
         
