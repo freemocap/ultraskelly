@@ -2,6 +2,11 @@
 import argparse
 import asyncio
 import logging
+import signal
+
+
+def _stop_on_sigterm(_signum: int, _frame: object) -> None:
+    signal.raise_signal(signal.SIGINT)  # Same clean shutdown as Ctrl+C
 
 
 def main() -> None:
@@ -28,10 +33,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from ultraskelly.__main__bot import main as run_bot
 
+    # A shell without job control starts background commands with SIGINT ignored, which
+    # Python keeps; restore Ctrl+C explicitly. Service managers stop with SIGTERM.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
         asyncio.run(run_bot(simulate_motors=args.simulate_motors, show_window=not args.no_window))
     except KeyboardInterrupt:
-        logging.getLogger(__name__).info("Stopped by Ctrl+C")  # Nodes already shut down cleanly
+        logging.getLogger(__name__).info("Stopped by Ctrl+C or SIGTERM")  # Nodes already shut down cleanly
 
 
 if __name__ == "__main__":
