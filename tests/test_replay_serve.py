@@ -2,6 +2,7 @@ import asyncio
 import socket
 
 import aiohttp
+import cbor2
 
 from ultraskelly.replay import scripted_target, serve
 
@@ -26,12 +27,13 @@ def test_serve_streams_controller_state_driven_by_scripted_targets():
                 for _ in range(100):  # Wait for the server, then for the head to leave center
                     await asyncio.sleep(0.05)
                     try:
-                        async with session.get(f"http://127.0.0.1:{port}/api/state") as response:
-                            state = await response.json()
+                        async with session.ws_connect(f"ws://127.0.0.1:{port}/stream") as stream:
+                            for _ in range(100):
+                                state = cbor2.loads((await asyncio.wait_for(stream.receive(), timeout=2)).data)
+                                if state["kind"] == "robot_state" and                                         state["motors"]["commands"].get("pan", {}).get("value") not in (None, 90.0):
+                                    return state
                     except aiohttp.ClientConnectionError:
                         continue
-                    if state["motors"]["commands"].get("pan", {}).get("value") not in (None, 90.0):
-                        return state
                 raise AssertionError("The scripted targets never moved the head")
         finally:
             serving.cancel()

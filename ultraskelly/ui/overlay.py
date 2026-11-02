@@ -1,6 +1,6 @@
-"""Draw pose skeletons, the tracked target, and centering guides onto RGB camera frames.
+"""Draw pose skeletons onto RGB camera frames for the OpenCV window.
 
-Shared by the OpenCV window and the dashboard's annotated video stream. Colors are RGB.
+Colors are RGB. The dashboard draws the streamed poses in the browser with the same colors.
 """
 import cv2
 import numpy as np
@@ -12,9 +12,6 @@ HEAD_COLOR = (255, 0, 0)
 ARM_COLOR = (0, 255, 0)
 LEG_COLOR = (0, 0, 255)
 OUTLINE_COLOR = (255, 255, 255)
-AIM_COLOR = (141, 227, 194)
-JAW_ZONE_COLOR = (255, 178, 105)
-TARGET_COLOR = (255, 178, 105)
 
 
 def draw_skeleton(frame: np.ndarray, keypoints: np.ndarray, *, confidence_threshold: float = 0.3) -> None:
@@ -37,32 +34,3 @@ def draw_skeleton(frame: np.ndarray, keypoints: np.ndarray, *, confidence_thresh
             color = HEAD_COLOR if index <= 4 else ARM_COLOR if index <= 10 else LEG_COLOR
             cv2.circle(frame, (x, y), 5, color, -1)
             cv2.circle(frame, (x, y), 6, OUTLINE_COLOR, 1)
-
-
-def draw_tracking_overlay(
-    frame: np.ndarray,
-    *,
-    keypoints: np.ndarray | None,
-    target: tuple[int, int] | None,
-    aim: tuple[int, int],
-    jaw_zone: int,
-) -> np.ndarray:
-    """A copy of an RGB frame with every skeleton, the tracked target, and the centering guides.
-
-    Args:
-        frame: Camera image; it is not modified.
-        keypoints: All people's keypoints, shape (num_people, 17, 3), or None.
-        target: Tracked point in pixels, or None when there is no target.
-        aim: Pixel the head steers the target toward.
-        jaw_zone: Half-width in pixels of the square around the aim that opens the jaw.
-    """
-    annotated = np.ascontiguousarray(frame[..., :3]).copy()
-    aim_x, aim_y = aim
-    cv2.rectangle(annotated, (aim_x - jaw_zone, aim_y - jaw_zone), (aim_x + jaw_zone, aim_y + jaw_zone), JAW_ZONE_COLOR, 1)
-    cv2.line(annotated, (aim_x - 20, aim_y), (aim_x + 20, aim_y), AIM_COLOR, 2)
-    cv2.line(annotated, (aim_x, aim_y - 20), (aim_x, aim_y + 20), AIM_COLOR, 2)
-    for person in keypoints if keypoints is not None else []:
-        draw_skeleton(annotated, person)
-    if target is not None:
-        cv2.circle(annotated, target, 20, TARGET_COLOR, 3)
-    return annotated

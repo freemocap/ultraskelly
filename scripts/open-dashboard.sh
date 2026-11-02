@@ -21,7 +21,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 
 deadline=$((SECONDS + wait_seconds))
-until curl -fs -o /dev/null "${url%/}/api/state"; do
+until curl -fs -o /dev/null "$url"; do
   if ((SECONDS >= deadline)); then
     echo "No runtime server at $url after ${wait_seconds}s; is the bot running?" >&2
     exit 1

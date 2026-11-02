@@ -56,8 +56,12 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 Both can move motors during construction, including a full-power mouth test.
 Add `--simulate-motors` to run the cameras and controllers while recording motor
 commands in memory instead of driving the motor boards. The OpenCV display requires
-a graphical session. While the bot runs, port 8080 serves read-only live state
-(`/api/state`, WebSocket `/ws`) and camera video (`/video/oak.mjpg`) to the network.
+a graphical session; `--no-window` skips it. While the bot runs, port 8080 serves the
+live dashboard to the network. One read-only WebSocket, `/stream`, carries FreeMoCap's
+self-describing CBOR messages: `frame` messages with each OAK image and the poses found
+in it, and `robot_state` messages with motor commands, target, rates and node health.
+The browser decodes them with FreeMoCap's `@freemocap/client` and draws the overlay
+itself. `scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
 
 By default the robot tracks people with a Luxonis OAK USB camera and YOLOv8 pose
 on a Hailo-8 AI HAT+. The original IMX500 AI camera remains available as
