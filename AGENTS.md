@@ -17,9 +17,10 @@ step methods, clock injection, model assumptions, launch commands, and verificat
   Keep queues bounded and publication independent of consumer speed. Discrete
   commands require a separate delivery contract; they must not silently inherit
   the latest-value policy. Queue operations belong on the asyncio event loop.
-- Preserve channel assignments, signs, travel limits, and the 120-second restart
-  workaround until a tested change justifies replacing them. Bench tests do not
-  establish physical limits or prove the historical freeze fixed.
+- Preserve channel assignments, signs, and travel limits until a tested change
+  justifies replacing them. The 120-second restart workaround was removed on
+  2026-11-02 at the owner's direction; the historical freeze is not yet reproduced
+  or fixed. Bench tests do not establish physical limits or prove the freeze fixed.
 - Develop simulation against the same Python controller logic used on the Pi.
   Label commanded positions separately from measured or simulated positions.
   The current DC motor throttle is not a measured waist or jaw angle.

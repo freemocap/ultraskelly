@@ -114,8 +114,8 @@ the waist turns toward its gaze; camera feedback brings the head back toward
 neutral. It also assists near head travel limits. Existing 0.7–0.8 drive bounds,
 0.5-second active limit, and 0.4-second cooldown remain. Target loss stops the
 waist. The state display reports idle during cooldown or when drive is zero.
-The default restart workaround remains in the Pi launcher;
-the simulator does not run that launcher or restart every 120 seconds.
+The Pi launcher's 120-second restart workaround was removed on 2026-11-02;
+the simulator does not run that launcher.
 
 ## Develop and verify
 

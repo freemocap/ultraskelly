@@ -5,6 +5,17 @@ see [the simulator guide](simulator.md) for the current architecture and checks.
 The user explicitly rejected Foxglove, its SDK, and MCAP after this audit. Those
 options below are historical research only and are not part of the plan.
 
+**Follow-up, 2026-11-02:** The Pi was re-imaged (Raspberry Pi OS Trixie, Python
+3.13) and its hardware observed: no IMX500 ribbon camera; a Luxonis OAK-1 and a
+Stereolabs ZED Mini on USB 3; a Hailo-8 AI HAT+ on PCIe; servo and motor boards at
+`0x40` and `0x60`. See [hardware.md](hardware.md). The default launch path is now
+`DetectorType.HAILO_POSE` (OAK camera, YOLOv8 pose on the Hailo-8); the IMX500 path
+remains selectable. At the owner's direction the 120-second restart was removed:
+`BotLauncher.run` stops all nodes when any node exits and re-raises a crash. A
+150-second camera and pose run held 30 fps without motors. The historical freeze is
+not reproduced or certified fixed, and no motor soak has run. The cleanup deletions
+described below were committed in `5a25f7b`.
+
 ## Scope and evidence
 
 Inspected the tracked repository at `c32fbd6` on Windows without the robot.
@@ -34,7 +45,7 @@ separate processes: these nodes share one asyncio event loop.
 
 | Area | What it does | Status |
 | --- | --- | --- |
-| `__main__bot.py`, `bot_launcher.py` | Pydantic configuration; construct nodes; restart every 120 seconds | Retain; lifecycle needs work |
+| `__main__bot.py`, `bot_launcher.py` | Pydantic configuration; construct nodes; stop all when any node exits (120-second restart removed 2026-11-02) | Retain; lifecycle needs work |
 | `sensory/pose_detection_node.py` | IMX500 HigherHRNet COCO inference; select highest-score person and nose; publish target, pose, frame | Active default; Pi-only |
 | `motor/orientation_node.py` | Increment head angles from pixel error; assist with waist DC motor | Active; tests now use fake actuators |
 | `motor/mouth_node.py` | Open/ramp-close state machine based on head lock | Active; tests now use fake actuators |
@@ -121,8 +132,9 @@ publication history is still reduced to the newest value regardless of capacity.
   factories; the current tests cover bus retirement, not Pi resource recreation.
 - **Unsupervised task failures:** launcher creates tasks and sleeps for 120 seconds,
   observing exceptions only at shutdown via `gather(return_exceptions=True)`.
-  A failed node may silently leave siblings running. Keep the timer workaround
-  until structured task supervision and a hardware soak run replace it.
+  A failed node may silently leave siblings running. Superseded 2026-11-02: the
+  owner removed the timer, and the launcher now stops all nodes on the first exit
+  and re-raises crashes. A hardware soak run is still outstanding.
 - **Blocking camera calls:** `capture_array()`, camera startup/stop, OpenCV display,
   and I2C writes run in or alongside the event-loop path. An asyncio timeout cannot
   interrupt a blocked synchronous call on that same thread. Instrument first;

@@ -6,12 +6,22 @@ Draft 01 — 2026-10-29. This reconstructs the expected active wiring from the r
 
 With the simulator running, select **Hardware map** in its header or open `http://127.0.0.1:8765/hardware.html`.
 
+## Observed on the Pi, 2026-11-02
+
+Observed through the re-imaged Pi and the owner's description, not by inspecting the assembled robot. This supersedes the camera rows and checks below, which describe the original IMX500 build. The companion diagram still shows the original ribbon camera.
+
+- No camera on the Pi's CSI connectors; the kernel probes no sensor at boot.
+- Luxonis OAK-1 (one IMX378 colour sensor) and Stereolabs ZED Mini (serial 12395566), each on a blue USB 3 port and streaming at USB 3 speed. The ZED Mini's video enumerates only with its USB-C plug in one orientation; if only its `2b03:f681` HID interface appears, flip the plug at the camera end.
+- Hailo-8 AI HAT+ on PCIe, linked at Gen 3 with `dtparam=pciex1_gen=3`.
+- I²C bus 1 answers at `0x40` (servo board), `0x60` (motor board) and `0x70` (PCA9685 all-call).
+- The Pi reports a 5 A supply; `usb_max_current_enable=1`.
+
 ## Parts and evidence
 
 | Part | Best-supported identification | Confidence and evidence |
 | --- | --- | --- |
 | Host | Raspberry Pi 5 | You identified the model. Python runs the camera and actuator controllers. |
-| Camera | Raspberry Pi AI Camera / Sony IMX500 family | Active `PoseDetectorNode` constructs IMX500 and Picamera2. Exact module branding and cable routing are unverified. |
+| Camera | Raspberry Pi AI Camera / Sony IMX500 family (original build; not fitted as of 2026-11-02) | `PoseDetectorNode` constructs IMX500 and Picamera2. Exact module branding and cable routing are unverified. |
 | Servo controller | 16-channel PCA9685 board, possibly Adafruit Servo HAT, bonnet, or breakout | `ServoKit(channels=16)` uses default address `0x40` and 50 Hz. Library supports multiple physical boards; source cannot identify the SKU. |
 | DC driver | Likely Adafruit DC & Stepper Motor HAT or compatible MotorKit board | Both active motor factories select `0x60`, 1600 Hz. Scratch code explicitly calls it a DC+Stepper HAT. HAT versus bonnet and revision remain unverified. |
 | Head actuators | Two positional hobby servos | `servo[11].angle` controls pan; `servo[3].angle` controls tilt. Model, torque and rated supply voltage are absent. |
@@ -27,7 +37,7 @@ Channel numbers below are board channel labels, not Raspberry Pi GPIO numbers. S
 
 | From | To | Conductors / interpretation |
 | --- | --- | --- |
-| Pi CAM/DISP port | AI Camera CSI socket | Appropriate Pi 5 22-pin to camera 15-pin ribbon. Port 0 versus 1 and contact orientation are not recorded. Follow connector markings and the camera installation guide. |
+| Pi CAM/DISP port | AI Camera CSI socket | Original build; not fitted as of 2026-11-02. Appropriate Pi 5 22-pin to camera 15-pin ribbon. Port 0 versus 1 and contact orientation are not recorded. Follow connector markings and the camera installation guide. |
 | Pi GPIO2 / physical pin 3 | Servo board SDA and motor board SDA | Shared I²C data net. A stacked HAT carries this through its header rather than needing an extra jumper. |
 | Pi GPIO3 / physical pin 5 | Servo board SCL and motor board SCL | Shared I²C clock net. Both boards coexist at different addresses. |
 | Pi ground, e.g. physical pin 6 | Both driver logic grounds | Common signal reference. Stacked headers can provide it. Exact return harness is not documented. |
@@ -52,15 +62,15 @@ The diagram's colored lines identify signal functions, not observed wire insulat
 
 These are historical comments, not confirmation of current wiring. Encoder supply, return, output type and logic level are absent. Do not apply an unverified encoder output to Pi GPIO; its signal must be compatible with 3.3 V logic. The active OrientationNode does not consume encoder data. The simulator's waist angle is an estimate, not an encoder measurement.
 
-Old tracking scripts disagree on servo channels, and some include roll. The active launcher constructs OrientationNode and MouthNode, whose current defaults are pan 11, tilt 3, waist M1, jaw M2. There is no active roll actuator. Hailo and ESP32 experiments exist, but neither is required by the selected IMX500 launch path. They are omitted from the primary diagram rather than assumed to be physically absent.
+Old tracking scripts disagree on servo channels, and some include roll. The active launcher constructs OrientationNode and MouthNode, whose current defaults are pan 11, tilt 3, waist M1, jaw M2. There is no active roll actuator. The Hailo-8 is used by the default `HAILO_POSE` launch path; the ESP32 experiment is used by no launch path. Both are omitted from the primary diagram rather than assumed to be physically absent.
 
 ## Reassembly checks supported by the evidence
 
 1. With power disconnected, compare board labels and connector markings against this map. Identify motor and servo supply ratings before reconnecting power. Keep unresolved power and encoder connections unconnected until identified.
 2. Confirm the two servo plugs are on outputs 11 and 3, and the two actuator pairs are on M1 and M2. Inspect signal/power/ground orientation on the actual servo board.
-3. Confirm the camera ribbon fits the Pi 5 and AI Camera connectors. The code discovers `imx500.camera_num`; it does not encode which CAM/DISP socket you used.
+3. Original IMX500 build only: confirm the camera ribbon fits the Pi 5 and AI Camera connectors. The code discovers `imx500.camera_num`; it does not encode which CAM/DISP socket you used. The current cameras are USB; see the observations above.
 4. After the physical wiring and supplies are established, check the expected control addresses `0x40` and `0x60`. Address presence alone does not establish correct motor wiring or supply voltage; board all-call addresses can also appear.
-5. Plan the first powered actuator check with clearance for motion: the existing hardware factories immediately command head servos to 90 degrees and drive the jaw at +1 for 0.5 seconds, then -1 for 0.5 seconds. The launcher recreates nodes every 120 seconds. Do not launch it merely to identify connected boards.
+5. Plan the first powered actuator check with clearance for motion: the existing hardware factories immediately command head servos to 90 degrees and drive the jaw at +1 for 0.5 seconds, then -1 for 0.5 seconds. Since 2026-11-02 the launcher no longer recreates nodes periodically, so this happens once per launch. Do not launch it merely to identify connected boards.
 
 The code's 0–180 degree servo range and simulated ±100 degree waist stops are not verified mechanical travel limits. Negative waist drive increasing simulated yaw is a model convention; physical direction must be checked against the assembled motor leads and linkage.
 
