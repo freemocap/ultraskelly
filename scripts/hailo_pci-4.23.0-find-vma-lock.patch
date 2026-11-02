@@ -1,0 +1,22 @@
+Take the memory-map lock around find_vma() in hailo_vdma_buffer_map().
+
+hailo_pci 4.23.0 looks up the caller's memory map without its lock on every
+user-buffer mapping, which HailoRT does on every inference. The kernel asserts
+the lock in find_vma(), so it logs a warning per inference, and the unlocked
+lookup races with other threads changing the map; on the Pi this ended in a hang
+and a watchdog reset (docs/audit-2026.md). hailort-drivers 4.24.0 (branch hailo8)
+makes exactly this change; it is backported because HailoRT 4.23 needs a 4.23
+driver. Apply in /usr/src/hailo_pci-4.23.0 with `patch -p1`.
+
+--- a/linux/vdma/memory.c
++++ b/linux/vdma/memory.c
+@@ -167,7 +167,9 @@
+     }
+ 
+     if (HAILO_DMA_DMABUF_BUFFER != buffer_type) {
++        mmap_read_lock(current->mm);
+         vma = find_vma(current->mm, addr_or_fd);
++        mmap_read_unlock(current->mm);
+         if (IS_ENABLED(HAILO_SUPPORT_MMIO_DMA_MAPPING)) {
+             if (NULL == vma) {
+                 dev_err(dev, "no vma for virt_addr/size = 0x%08lx/0x%08zx\n", addr_or_fd, size);
