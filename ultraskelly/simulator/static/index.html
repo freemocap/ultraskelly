@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UltraSkelly · Local simulator</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
+</head>
+<body>
+<header><div class="brand"><span class="mark">U/S</span><div><h1>UltraSkelly <span> / simulator</span></h1><p>LOCAL CONTROL LAB</p></div></div><div class="status"><a href="/hardware.html" style="color:var(--accent)">Hardware map</a><span id="connection">Connecting…</span><span class="pill">SIMULATED HARDWARE</span></div></header>
+<main>
+  <aside class="controls">
+    <section><div class="section-title"><h2>Run controls</h2><span id="run-state">PAUSED</span></div>
+      <div class="transport"><button id="play" class="primary">▶ Run</button><button id="step">Step 10 ms</button><button id="reset" title="Reset state, retain tuning">↺ Reset</button></div>
+      <div class="clock"><span id="time">0.00</span><small>SIM SECONDS</small><span id="tick">tick 0</span></div>
+    </section>
+    <section title="Moving either slider selects manual mode. Angles are relative to the stationary base."><h2>Target input</h2>
+      <label>Scenario<select id="scenario"><option value="sweep">Sweeping target</option><option value="manual">Manual target</option><option value="loss">Sweep + periodic loss</option></select></label>
+      <label class="check"><input id="visible" type="checkbox" checked> Target enabled</label>
+      <label>World yaw <output id="yaw-value">25°</output><input id="yaw" type="range" min="-120" max="120" value="25"></label>
+      <label>World pitch <output id="pitch-value">10°</output><input id="pitch" type="range" min="-60" max="60" value="10"></label>
+      <p class="hint">Moving either slider selects manual mode. Angles are relative to the stationary base.</p>
+    </section>
+    <section title="Centers continuously on new samples. Jaw holds open inside its zone; stale targets expire after 350 ms."><h2>Controller & plant</h2><form id="tuning">
+      <div class="fields"><label>Head gain<input id="head_gain" type="number" min="0.001" max="1" step="0.001" value="0.05" required></label><label>Jaw zone · px<input id="head_deadzone" type="number" min="0" max="240" step="1" value="100" required></label></div>
+      <div class="fields"><label>Waist gain<input id="waist_gain" type="number" min="0.001" max="0.05" step="0.001" value="0.008" required></label><label>Sensor · Hz<select id="sensor_hz"><option>10</option><option>20</option><option>50</option><option>100</option></select></label></div>
+      <div class="fields"><label>Servo · °/s<input id="servo_speed" type="number" min="1" max="720" value="180" required></label><label>Waist · °/s<input id="waist_speed" type="number" min="0" max="180" value="45" required></label></div>
+      <button type="submit" class="wide">Apply tuning</button>
+    </form><p class="hint">Centers continuously on new samples. Jaw holds open inside its zone; stale targets expire after 350 ms.</p></section>
+  </aside>
+  <div class="center">
+    <section class="stage" id="stage"><div class="stage-head"><span class="eyebrow">01 / KINEMATIC VIEW</span><button id="view-reset">Reset view</button></div>
+      <div id="viewport" aria-label="Interactive 3D skeleton viewer"></div>
+      <div class="stage-foot"><span><i class="dot bone"></i> Simulated joints <i class="dot target"></i> Target <i class="dot gaze"></i> Camera FOV</span><span>Drag to orbit · Scroll to zoom</span></div>
+    </section>
+    <section class="trace"><div class="section-title"><h2>Full state · last 30 seconds</h2><button id="export">Export JSON</button></div><canvas id="plot" width="1200" height="520" aria-label="Pan, tilt, waist, jaw angle, waist drive and jaw power with jaw state histories"></canvas><div class="legend"><span class="teal">— Command</span><span class="ivory">— Simulated position</span><span>Jaw: <span style="color:#59666e">closed</span> / <span style="color:#ffb269">opening</span> / <span style="color:#8de3c2">open</span> / <span style="color:#b291d9">closing</span></span></div></section>
+  </div>
+  <aside class="inspector">
+    <section><div class="section-title"><h2>Synthetic camera</h2><span id="detection">NO TARGET</span></div><canvas id="camera" width="640" height="480" aria-label="Synthetic camera target position"></canvas><div class="camera-meta"><span>640 × 480</span><span id="pixel">—</span></div><p class="hint">Last sensor sample. Dashed box = jaw activation zone; crosshair = centering goal. Head motion changes the projected target.</p></section>
+    <section title="Pan/tilt commands are servo angles. Waist/jaw commands are motor throttle, -1 to +1."><h2>Joint state</h2><table><thead><tr><th>Joint</th><th>Command</th><th>Simulated</th></tr></thead><tbody><tr><td>Pan</td><td id="pan-command">90°</td><td id="pan">90°</td></tr><tr><td>Tilt</td><td id="tilt-command">90°</td><td id="tilt">90°</td></tr><tr><td>Waist</td><td id="waist-drive">0.00</td><td id="waist">0°</td></tr><tr><td>Jaw</td><td id="mouth-drive">0.00</td><td id="jaw">0°</td></tr></tbody></table><p class="hint">Pan/tilt commands are servo angles. Waist/jaw commands are motor throttle, −1 to +1.</p></section>
+    <section><h2>Controller state</h2><dl><dt>Waist mode</dt><dd id="waist-mode">idle</dd><dt>Mouth state</dt><dd id="mouth-state">closed</dd><dt>Control tick</dt><dd>100 Hz</dd><dt>Hardware drivers</dt><dd class="teal">Not loaded</dd></dl></section>
+    <div class="model-note" title="Rate-limited servos, estimated waist speed, spring-return jaw. Simulated positions, not measured robot motion."><strong>Development model</strong><p>Rate-limited servos, estimated waist speed, spring-return jaw. These are simulated positions, not measured robot motion.</p></div>
+  </aside>
+</main>
+<div id="error" role="alert" hidden></div>
+<script type="module" src="/viewer.js"></script>
+</body></html>

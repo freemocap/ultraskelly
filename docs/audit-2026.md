@@ -1,0 +1,231 @@
+# UltraSkelly revival audit — 2026-10-28
+
+**Follow-up:** the first local simulator and skeleton viewer are now implemented;
+see [the simulator guide](simulator.md) for the current architecture and checks.
+The user explicitly rejected Foxglove, its SDK, and MCAP after this audit. Those
+options below are historical research only and are not part of the plan.
+
+## Scope and evidence
+
+Inspected the tracked repository at `c32fbd6` on Windows without the robot.
+The working tree was clean before this audit. There was no AGENTS.md, test suite,
+or substantive README. This is an audit, cleanup, and first portable test harness;
+the 3D simulator and Pi qualification are subsequent stages.
+
+The likely show application is `ultraskelly.__main__bot`: the VS Code launch
+configuration points to it, and commit `c30a0fd` (2025-11-17, “restart every 2 mins
+to avoid dumb freeze”) changes its launcher. The ordinary package entry point
+previously started a separate voice API. Repository evidence does not establish
+which checkout, environment, or local modifications were actually on the show Pi.
+
+## The retained robot
+
+```text
+IMX500 / Picamera2 -> PoseDetectorNode -> TargetLocationTopic -> OrientationNode
+                         |                                      |
+                         | FrameTopic + PoseDataTopic           | ServoStateTopic
+                         v                                      v
+                      OpenCV UI <---------------------------- MouthNode subscribes
+```
+
+The UI subscribes to all four topics. MouthNode consumes servo lock flags; it
+does not publish servo state. The arrows above describe information flow, not
+separate processes: these nodes share one asyncio event loop.
+
+| Area | What it does | Status |
+| --- | --- | --- |
+| `__main__bot.py`, `bot_launcher.py` | Pydantic configuration; construct nodes; restart every 120 seconds | Retain; lifecycle needs work |
+| `sensory/pose_detection_node.py` | IMX500 HigherHRNet COCO inference; select highest-score person and nose; publish target, pose, frame | Active default; Pi-only |
+| `motor/orientation_node.py` | Increment head angles from pixel error; assist with waist DC motor | Active; tests now use fake actuators |
+| `motor/mouth_node.py` | Open/ramp-close state machine based on head lock | Active; tests now use fake actuators |
+| `ui/cv2_ui.py` | Camera image, skeleton overlay, target, servo state | Active; retain despite old browser UI removal |
+| `sensory/camera_node.py`, `bright_point_detection_node.py` | Alternative bright-object tracking pipeline | Reachable config option; not hardware-validated |
+| `motor/head_node.py`, `waist_node.py` | Earlier separate controllers | Not constructed by current launcher; candidates after import cleanup |
+| `scratch/` | Manual motor tests, IMX500/Hailo trackers, ESP32 experiment and firmware | Quarantine by convention; retain wiring evidence |
+| `replay.py`, `tests/` | Inject fake actuators and test the real retained controllers and bus | Added during this audit |
+
+### Hardware facts encoded in source
+
+- Pan servo channel 11, tilt channel 3, software range 0–180 degrees, startup 90.
+- Waist MotorKit at I2C address `0x60`, channel 1, PWM 1600 Hz, magnitude roughly
+  0.7–0.8; mouth independently constructs another MotorKit at the same address,
+  channel 2. Shared board ownership needs review.
+- Mouth construction drives +1 for 0.5 seconds, then -1 for 0.5 seconds, then 0.
+  This happens again on every recreation. Do not treat construction as passive.
+- Pose model path: `/usr/share/imx500-models/imx500_network_higherhrnet_coco.rpk`.
+  Defaults: 640×480, 10 FPS inference, camera flipped in both axes.
+- Roll exists in the old head controller, but the active orientation controller
+  publishes a constant 90-degree roll with `is_locked_roll=False`.
+- These are software settings, not measured physical limits. The current runtime
+  has no encoder-based waist angle, measured jaw angle, or joint calibration file.
+
+## Cleanup decisions
+
+Removed 115 tracked legacy files. The exact list is in
+[cleanup-files.txt](cleanup-files.txt); originals remain available at `c32fbd6`.
+No hardware scratch file or firmware image was removed. Empty directories can
+remain locally because deletion targeted tracked files rather than directory trees.
+
+| Removed area | Evidence and reason |
+| --- | --- |
+| `ultraskelly-ui/` | Next.js assistant chat app; chat API calls an AI model and has no motor connection |
+| `ultraskelly-ui-og/` | Earlier Vite voice client; endpoints and audio workflow separate from bot launcher |
+| `mic-waveform-visualizer-extract/` | Standalone copy of the old voice microphone component; no robot references |
+| `ultraskelly/api/`, `app.py`, `ultraskelly_app/` | Voice key/audio endpoints, placeholder conversations, empty application model; not launched by bot |
+| `ui/gradio_ui.py` | No caller in retained launcher; synchronous `run()` incompatible with async node launching; thread uses asyncio queues and catches the wrong queue-empty exception |
+| `system/`, `utilities/` | Legacy API paths, custom logging/WebSocket queue, port-killing helper and trivial waits; all consumers removed or replaced |
+
+Replaced import-time global logging with explicit standard logging in the hardware
+entry point. Removed unused web/plotting dependencies; declared NumPy directly,
+added the previously missing MotorKit dependency to an optional hardware extra,
+and added pytest to the development group. Refreshed `uv.lock` while preserving
+existing compatible core versions. The hardware extra is not a tested Pi image.
+
+Further deletion candidates: the older head/waist controllers after moving message
+imports out of them, Hailo/ESP32 experiments after checking the physical setup,
+and tracked IDE metadata. They are not proven broken merely because inactive.
+
+## Reliability findings
+
+### Reproduced and addressed on Windows
+
+1. **A slow subscriber stalls the publisher.** Original subscriptions have capacity
+   100 and `publish()` awaits each subscriber sequentially. A test stops consuming
+   one subscription and sees the 101st publication time out, also starving a healthy
+   consumer. Current state streams now overwrite stale values without waiting.
+2. **Publication history retains every frame.** `create_topic()` overrides the
+   bounded base queue with an unbounded queue; nothing reads that queue. The test
+   observes 1,000 retained messages after 1,000 publishes. It now retains at most
+   one. At 640×480×3 uint8 and 10 FPS, unique frame arrays alone could retain about
+   9.2 MB/s before overhead; this is an estimate, not a measured Pi memory trace.
+3. **Close leaves queued references alive.** Tests now require both publication
+   and subscription queues to be drained when the topic closes.
+
+These are state streams, not reliable command queues. Dropping stale states is
+intentional and can skip brief transitions. Any future discrete command channel
+needs its own acknowledgment/overflow policy. The existing consumers already
+favor the newest state. The optional publication factory remains supported, but
+publication history is still reduced to the newest value regardless of capacity.
+
+### Identified in source; historical cause not established
+
+- **Blocking log sink:** package imports configured a bounded 1,000-entry
+  multiprocessing queue. Handler `emit()` used blocking `put()`; only the voice
+  WebSocket code drained it. Bot-only runs can therefore block the entire event
+  loop once enough logs arrive. Removing the unused logging stack eliminates this
+  path. No show-floor log was available to match its timing to the reported freeze.
+- **Subscriptions survive restarts:** launcher reused the manager while old node
+  queues remained registered. Recreated publishers could block on abandoned queues.
+  Shutdown now closes the old bus and creates a fresh one; new launchers also own
+  independent managers. Full launcher restart testing still needs portable node
+  factories; the current tests cover bus retirement, not Pi resource recreation.
+- **Unsupervised task failures:** launcher creates tasks and sleeps for 120 seconds,
+  observing exceptions only at shutdown via `gather(return_exceptions=True)`.
+  A failed node may silently leave siblings running. Keep the timer workaround
+  until structured task supervision and a hardware soak run replace it.
+- **Blocking camera calls:** `capture_array()`, camera startup/stop, OpenCV display,
+  and I2C writes run in or alongside the event-loop path. An asyncio timeout cannot
+  interrupt a blocked synchronous call on that same thread. Instrument first;
+  establish camera-thread ownership or process isolation for non-cancellable calls.
+- **Non-atomic detection state:** camera callback separately updates keypoints,
+  scores, and boxes while the coroutine reads them. Person-count changes can expose
+  inconsistent snapshots. Missing inference outputs also leave older results live.
+- **Missing timestamps:** targets have no acquisition time or sequence. The pose loop
+  republishes latest detections; controllers cannot distinguish a fresh target from
+  a stale one. Conversely, their 100 Hz loops treat an empty queue as immediate
+  target/lock loss between roughly 10 Hz camera updates, producing pulses and mouth
+  state churn. Separate freshness timeout from “no new message this tick.”
+- **Time and safety:** controllers use wall-clock time. Waist centering is explicitly
+  disabled; its state may still report CENTERING. Shutdown re-centers servos, which
+  is movement, and partial factory failures have no complete rollback. Cancellation
+  tests verify fake motors stop; they cannot guarantee a stuck Pi/I2C call stops.
+- **Configuration mismatch:** `__main__bot` passes `head=HeadNodeParams(...)`, but
+  LaunchConfig has no active `head` field and silently ignores it. Actual gains
+  come from `orientation`. Validate config extras before retuning on hardware.
+- **Display mismatch:** UI requires roll lock for “LOCKED”; active orientation never
+  reports it. Displayed lock and mouth behavior therefore disagree.
+- **Packaging:** Pi imports previously existed without explicit NumPy, OpenCV, or
+  MotorKit requirements. Picamera2/libcamera are OS-coupled and remain outside the
+  portable dependency set. Camera/display imports still prevent importing the full
+  launcher on Windows; only the controllers and bus are portable so far.
+
+## Lightweight tools considered
+
+Primary documentation checked 2026-10-28. Recommendations below are engineering
+judgments for this small robot and the two-week deadline, not benchmark results.
+
+| Tool | Useful capability | Recommendation |
+| --- | --- | --- |
+| [Python 3.11 TaskGroup](https://docs.python.org/3.11/library/asyncio-task.html#task-groups) | Own child tasks; propagate failures; cancel siblings | Adopt next for lifecycle supervision; already in supported Python |
+| [Three.js Object3D](https://threejs.org/docs/pages/Object3D.html) | Hierarchical transforms for a small jointed armature | Preferred custom viewer if needed; keep control logic in Python |
+| [Foxglove SDK](https://docs.foxglove.dev/docs/sdk) | Python live visualization and MCAP logging; MIT-licensed SDK | Time-box a local replay/telemetry trial before writing a large dashboard; assess viewer terms separately |
+| [MCAP](https://mcap.dev/guides/getting-started) | Record/play back timestamped robotics data | Add when camera/pose traces outgrow JSONL; unnecessary for first controller tests |
+| [MuJoCo Python](https://mujoco.readthedocs.io/en/stable/python.html) | Native simulation bindings | Defer unless inertia, collisions, or actuator physics become essential; uncalibrated dynamics would mislead |
+| [ROS 2 installation](https://docs.ros.org/en/jazzy/Installation.html) | Broader robotics ecosystem | Defer migration: this four-node in-process system has no demonstrated need for middleware replacement. Official installation page access was blocked during this audit, so no release/platform compatibility claim is made |
+| [Raspberry Pi AI Camera guide](https://www.raspberrypi.com/documentation/accessories/ai-camera.html) | Supported IMX500/Picamera2 integration | Reconcile the camera adapter with upstream examples during Pi bring-up; keep the existing inference hardware |
+
+No new robotics framework was installed. Best immediate return: bounded state
+streams, explicit time, lifecycle supervision, and reproducible replay.
+
+## Revival stages and acceptance gates
+
+1. **Portable baseline — delivered here.** Small install, safe default CLI, actual
+   controller imports without drivers, queue regressions, fake-actuator replay,
+   architecture notes, cleanup manifest. Check: `python -m pytest -q` passes and
+   replay emits bounded commands without hardware modules loading.
+2. **Deterministic controller core and lifecycle.** Extract `step(target, now, dt)`
+   using monotonic/injected time; retain existing behavior with characterization
+   tests before changing it. Add immutable timestamped detection snapshots,
+   explicit actuator ports, freshness deadlines, and one shared hardware owner.
+   Test centering, extremes, dropped/stale/invalid input, mouth transitions, slow
+   subscribers, task exceptions, partial startup, cancellation, and 100 restart
+   cycles. Gate: fake motors zero after every failure; queues/subscriptions remain
+   bounded; replay produces identical output with the same seed and clock.
+3. **Minimal simulation and 3D view.** Model a base, waist yaw, neck pan/tilt, skull,
+   and jaw; fixed arms are sufficient initially. Use a simple kinematic plant with
+   configurable travel limits, rate limits, delay, and a throttle-to-speed estimate.
+   Project a world-space target back into the simulated camera to close the loop.
+   Feed the same Python controller; viewer only renders snapshots and chooses test
+   scenarios. Start with JSONL replay, then add a local socket only if live control
+   is useful. Show commands versus simulated positions and label unknown waist/jaw
+   calibration. Gate: pause, step, replay, target loss, saturation, and delayed input
+   work; disconnecting the viewer cannot stall control. This viewer is not built yet.
+4. **Pi bench bring-up.** Capture Pi model, OS/Python versions, package inventory,
+   deployed revision, model file, wiring, power setup, and physical travel limits.
+   Preserve the old working environment before changes. Verify camera/inference
+   alone, actuators individually at conservative limits, then combined control.
+   Record loop latency, memory, message ages, task failures, and motor state. Gate:
+   explicit stop and failure paths observed on hardware; no unexplained process exits.
+5. **Show qualification.** First run at least 30 minutes, then a two-hour soak
+   without scheduled resets; exercise occlusion, crowded targets, UI loss, camera
+   failure, restart, and operator stop. Require stable post-warmup memory and bounded
+   command age. Capture diagnostics before any automatic restart; only then use an
+   OS service as recovery. Keep a known-good deployment and operator restart procedure.
+
+The next implementation slice should be stage 2, especially task supervision and
+freshness. A visually attractive armature cannot establish that the motors stop
+when a camera or controller fails.
+
+## Validation and limits
+
+Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
+unbounded history, and retained references. After changes, the expanded suite
+checks those cases plus head limits/deadzone, waist timeout/cooldown, cancellation,
+production-coroutine replay, and import isolation. Final locked-environment run:
+**10 passed in 2.66 seconds** on Windows / Python 3.12.14. The CLI replay produced
+80 JSON rows with bounded head commands and stopped waist output on the final
+missing target. `compileall` and `git diff --check` also passed. Tests use the real
+bus/controller code; actuator
+objects are fakes. The replay is scheduled with real time, not a deterministic clock.
+
+No Raspberry Pi, IMX500, I2C board, physical motor, Hailo device, or ESP32 was used.
+The original intermittent freeze is not reproduced end-to-end or certified fixed.
+The old hardware startup motion, periodic restart, and tuning remain for subsequent
+controlled changes. Removed web applications were not independently rebuilt because
+they are outside the retained runtime; surviving Python imports were checked.
+
+The requested cleanup commit is pending: automatic approval review rejected
+staging/committing the broad deletion set, citing insufficient verification of
+the exact scope. No commit was created. Review `cleanup-files.txt` alongside the
+working-tree diff before approving that commit. All original files remain in Git
+history at the baseline revision.

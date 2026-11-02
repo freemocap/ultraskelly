@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1000" viewBox="0 0 1440 1000"><defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#20323b" stroke-width=".5"/></pattern></defs><style>text{font-family:Arial,sans-serif;fill:#e6edf1}.small{font-size:14px;fill:#aebec8}.label{font-size:17px}.title{font-size:23px;font-weight:bold}.wire{fill:none;stroke-width:3;stroke-linejoin:round}.unknown{stroke-dasharray:8 6}</style><rect width="1440" height="1000" fill="#101b23"/><rect width="1440" height="1000" fill="url(#grid)"/>
+<text x="40" y="45" class="title">ULTRASKELLY / HARDWARE RECONSTRUCTION</text>
+<text x="40" y="72" class="small">Draft 01 · 29 Oct 2026 · Exploded schematic, not to scale · Port positions are symbolic</text>
+<text x="960" y="45" class="small">SOLID: code / documented interface</text>
+<text x="960" y="70" class="small" style="fill:#f2bc70">DASHED: physical detail to confirm</text>
+<rect x="40" y="115" width="330" height="155" rx="12" fill="#183d42" stroke="#63858c"/>
+<circle cx="52" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="52" cy="258" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="258" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="66" y="149" class="title">AI camera / IMX500</text>
+<text x="66" y="175" class="small">Camera family confirmed by active detector</text>
+<circle cx="100" cy="213" r="33" fill="#101b23" stroke="#819da3" stroke-width="6"/><circle cx="100" cy="213" r="16" fill="#284b62"/>
+<text x="155" y="205" class="label">On-sensor inference</text>
+<text x="155" y="231" class="small">No Hailo required by this path</text>
+<rect x="40" y="365" width="330" height="285" rx="12" fill="#183d42" stroke="#63858c"/>
+<circle cx="52" cy="377" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="52" cy="638" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="377" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="638" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="66" y="399" class="title">Raspberry Pi 5</text>
+<text x="66" y="425" class="small">Pi model supplied by you; software host</text>
+<rect x="68" y="453" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="78" y="482" class="small">SoC / RP1</text>
+<text x="68" y="529" class="label">40-pin GPIO header</text>
+<text x="68" y="556" class="small">SDA: GPIO2 / physical pin 3</text>
+<text x="68" y="579" class="small">SCL: GPIO3 / physical pin 5</text>
+<text x="68" y="602" class="small">GND: e.g. physical pin 6</text>
+<text x="210" y="410" class="small">CAM/DISP</text>
+<path d="M205 270 V315 H280 V365" class="wire" stroke="#b99bef" style="stroke-width:7"/>
+<text x="55" y="305" class="small">CSI ribbon: Pi 22-pin ↔ camera 15-pin</text>
+<text x="55" y="330" class="small" style="fill:#f2bc70">CAM/DISP 0 or 1: not recorded</text>
+<rect x="580" y="115" width="370" height="235" rx="12" fill="#183d42" stroke="#63858c"/>
+<circle cx="592" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="592" cy="338" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="338" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="606" y="149" class="title">16-channel servo driver</text>
+<text x="606" y="175" class="small">PCA9685 family inferred from ServoKit</text>
+<rect x="607" y="200" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="617" y="229" class="small">PCA9685</text>
+<text x="735" y="207" class="label">I²C 0x40*</text>
+<text x="735" y="230" class="small">50 Hz default*</text>
+<text x="607" y="282" class="label">CH11 → pan    CH3 → tilt</text>
+<text x="607" y="311" class="small" style="fill:#f2bc70">HAT / bonnet / breakout: unknown</text>
+<rect x="580" y="445" width="370" height="215" rx="12" fill="#183d42" stroke="#63858c"/>
+<circle cx="592" cy="457" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="592" cy="648" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="457" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="648" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="606" y="479" class="title">DC motor driver</text>
+<text x="606" y="505" class="small">Likely Adafruit DC + Stepper HAT</text>
+<rect x="607" y="530" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="617" y="559" class="small">PWM / bridges</text>
+<text x="735" y="535" class="label">I²C 0x60</text>
+<text x="735" y="559" class="small">1600 Hz in code</text>
+<text x="607" y="611" class="label">M1 → waist    M2 → jaw</text>
+<text x="607" y="637" class="small">One addressed board; two software clients</text>
+<path d="M370 543 H440 V184 H580" class="wire" stroke="#69d9cb" style="stroke-width:3"/>
+<path d="M440 543 V514 H580" class="wire" stroke="#69d9cb" style="stroke-width:3"/>
+<path d="M370 566 H464 V207 H580" class="wire" stroke="#72b4f1" style="stroke-width:3"/>
+<path d="M464 566 V537 H580" class="wire" stroke="#72b4f1" style="stroke-width:3"/>
+<circle cx="440" cy="514" r="5" fill="#69d9cb"/>
+<circle cx="464" cy="537" r="5" fill="#72b4f1"/>
+<text x="385" y="390" class="small">SDA / SCL</text>
+<text x="385" y="414" class="small">Shared bus</text>
+<text x="385" y="438" class="small" style="fill:#f2bc70">Stack or leads?</text>
+<rect x="1120" y="115" width="280" height="130" rx="12" fill="#293a47" stroke="#63858c"/>
+<circle cx="1132" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1132" cy="233" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="127" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="233" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="1146" y="149" class="title">Head pan servo</text>
+<text x="1146" y="175" class="small">CH11 · three-wire lead</text>
+<rect x="1148" y="191" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="1158" y="220" class="small">SERVO</text>
+<rect x="1120" y="290" width="280" height="130" rx="12" fill="#293a47" stroke="#63858c"/>
+<circle cx="1132" cy="302" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1132" cy="408" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="302" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="408" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="1146" y="324" class="title">Head tilt servo</text>
+<text x="1146" y="350" class="small">CH3 · three-wire lead</text>
+<rect x="1148" y="366" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="1158" y="395" class="small">SERVO</text>
+<rect x="1120" y="465" width="280" height="130" rx="12" fill="#293a47" stroke="#63858c"/>
+<circle cx="1132" cy="477" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1132" cy="583" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="477" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="583" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="1146" y="499" class="title">Waist DC motor</text>
+<text x="1146" y="525" class="small">M1 · two motor leads</text>
+<rect x="1148" y="541" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="1158" y="570" class="small">ACTUATOR</text>
+<rect x="1120" y="640" width="280" height="130" rx="12" fill="#293a47" stroke="#63858c"/>
+<circle cx="1132" cy="652" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1132" cy="758" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="652" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="1388" cy="758" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="1146" y="674" class="title">Jaw actuator</text>
+<text x="1146" y="700" class="small">M2 · powered open, spring close</text>
+<rect x="1148" y="716" width="110" height="48" rx="3" fill="#101b23" stroke="#789098"/>
+<text x="1158" y="745" class="small">ACTUATOR</text>
+<path d="M950 173 H993 V173 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<path d="M950 180 H1000 V180 H1120" class="wire" stroke="#ee8c80" style="stroke-width:3"/>
+<path d="M950 187 H1007 V187 H1120" class="wire" stroke="#aebec8" style="stroke-width:3"/>
+<path d="M950 208 H993 V348 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<path d="M950 215 H1000 V355 H1120" class="wire" stroke="#ee8c80" style="stroke-width:3"/>
+<path d="M950 222 H1007 V362 H1120" class="wire" stroke="#aebec8" style="stroke-width:3"/>
+<text x="1018" y="150" class="small">S / V+ / GND</text>
+<text x="1018" y="328" class="small">S / V+ / GND</text>
+<path d="M950 546 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<path d="M950 554 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<path d="M950 591 H1056 V706 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<path d="M950 599 H1064 V714 H1120" class="wire" stroke="#e6cc75" style="stroke-width:3"/>
+<text x="990" y="528" class="small">M1 A / B</text>
+<text x="980" y="628" class="small">M2 A / B</text>
+<text x="1125" y="800" class="small" style="fill:#f2bc70">Motor lead polarity / colors unknown</text>
+<rect x="40" y="760" width="330" height="115" rx="12" fill="#31313c" stroke="#63858c"/>
+<circle cx="52" cy="772" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="52" cy="863" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="772" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="358" cy="863" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="66" y="794" class="title">Pi USB-C supply</text>
+<text x="66" y="820" class="small">Supply model / rating not recorded</text>
+<path d="M120 760 V650" class="wire unknown" stroke="#ee8c80" style="stroke-width:3"/>
+<text x="140" y="715" class="small">USB-C power (inferred)</text>
+<rect x="580" y="760" width="370" height="115" rx="12" fill="#31313c" stroke="#63858c"/>
+<circle cx="592" cy="772" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="592" cy="863" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="772" r="4" fill="#101b23" stroke="#95adb2"/>
+<circle cx="938" cy="863" r="4" fill="#101b23" stroke="#95adb2"/>
+<text x="606" y="794" class="title">Actuator power rails</text>
+<text x="606" y="820" class="small">Voltage, current, source count unknown</text>
+<path d="M615 760 V720 H540 V325 H580" class="wire unknown" stroke="#ee8c80" style="stroke-width:3"/>
+<text x="380" y="698" class="small" style="fill:#f2bc70">Servo V+ + return</text>
+<path d="M800 760 V660" class="wire unknown" stroke="#ee8c80" style="stroke-width:3"/>
+<text x="812" y="704" class="small" style="fill:#f2bc70">Motor VIN + return</text>
+<text x="605" y="840" class="small" style="fill:#f2bc70">Do not tie unknown positive rails together.</text>
+<rect x="40" y="900" width="1360" height="68" rx="8" fill="#222e3c" stroke="#b99bef" stroke-dasharray="6 5"/>
+<text x="60" y="926" class="label" style="fill:#b99bef">HISTORICAL ENCODER CLUE (not used by active controller)</text>
+<text x="60" y="951" class="small">Waist encoder A: green → GPIO16 / pin 36; B: white → GPIO12 / pin 32. Supply, ground and signal voltage unverified.</text>
+<text x="40" y="988" class="small">* Library defaults. Grounds must reference the Pi/driver logic; exact power/ground harness and header orientation need board identification. Wire colors here denote function only.</text>
+<path d="M370 620 H510 V335 H580 M510 620 V645 H580" class="wire" stroke="#aebec8"/><circle cx="510" cy="620" r="5" fill="#aebec8"/><text x="380" y="606" class="small">Common GND</text></svg>
