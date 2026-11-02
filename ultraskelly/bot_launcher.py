@@ -13,6 +13,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     record_hardware_commands,
 )
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
+from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
@@ -76,6 +77,10 @@ class LaunchConfig(NodeParams):
     recording: RunRecorderParams | None = Field(
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
+    )
+    stall_monitor: StallMonitorParams = Field(
+        default_factory=StallMonitorParams,
+        description="Stop the bot, for its service to restart it, when camera frames or pose results stop",
     )
 
 
@@ -176,6 +181,14 @@ class BotLauncher(BaseModel):
                     configuration=self.config.model_dump(mode="json"),
                 )
             )
+        self.nodes.append(
+            StallMonitorNode.create(
+                pubsub=self.pubsub,
+                params=self.config.stall_monitor,
+                # Only the Hailo detector reports the frame each pose result belongs to.
+                watch_poses=self.config.detector_type == DetectorType.HAILO_POSE,
+            )
+        )
 
         logger.info(f"Created {len(self.nodes)} nodes")
 
