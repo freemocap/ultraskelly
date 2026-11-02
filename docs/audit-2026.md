@@ -243,14 +243,35 @@ client on another computer counting what arrives over 20 s. CPU is from
 | Whole Pi, 1 / 2 viewers | 41% / 43% of 4 cores | 48% / 49% of 4 cores |
 
 Delivery keeps camera rate, and extra viewers stay cheap because each frame is
-encoded once. The cost moved toward the browser: decoding JPEGs with
-`createImageBitmap`, drawing the overlay, and validating every frame message
-cost the Pi's Chromium about a fifth of a core more than native MJPEG, and the
-bot spends about 5% of a core more. Single samples; the scene and both viewers
-were held the same. With a person in view, the bot used 82-84% of a core while
-detections were drawn. Restarting the bot from a non-interactive shell also
-exposed that background jobs inherit an ignored SIGINT; `python -m ultraskelly`
-now restores Ctrl+C and maps SIGTERM to the same clean shutdown.
+encoded once. The cost moved toward the browser: the Pi's Chromium spends about
+a fifth of a core more than with native MJPEG. Replaying 120 captured frames
+there, the SDK's decoding and validation take 0.13 ms per frame, JPEG decoding
+2.59 ms and drawing 0.82 ms, so the image path, not the message format, is the
+cost. The stream's bot and whole-Pi figures are not comparable: they were taken
+while the Hailo driver logged kernel warnings 30 times a second (next section),
+which inflate both. Single samples with the same scene and viewers. Restarting
+the bot from a non-interactive shell also exposed that background jobs inherit
+an ignored SIGINT; `python -m ultraskelly` now restores Ctrl+C and maps SIGTERM
+to the same clean shutdown.
+
+### Hailo-8 driver warning storm and reset (2026-11-02)
+
+The Pi reset itself at 10:12 with the bot running. The previous boot's kernel
+log holds 11,707 identical warnings between 10:05:22 and 10:11:52, about one per
+inference, then stops with no shutdown sequence; systemd arms the hardware
+watchdog with a one-minute timeout. Every warning is `find_vma` asserting the
+memory-map lock, called from `hailo_vdma_buffer_map` in `hailo_pci` 4.23.0 (DKMS
+module, kernel 6.18.50+rpt-rpi-2712) on the bot's inference thread: the driver
+looks up the process's memory map without the lock while other threads allocate
+and free frames. HailoRT re-maps the bound input and output buffers on every run.
+
+Earlier that boot the bot ran 55 and 31 minutes without one warning; the storm
+began about a minute after the 10:04 start. After the reset it began within 20
+seconds of every start (234 warnings in a 10-second run), and stopping the bot
+stops it. Power was not throttled. Until this is fixed, keep Hailo runs short
+and supervised. Candidate fixes: pre-map the buffers once if HailoRT exposes
+DMA mapping, or a `hailo_pci` that takes the lock. This may or may not be the
+historical one-minute freeze, which predates the Hailo.
 
 ## Validation and limits
 
