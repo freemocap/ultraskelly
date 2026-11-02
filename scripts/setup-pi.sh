@@ -130,7 +130,8 @@ fix_dpkg() { sudo dpkg --configure -a; }
 missing_packages() {
   local package
   for package in "${packages[@]}"; do
-    [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null) == "install ok installed" ]] || echo "$package"
+    # "install ok installed", or "hold ok installed" once held
+    [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null) == *" ok installed" ]] || echo "$package"
   done
 }
 check_packages() {
