@@ -5,7 +5,11 @@ from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
-from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, create_simulated_motor_nodes
+from ultraskelly.core.bot.motor.simulated_actuators import (
+    CommandRecorder,
+    create_simulated_motor_nodes,
+    record_hardware_commands,
+)
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
@@ -24,6 +28,8 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorParams,
 )
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
+from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams
+from ultraskelly.core.pubsub.bot_topics import FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
 )
@@ -47,6 +53,7 @@ class LaunchConfig(NodeParams):
     # waist: WaistNodeParams = Field(default_factory=WaistNodeParams)
     orientation: OrientationNodeParams = Field(default_factory=OrientationNodeParams)
     ui: UINodeParams = Field(default_factory=UINodeParams)
+    runtime_server: RuntimeServerParams = Field(default_factory=RuntimeServerParams)
     simulate_motors: bool = Field(
         default=False,
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
@@ -60,7 +67,7 @@ class BotLauncher(BaseModel):
     pubsub: SkipValidation[PubSubTopicManager]
     nodes: list[Node] = Field(default_factory=list)
     tasks: list[asyncio.Task] = Field(default_factory=list, exclude=True)
-    # Commands sent to the simulated actuators; None when driving the real motor boards.
+    # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
 
     def _create_nodes(self) -> None:
@@ -70,9 +77,9 @@ class BotLauncher(BaseModel):
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
         # self.nodes.append(WaistNode.create(pubsub=self.pubsub, params=self.config.waist))
+        self.command_recorder = CommandRecorder()
         if self.config.simulate_motors:
             logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
-            self.command_recorder = CommandRecorder()
             self.nodes.extend(
                 create_simulated_motor_nodes(
                     pubsub=self.pubsub,
@@ -82,8 +89,10 @@ class BotLauncher(BaseModel):
                 )
             )
         else:
-            self.nodes.append(OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation))
-            self.nodes.append(MouthNode.create(pubsub=self.pubsub, params=self.config.mouth))
+            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation)
+            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
+            record_hardware_commands(orientation=orientation, mouth=mouth, recorder=self.command_recorder)
+            self.nodes.extend([orientation, mouth])
         self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
         # Create detector based on type
@@ -112,7 +121,35 @@ class BotLauncher(BaseModel):
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
+        camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
+        self.nodes.append(
+            RuntimeServerNode.create(
+                pubsub=self.pubsub,
+                params=self.config.runtime_server,
+                cameras={camera_name: FrameTopic},
+                recorder=self.command_recorder,
+                motors_simulated=self.config.simulate_motors,
+                node_status=self.node_status,
+            )
+        )
+
         logger.info(f"Created {len(self.nodes)} nodes")
+
+    def node_status(self) -> list[dict]:
+        """Each node's name and state: starting, running, stopped, or crashed with its error."""
+        status = []
+        for index, node in enumerate(self.nodes):
+            entry = {"name": type(node).__name__, "state": "starting"}
+            if index < len(self.tasks):
+                task = self.tasks[index]
+                if not task.done():
+                    entry["state"] = "running"
+                elif not task.cancelled() and task.exception() is not None:
+                    entry.update(state="crashed", error=repr(task.exception()))
+                else:
+                    entry["state"] = "stopped"
+            status.append(entry)
+        return status
 
     @classmethod
     def from_config(cls, config: LaunchConfig) -> "BotLauncher":

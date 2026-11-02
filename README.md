@@ -56,7 +56,8 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 Both can move motors during construction, including a full-power mouth test.
 Add `--simulate-motors` to run the cameras and controllers while recording motor
 commands in memory instead of driving the motor boards. The OpenCV display requires
-a graphical session.
+a graphical session. While the bot runs, port 8080 serves read-only live state
+(`/api/state`, WebSocket `/ws`) and camera video (`/video/oak.mjpg`) to the network.
 
 By default the robot tracks people with a Luxonis OAK USB camera and YOLOv8 pose
 on a Hailo-8 AI HAT+. The original IMX500 AI camera remains available as

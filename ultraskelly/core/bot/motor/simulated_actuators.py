@@ -1,7 +1,8 @@
-"""Memory-only stand-ins for the servo and DC motor boards that record commanded values.
+"""Record commanded servo angles and motor throttles, with or without the motor boards.
 
-They replace the hardware factories' ServoKit and MotorKit objects, so the production
-controllers run unchanged without touching I2C. Recorded values are commands, not
+The simulated stand-ins replace the hardware factories' ServoKit and MotorKit objects,
+so the production controllers run unchanged without touching I2C. The recording
+wrappers sit in front of the real boards instead. Recorded values are commands, not
 measured or simulated joint positions.
 """
 import time
@@ -101,6 +102,97 @@ class SimulatedMotor:
     def throttle(self, value: float | None) -> None:
         self._throttle = value
         self.recorder.record(self.name, value)
+
+
+class RecordingServo:
+    """Wraps one hardware servo channel: forwards each commanded angle, then records it.
+
+    Reading `angle` returns the last command without querying the board over I2C.
+    """
+
+    def __init__(self, *, servo: object, name: str, recorder: CommandRecorder) -> None:
+        self._servo = servo
+        self.name = name
+        self.recorder = recorder
+        self._commanded: float | None = None
+
+    @property
+    def angle(self) -> float | None:
+        return self._commanded
+
+    @angle.setter
+    def angle(self, value: float | None) -> None:
+        self._servo.angle = value
+        self._commanded = value
+        self.recorder.record(self.name, value)
+
+
+class _RecordingServoChannels:
+    """Indexable like `ServoKit.servo`; wraps each channel on first use."""
+
+    def __init__(self, *, kit: object, recorder: CommandRecorder, names: dict[int, str]) -> None:
+        self._kit = kit
+        self._recorder = recorder
+        self._names = names
+        self._wrapped: dict[int, RecordingServo] = {}
+
+    def __getitem__(self, channel: int) -> RecordingServo:
+        if channel not in self._wrapped:
+            self._wrapped[channel] = RecordingServo(
+                servo=self._kit.servo[channel],
+                name=self._names.get(channel, f"servo{channel}"),
+                recorder=self._recorder,
+            )
+        return self._wrapped[channel]
+
+
+class RecordingServoKit:
+    """Wraps a hardware ServoKit so every commanded angle is recorded on its way to the board."""
+
+    def __init__(self, *, kit: object, recorder: CommandRecorder, names: dict[int, str] | None = None) -> None:
+        self.servo = _RecordingServoChannels(kit=kit, recorder=recorder, names=names or {})
+
+
+class RecordingMotor:
+    """Wraps a hardware DC motor: forwards each commanded throttle, then records it.
+
+    Reading `throttle` returns the last command without querying the board over I2C.
+    """
+
+    def __init__(self, *, motor: object, name: str, recorder: CommandRecorder) -> None:
+        self._motor = motor
+        self.name = name
+        self.recorder = recorder
+        self._commanded: float | None = None
+
+    @property
+    def throttle(self) -> float | None:
+        return self._commanded
+
+    @throttle.setter
+    def throttle(self, value: float | None) -> None:
+        self._motor.throttle = value
+        self._commanded = value
+        self.recorder.record(self.name, value)
+
+
+def record_hardware_commands(*, orientation: OrientationNode, mouth: MouthNode, recorder: CommandRecorder) -> None:
+    """Route both controllers' later hardware commands through the recorder.
+
+    Call after their hardware factories ran; it records the startup commands those
+    factories already sent (head to its starting angles, jaw test ending at zero).
+    """
+    params = orientation.params
+    orientation.servo_kit = RecordingServoKit(
+        kit=orientation.servo_kit,
+        recorder=recorder,
+        names={params.pan_channel: "pan", params.tilt_channel: "tilt"},
+    )
+    orientation.waist_motor = RecordingMotor(motor=orientation.waist_motor, name="waist", recorder=recorder)
+    mouth.mouth_motor = RecordingMotor(motor=mouth.mouth_motor, name="mouth", recorder=recorder)
+    recorder.record("pan", orientation.pan_angle)
+    recorder.record("tilt", orientation.tilt_angle)
+    recorder.record("mouth", 0.0)
 
 
 def create_simulated_motor_nodes(
