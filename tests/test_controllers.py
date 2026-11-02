@@ -1,6 +1,6 @@
 import asyncio
 
-from ultraskelly.core.bot.motor.orientation_node import WaistControlMode
+from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
 from ultraskelly.replay import create_controllers, replay
 
 
@@ -16,18 +16,24 @@ def test_head_deadzone_and_saturation():
     bus.close()
 
 
-def test_waist_timeout_and_cooldown():
-    bus, node, _ = create_controllers()
-    now = [100.0]
-    node.clock = lambda: now[0]
-    node.pan_angle = 160
-    throttle = node._calculate_waist_throttle(mode=WaistControlMode.ASSISTING, target_x=640)
-    assert -0.8 <= throttle <= -0.7
-    now[0] += node.params.waist_max_active_duration + 0.01
-    assert node._calculate_waist_throttle(mode=WaistControlMode.ASSISTING, target_x=640) == 0
-    now[0] += 0.1
-    assert node._calculate_waist_throttle(mode=WaistControlMode.ASSISTING, target_x=640) == 0
-    bus.close()
+def test_waist_drives_continuously_while_the_head_is_turned():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        now = [100.0]
+        node.clock = lambda: now[0]
+        node.pan_angle = 160
+        commands = []
+        for tick in range(200):  # Two seconds; the old controller braked after half of one
+            if tick % 10 == 0:
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320, y=240))
+            await node.step()
+            commands.append(node.waist_motor.throttle)
+            now[0] += 0.01
+        assert all(-0.8 <= command < 0 for command in commands)
+        assert commands[0] == -node.params.waist.start_throttle
+        assert commands[-1] == -node.params.waist.max_throttle
+        bus.close()
+    asyncio.run(scenario())
 
 
 def test_cancellation_stops_both_motors():
@@ -47,11 +53,11 @@ def test_cancellation_stops_both_motors():
 
 def test_target_replay_exercises_production_coroutines():
     async def scenario():
-        states = [state async for state in replay(40, 0.02)]
+        states = [state async for state in replay(40, 0.05)]
         assert len(states) == 40
         assert min(s["pan_degrees"] for s in states) < 90
         assert all(0 <= s["pan_degrees"] <= 180 for s in states)
-        assert all(abs(s["waist_throttle"]) <= 0.8 for s in states)
+        assert all(abs(s["waist_throttle"] or 0.0) <= 0.8 for s in states)
         assert states[-1]["target_x"] is None
-        assert states[-1]["waist_throttle"] == 0
+        assert states[-1]["waist_throttle"] in (None, 0.0)  # Ramped down; coasting or braked
     asyncio.run(scenario())

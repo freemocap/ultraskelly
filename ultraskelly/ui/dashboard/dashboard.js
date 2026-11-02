@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { TransportService, readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
 import { buildSkeleton } from '/skeleton.js';
+import { MotorTestPanel } from '/motor-test.js';
 
 const $ = id => document.getElementById(id);
 const deg = THREE.MathUtils.degToRad;
@@ -228,9 +229,10 @@ const RobotState = {parse(message) {
 }};
 const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`, kinds: {robot_state: RobotState}});
 let latestState = null, lastSnapshotAt = 0, snapshotsThisSecond = 0;
+const motorTest = new MotorTestPanel($('motor-test'));
 stream.subscribeToKind('robot_state', state => {
   latestState = state; lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
-  showSkeleton(state); showCommands(state); showTarget(state); showHealth(state);
+  showSkeleton(state); showCommands(state); showTarget(state); showHealth(state); motorTest.update(state);
 });
 let frameOverlays = {frameNumber: -1, overlays: []};
 stream.subscribeToOverlay(overlay => {  // Delivered just before the image of the same frame

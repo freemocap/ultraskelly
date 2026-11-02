@@ -22,7 +22,7 @@ def test_shared_steps_hold_lock_between_sensor_samples():
         # Empty tick holds the last fresh lock without applying head gain again.
         await head.step()
         await mouth.step()
-        assert -0.8 <= head.waist_motor.throttle <= -0.7
+        assert head.waist_motor.throttle == -head.params.waist.start_throttle  # Head 16 degrees off: a move began
         assert mouth.mouth_state.value == 'opening'
         bus.close()
     asyncio.run(scenario())

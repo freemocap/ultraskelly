@@ -97,7 +97,7 @@ head transforms, and face-mounted camera origin as the viewer frustum. It does n
 
 Servos follow commands at a configured maximum angular speed (default 180°/s).
 Waist velocity is `-throttle * waist_speed` (default 45°/s at full throttle), with
-illustrative ±100° stops. Negative mouth throttle opens the jaw toward 28° and
+illustrative ±100° stops; a released (coasting) waist motor counts as zero drive. Negative mouth throttle opens the jaw toward 28° and
 zero allows spring return, limited to 90°/s. Geometry is a schematic armature with
 fixed arms and legs. These assumptions are intentionally simple and uncalibrated:
 no inertia, torque, backlash, stalls, collisions, power limits, or I2C delays.
@@ -108,12 +108,17 @@ normal gaps between samples, but expire missing input after 350 ms. Explicit
 loss or leaving the square immediately removes jaw power. Negative drive holds
 the spring-loaded jaw open for as long as lock remains valid; zero drive allows
 spring return. Opening/closing state durations are estimates, not feedback.
-The waist has one yaw axis and participates in the shared tracking controller.
-When the head is horizontally locked but more than 15 degrees from neutral,
-the waist turns toward its gaze; camera feedback brings the head back toward
-neutral. It also assists near head travel limits. Existing 0.7–0.8 drive bounds,
-0.5-second active limit, and 0.4-second cooldown remain. Target loss stops the
-waist. The state display reports idle during cooldown or when drive is zero.
+The waist has one yaw axis and participates in the shared tracking controller
+through `WaistDrive` (`motor/waist_drive.py`). When the head's pan is more than
+15 degrees from neutral, the waist turns toward its gaze in one continuous move;
+camera feedback brings the head back toward neutral, and the move continues until
+the head is within 5 degrees. A move starts at 0.45 drive, below where the waist
+is assumed to break loose, ramps up at 1.5 per second to a drive that grows with the
+head's angle (0.7 at 15 degrees, up to 0.8), ramps down at 2 per second, releases the
+motor to coast at 0.4, and brakes it 0.3 s later. Reversing passes through that stop.
+A move lasting 6 s ramps down and rests 2 s. Target loss ramps the waist to a stop.
+These levels are starting values until the waist sound test measures the real waist.
+The state display shows idle, turning, stopping or resting.
 The Pi launcher's 120-second restart workaround was removed on 2026-11-02;
 the simulator does not run that launcher.
 

@@ -372,6 +372,75 @@ all five back. After the reboot every setting was in place (27 OK); the one warn
 once the services had stopped, was the disconnected I2C boards. Not tested: a freshly
 imaged Pi, where the script also installs packages, uv and the virtual environment.
 
+## Motion: waist drive, motor writes and motor tests (2026-11-02)
+
+**Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most
+0.5 s, then braked it (`throttle = 0` shorts the motor; `None` would let it coast) for a
+0.4 s cooldown, repeating while the head was turned, and idled it whenever the head lost
+lock unless the head was over 45 degrees off. A first sound-and-camera round with an older
+microphone (`scripts/waist_sound_test.py`) heard broadband clicks at every start and stop
+and a PWM whine near 1.6 kHz with harmonics. The camera saw the torso swing back at
+12-25 deg/s after each brake, a wobble of about 2 Hz. The motor board's PCA9685 already
+runs at its highest PWM frequency, so the whine cannot be moved above hearing.
+
+**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses. The waist starts
+when the head's pan is over 15 degrees from neutral, regardless of lock, and keeps turning
+toward the gaze until the head is within 5 degrees. Each move starts at 0.45, ramps up at
+1.5 per second to 0.7 plus 0.008 per degree beyond 15 (at most 0.8; 0.7 was the old
+controller's floor for static friction and stays until measured), ramps down at 2 per
+second, releases the motor at 0.4 to coast, and brakes it 0.3 s later. Reversing passes
+through that stop. A move lasting 6 s ramps down and rests 2 s, the remaining limit on
+continuous drive. Losing the target ramps the waist down; stopping the bot still brakes at
+once. These levels are provisional: the simulator (a linear plant) shows 9-17 moves of 1-6 s
+per minute of a sweeping target instead of half-second bursts, but no robot measurement
+exists yet. Round 2 of the sound test with the Yeti X (ALSA card 3, mixer 0-21 dB, run at
+12) waits for the robot's rebuild, as does a recorded tracking run comparing old and new.
+The sound test now centers and holds the head, refuses to run while the OAK sees too
+little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with the
+lens covered), bounds its return move by the measured angle, measures where the waist
+breaks loose and stalls, and has a `drive` profile that replays the bot's own drive.
+`scripts/analyze_run.py` summarizes a recorded run: what was kept, the waist's moves and
+stops, and the sound while it moves.
+
+**Motor board writes.** While the servo board's loose jumper disturbed the I2C bus, motor
+board transfers failed with EAGAIN after lost arbitration. adafruit_motor writes a DC
+motor's two bridge inputs in separate transfers, and a brake writes the first input fully
+on before the second, so a brake cut short there drives the motor at full power. The
+recording wrappers now retry a failed write (3 attempts, stops 10). They also send an
+unchanged throttle again only every 0.5 s: the 100 Hz controllers had been rewriting both
+motors' unchanged values, about 400 transfers a second on a 100 kHz bus, roughly a fifth of
+the event loop's time. A bus that dies for good between a brake's two transfers remains
+uncovered; writing both channels in one transfer (motor 1 uses channels 9 and 10, motor 2
+uses 11 and 12) would close it. If the bot exits without its cleanup (killed, or crashed
+in native code), the motor board keeps its last command: `scripts/stop_motors.py` brakes
+all four motors and suits a service's `ExecStopPost`.
+
+**Motor tests.** The dashboard can move one actuator at a time through its own command
+contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it
+has finished or been stopped; one that is malformed, outside the test limits or arrives
+while another runs is refused at once with the reason, never queued, merged or silently
+clamped. Test limits: servos within 30 degrees of center, waist up to 0.7 for 0.5 s and at
+most 1.0 throttle-seconds net one way (there is no waist angle sensor), jaw up to 1.0 for
+0.3 s; the hard actuator limits still clamp every command. Tracking holds its commands
+during a test, the other DC motor is braked, and tracking resumes from where the test left
+the head. POSTs must carry JSON, so another site's page cannot send them without a CORS
+preflight, which the server does not answer. Verified with unit and endpoint tests and in
+the browser against `python -m ultraskelly.replay --serve`; not yet run on the robot's
+motors.
+
+**Run recording check.** With the motor boards disconnected for the rebuild, a 67-second
+run of `--hardware --simulate-motors --no-window --record --microphone "Yeti X"` (commit
+e26b349) stopped cleanly on SIGTERM and kept 1953 frames at 30.0 fps. None were dropped,
+no frame numbers were missing, and the longest gap was one frame. Frames reached the
+recorder 35 ms after capture (median; 43 ms at most). Every frame decoded with OpenCV on the
+Pi and again on the Windows PC. The Yeti X audio (48 kHz mono) starts 18 ms after the run
+and lasts 65.1 s: the stop signal reaches `arecord` too, so the last 1.7 s of shutdown are
+silent. `run.json`, poses and targets for every frame, servo state, and the command log
+were complete. Four dashboard motor tests sent during the run all ended "done" and appear in
+`commands.csv` at their times; a fifth, over the waist limit, was refused with HTTP 400.
+The OAK lay facing a keyboard, so nobody was tracked: a tracking run with a person in view
+remains to be recorded once the head is back on.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

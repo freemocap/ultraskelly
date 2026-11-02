@@ -106,11 +106,29 @@ and node health. The browser decodes them with FreeMoCap's `@freemocap/client` a
 draws the overlay itself. `scripts/open-dashboard.sh` opens it full-screen on the Pi's
 monitor.
 
+The dashboard's **Motor test** panel moves one actuator at a time: pan or tilt by 10°
+or to center, a short waist pulse either way, or a jaw opening pulse. Tests are separate
+commands (`POST /api/motor-test`, `POST /api/motor-test/stop`; see
+`ultraskelly/ui/motor_test_routes.py`): each is answered once it has finished or been
+stopped, or refused at once with the reason, never queued. The bot checks every test
+against `LaunchConfig.motor_tests` (servos within 30° of center, waist up to 0.7 for
+0.5 s, jaw up to 0.3 s) as well as the hard limits, pauses tracking during it, and brakes
+the other DC motor. Set `motor_tests.enabled` to False to turn the panel off. With
+`--simulate-motors` the tests drive the simulated motors, and so does
+`python -m ultraskelly.replay --serve`, which needs no hardware.
+
+The waist turns toward where the head looks in continuous, ramped moves
+(`motor/waist_drive.py`). If the bot ever exits without stopping its motors, for
+example when killed, the motor board keeps its last command:
+`.venv/bin/python -m scripts.stop_motors` brakes them all.
+
 Add `--record` to save the run under `~/ultraskelly-recordings/run-<time>/`: the OAK video
 as it reached the bot, the poses found in each frame, targets, head state and every motor
 command, with times on one clock so they line up. `--microphone NAME` adds audio from the
 sound card whose name contains NAME (see `arecord -l`). `run.json` holds the configuration
 and counts any frames the disk could not keep up with.
+`python -m scripts.analyze_run <run folder>` checks that a recording kept everything and
+summarizes how the waist moved and how loud it was while moving.
 
 ### Run it from boot
 

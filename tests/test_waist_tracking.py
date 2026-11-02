@@ -3,8 +3,6 @@ import asyncio
 import pytest
 
 from ultraskelly.simulator.engine import Simulation, Settings
-from ultraskelly.core.bot.motor.orientation_node import WaistControlMode
-from ultraskelly.replay import create_controllers
 
 
 @pytest.mark.parametrize("yaw", [-50, 50])
@@ -14,7 +12,7 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
         await sim.step(2000)
         assert sim.waist * yaw > 0
         assert abs(sim.waist) > 20
-        assert abs(sim.pan - 90) <= sim.head.params.pan_center_zone
+        assert abs(sim.pan - 90) <= sim.head.params.waist.start_angle
         assert sim.head.waist_motor.throttle == 0
         assert abs(sim.camera()["x"] - 320) <= 1
         assert abs(sim.camera()["y"] - 240) <= 1
@@ -25,20 +23,21 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
     asyncio.run(scenario())
 
 
-def test_centering_retains_timeout_cooldown_and_neutral_stop():
-    bus, head, _ = create_controllers()
-    now = [0.0]
-    head.clock = lambda: now[0]
-    head.pan_angle = 120
-    drive = lambda: head._calculate_waist_throttle(
-        mode=WaistControlMode.CENTERING, target_x=320)
-    assert -.8 <= drive() <= -.7
-    now[0] = .51
-    assert drive() == 0
-    now[0] = .8
-    assert drive() == 0
-    now[0] = .92
-    assert drive() < 0
-    head.pan_angle = 90
-    assert drive() == 0
-    bus.close()
+def test_waist_turns_in_one_ramped_move_without_braking():
+    async def scenario():
+        sim = Simulation(Settings(scenario="manual", yaw=50, pitch=10))
+        drive = sim.head.params.waist
+        commands = []
+        for _ in range(2000):
+            await sim.step()
+            commands.append(sim.head.waist_motor.throttle)
+        moving = [index for index, command in enumerate(commands) if command not in (None, 0.0)]
+        move = commands[moving[0]:moving[-1] + 1]
+        assert all(command not in (None, 0.0) for command in move)  # One continuous move: no pulses
+        steps = [abs(b - a) for a, b in zip(move[1:], move[2:])]
+        assert max(steps) <= max(drive.ramp_up, drive.ramp_down) * sim.dt + 1e-9
+        assert abs(move[0]) == drive.start_throttle
+        after = commands[moving[-1] + 1:]
+        assert after[0] is None and after[-1] == 0.0  # Released to coast, then braked at rest
+        sim.close()
+    asyncio.run(scenario())

@@ -16,7 +16,8 @@ step methods, clock injection, model assumptions, launch commands, and verificat
 - Pub/sub currently carries replaceable state: frames, poses, targets, servo state.
   Keep queues bounded and publication independent of consumer speed. Discrete
   commands require a separate delivery contract; they must not silently inherit
-  the latest-value policy. Queue operations belong on the asyncio event loop.
+  the latest-value policy (dashboard motor tests are one: `motor/motor_test.py`).
+  Queue operations belong on the asyncio event loop.
 - Preserve channel assignments, signs, and travel limits until a tested change
   justifies replacing them. The 120-second restart workaround was removed on
   2026-11-02 at the owner's direction; the historical freeze is not yet reproduced
