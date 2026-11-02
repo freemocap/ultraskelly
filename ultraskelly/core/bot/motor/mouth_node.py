@@ -26,6 +26,10 @@ class MouthNodeParams(NodeParams):
     lock_timeout: float = Field(default=0.35, gt=0)
     opening_duration: float = Field(default=0.2, gt=0)
     spring_return_duration: float = Field(default=0.32, gt=0)
+    startup_test: bool = Field(
+        default=False,
+        description="Drive the jaw each way once at startup (full power, within the actuator limits)",
+    )
 
 
 class MouthNode(Node):
@@ -70,13 +74,6 @@ class MouthNode(Node):
         if mouth_motor is None:
             raise ValueError(f"Could not initialize mouth motor on channel {params.mouth_motor_channel}")
 
-        logger.info("Testing mouth motor...")
-        mouth_motor.throttle = 1.0
-        time.sleep(0.5)
-        mouth_motor.throttle = -1.0
-        time.sleep(0.5)
-        mouth_motor.throttle = 0.0
-
         head_servo_subscription = pubsub.get_subscription(ServoStateTopic)
 
         return cls(
@@ -86,6 +83,21 @@ class MouthNode(Node):
             mouth_motor=mouth_motor,
             head_servo_subscription=head_servo_subscription
         )
+
+    def run_startup_test(self) -> None:
+        """Drive the jaw one way, then the other, then stop; blocks for one second.
+
+        Opt-in through `MouthNodeParams.startup_test`. Run it after the motor is wrapped
+        so the actuator limits apply.
+        """
+        logger.info("Testing mouth motor...")
+        try:
+            self.mouth_motor.throttle = 1.0
+            time.sleep(0.5)
+            self.mouth_motor.throttle = -1.0
+            time.sleep(0.5)
+        finally:
+            self.mouth_motor.throttle = 0.0
 
     def _update_mouth_state(self, *, is_locked: bool) -> None:
         """Energize while locked; release immediately and let the spring close."""

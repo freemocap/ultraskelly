@@ -53,7 +53,9 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 
 `python -m ultraskelly --hardware` explicitly starts the robot. The older
 `python -m ultraskelly.__main__bot` entry point also remains available.
-Both can move motors during construction, including a full-power mouth test.
+Both center the head when they start; the full-power jaw test runs only with
+`MouthNodeParams.startup_test`. Every servo angle and motor throttle is clamped to
+`LaunchConfig.limits` before it reaches a board.
 Add `--simulate-motors` to run the cameras and controllers while recording motor
 commands in memory instead of driving the motor boards. The OpenCV display requires
 a graphical session; `--no-window` skips it. While the bot runs, port 8080 serves the

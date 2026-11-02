@@ -3,6 +3,7 @@ import logging
 
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
+from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
 from ultraskelly.core.bot.motor.simulated_actuators import (
@@ -62,6 +63,10 @@ class LaunchConfig(NodeParams):
         default=True,
         description="Show the OpenCV camera window; needs a desktop session. The dashboard works either way.",
     )
+    limits: ActuatorLimits = Field(
+        default_factory=ActuatorLimits,
+        description="Hard limits every servo angle and motor throttle is clamped to, simulated or real",
+    )
 
 
 class BotLauncher(BaseModel):
@@ -90,12 +95,17 @@ class BotLauncher(BaseModel):
                     orientation_params=self.config.orientation,
                     mouth_params=self.config.mouth,
                     recorder=self.command_recorder,
+                    limits=self.config.limits,
                 )
             )
         else:
             orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation)
             mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
-            record_hardware_commands(orientation=orientation, mouth=mouth, recorder=self.command_recorder)
+            record_hardware_commands(
+                orientation=orientation, mouth=mouth, recorder=self.command_recorder, limits=self.config.limits,
+            )
+            if self.config.mouth.startup_test:
+                mouth.run_startup_test()  # After wrapping, so the limits apply
             self.nodes.extend([orientation, mouth])
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
