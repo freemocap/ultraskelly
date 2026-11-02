@@ -327,14 +327,15 @@ fix_venv() (
 
 check_services() {
   "$repo/scripts/install-services.sh" --check >/dev/null 2>&1 || { echo "not installed for $repo"; return 1; }
-  local bot dashboard
+  local bot dashboard options
   bot="$(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)"
   dashboard="$(systemctl --user is-enabled ultraskelly-dashboard.service), $(systemctl --user is-active ultraskelly-dashboard.service)"
   if [[ -n $enable_services && ($bot != enabled* || $dashboard != enabled*) ]]; then
     echo "installed but not enabled: bot $bot; dashboard $dashboard"
     return 1
   fi
-  echo "installed for this checkout: bot $bot; dashboard $dashboard"
+  options=$(sed -n 's/^ULTRASKELLY_BOT_OPTIONS=//p' /etc/default/ultraskelly-bot 2>/dev/null)
+  echo "installed for this checkout: bot $bot${options:+ (options: $options)}; dashboard $dashboard"
 }
 fix_services() { "$repo/scripts/install-services.sh" ${enable_services:+"$enable_services"}; }
 

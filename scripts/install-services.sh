@@ -8,6 +8,10 @@
 #   scripts/install-services.sh --disable   stop both and keep them from starting at boot
 #   scripts/install-services.sh --check     report whether both are installed for this checkout; change nothing
 #
+# Extra bot options go in /etc/default/ultraskelly-bot, for example while the motor
+# boards are disconnected:
+#   echo 'ULTRASKELLY_BOT_OPTIONS=--simulate-motors' | sudo tee /etc/default/ultraskelly-bot
+#
 # The units come from scripts/systemd/ with this checkout's path and user filled in,
 # so installing from ~/ultraskelly runs ~/ultraskelly. Safe to re-run: do so after
 # moving the checkout or changing a unit. Starting the bot moves the motors.
@@ -31,8 +35,14 @@ render() {
   sed -e "s|@USER@|$user|g" -e "s|@REPO@|$repo|g" "$repo/scripts/systemd/$1"
 }
 
+bot_options() {
+  sed -n 's/^ULTRASKELLY_BOT_OPTIONS=//p' /etc/default/ultraskelly-bot 2>/dev/null
+}
+
 state() {
-  echo "ultraskelly-bot (system):     $(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)"
+  local options
+  options=$(bot_options)
+  echo "ultraskelly-bot (system):     $(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)${options:+, options $options from /etc/default/ultraskelly-bot}"
   echo "ultraskelly-dashboard (user): $(systemctl --user is-enabled ultraskelly-dashboard.service), $(systemctl --user is-active ultraskelly-dashboard.service)"
 }
 

@@ -16,7 +16,11 @@ StartLimitIntervalSec=0
 Type=notify
 User=@USER@
 WorkingDirectory=@REPO@
-ExecStart=@REPO@/scripts/run-bot.sh
+# More bot options come from /etc/default/ultraskelly-bot when it exists, e.g.
+#   ULTRASKELLY_BOT_OPTIONS=--simulate-motors
+# while the motor boards are disconnected, or --record to save every run.
+EnvironmentFile=-/etc/default/ultraskelly-bot
+ExecStart=@REPO@/scripts/run-bot.sh $ULTRASKELLY_BOT_OPTIONS
 Environment=PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 # Start again after any exit, crash or watchdog kill: after 2 s at first, then
 # longer each time, up to a minute.
