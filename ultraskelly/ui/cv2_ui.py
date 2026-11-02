@@ -20,8 +20,8 @@ from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
-from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+from ultraskelly.ui.overlay import draw_skeleton
 
 
 class UINodeParams(NodeParams):
@@ -65,35 +65,6 @@ class UINode(Node):
 
         return node
 
-    def _draw_skeleton(
-        self, *, frame: np.ndarray, keypoints: np.ndarray, confidence_threshold: float = 0.3
-    ) -> None:
-        """Draw skeleton on frame for a single person."""
-        # Draw bones
-        for kp1, kp2 in SKELETON_CONNECTIONS:
-            pt1 = keypoints[kp1]
-            pt2 = keypoints[kp2]
-
-            # Only draw if both keypoints are confident
-            if pt1[2] > confidence_threshold and pt2[2] > confidence_threshold:
-                x1, y1 = int(pt1[0]), int(pt1[1])
-                x2, y2 = int(pt2[0]), int(pt2[1])
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-
-        # Draw keypoints on top of bones
-        for i, kp in enumerate(keypoints):
-            if kp[2] > confidence_threshold:
-                x, y = int(kp[0]), int(kp[1])
-                # Different color for different body parts
-                if i <= 4:  # Head
-                    color = (255, 0, 0)  # Blue
-                elif i <= 10:  # Arms
-                    color = (0, 255, 0)  # Green
-                else:  # Legs
-                    color = (0, 0, 255)  # Red
-                cv2.circle(frame, (x, y), 5, color, -1)
-                cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)
-
     def _draw_visualization(self, *, frame: np.ndarray) -> np.ndarray:
         """Draw tracking visualization on frame."""
         h, w = frame.shape[:2]
@@ -103,9 +74,7 @@ class UINode(Node):
         # Draw all detected skeletons
         if self.latest_pose_data and self.latest_pose_data.keypoints is not None:
             for person_keypoints in self.latest_pose_data.keypoints:
-                self._draw_skeleton(
-                    frame=frame, keypoints=person_keypoints, confidence_threshold=0.3
-                )
+                draw_skeleton(frame, person_keypoints, confidence_threshold=0.3)
 
         # Center crosshair
         cv2.line(frame, (center_x, 0), (center_x, h), (255, 255, 255), 2)
@@ -268,7 +237,8 @@ class UINode(Node):
                 try:
                     if not self.frame_queue.empty():
                         frame_msg: FrameMessage = await  self.frame_queue.get()
-                        vis_frame = self._draw_visualization(frame=frame_msg.frame)
+                        # Draw on a copy: other nodes (pose detection, the runtime server) share this frame.
+                        vis_frame = self._draw_visualization(frame=frame_msg.frame.copy())
 
                         self.frame_count += 1
                         if time.time() - self.last_fps_time >= 1.0:

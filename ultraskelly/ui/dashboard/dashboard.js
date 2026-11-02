@@ -131,15 +131,44 @@ function showHealth(state) {
   $('node-summary').textContent = `${running}/${state.nodes.length} RUNNING`;
 }
 
+// One MJPEG panel per camera the runtime reports. A stream ends when the bot stops, so
+// restart it after errors and whenever the WebSocket reconnects. Streams start only after
+// the page's load event: an MJPEG image never finishes, so it would hold the page "loading".
+const videos = new Map();
+function restartStream(name) {
+  const video = videos.get(name);
+  if (!video) return;
+  const start = () => { video.img.src = `/video/${encodeURIComponent(name)}.mjpg?start=${Date.now()}`; };
+  if (document.readyState === 'complete') start();
+  else window.addEventListener('load', start, {once: true});
+}
+function showVideos(state) {
+  const grid = $('video-grid');
+  for (const [name, camera] of Object.entries(state.cameras)) {
+    if (!videos.has(name)) {
+      if (!videos.size) grid.replaceChildren();
+      const figure = document.createElement('figure'), img = document.createElement('img');
+      const caption = document.createElement('figcaption'), label = document.createElement('span'), rate = document.createElement('span');
+      figure.className = 'video'; img.alt = `${name} camera`;
+      img.onerror = () => setTimeout(() => restartStream(name), 1000);
+      label.textContent = name.toUpperCase();
+      caption.append(label, rate); figure.append(img, caption); grid.append(figure);
+      videos.set(name, {img, rate});
+      restartStream(name);
+    }
+    videos.get(name).rate.textContent = `${camera.fps.toFixed(1)} fps from the camera`;
+  }
+}
+
 // Connection: reconnect with backoff; flag snapshots that stop arriving.
 let lastSnapshotAt = 0, snapshotsThisSecond = 0, retryDelay = 500;
 function connect() {
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  socket.onopen = () => { retryDelay = 500; error(''); };
+  socket.onopen = () => { retryDelay = 500; error(''); for (const name of videos.keys()) restartStream(name); };
   socket.onmessage = event => {
     const state = JSON.parse(event.data);
     lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
-    showSkeleton(state); showCommands(state); showTarget(state); showHealth(state);
+    showSkeleton(state); showCommands(state); showTarget(state); showHealth(state); showVideos(state);
   };
   socket.onclose = () => {
     $('connection').textContent = '○ Reconnecting…';

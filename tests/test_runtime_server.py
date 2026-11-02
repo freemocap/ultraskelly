@@ -15,10 +15,10 @@ from ultraskelly.core.pubsub.bot_topics import (
     TargetLocationTopic,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams
+from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
 
 
-def make_server(bus, *, encoded):
+def make_server(bus, *, encoded, **overlay_options):
     recorder = CommandRecorder()
     recorder.record("pan", 100.0)
 
@@ -34,6 +34,7 @@ def make_server(bus, *, encoded):
         motors_simulated=True,
         node_status=lambda: [{"name": "FakeNode", "state": "running"}],
         encode_jpeg=fake_encode,
+        **overlay_options,
     )
 
 
@@ -76,6 +77,49 @@ def test_state_reports_motor_commands_bot_state_and_nodes():
     assert state["pose"]["scores"] == [0.8]
     assert (state["cameras"]["oak"]["width"], state["cameras"]["oak"]["height"]) == (640, 480)
     assert state["nodes"] == [{"name": "FakeNode", "state": "running"}]
+
+
+def test_video_overlay_draws_latest_pose_and_target_on_a_copy():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        drawn = []
+
+        def fake_draw(frame, *, keypoints, target, aim, jaw_zone):
+            drawn.append((None if keypoints is None else keypoints.shape, target, aim, jaw_zone))
+            annotated = frame.copy()
+            annotated[0, 0, 0] = 99
+            return annotated
+
+        server = make_server(
+            bus,
+            encoded=[],
+            overlays={"oak": TrackingOverlay(aim=(300, 200), jaw_zone=80)},
+            draw_overlay=fake_draw,
+        )
+        pump = asyncio.create_task(server.pump())
+        await bus.publish(TargetLocationTopic, TargetLocationMessage(x=330, y=210, angle=0.0))
+        await bus.publish(
+            PoseDataTopic, PoseDataMessage(keypoints=np.zeros((2, 17, 3), np.float32), scores=np.array([0.9, 0.8]))
+        )
+        published = frame(2)
+        async with TestClient(TestServer(server.build_app())) as client:
+            response = await client.get("/video/oak.mjpg")
+            await asyncio.sleep(0.02)
+            await bus.publish(FrameTopic, FrameMessage(frame=published))
+            header = await response.content.readuntil(b"\r\n\r\n")
+            length = int(header.split(b"Content-Length: ")[1].split(b"\r\n")[0])
+            part = await response.content.readexactly(length)
+            response.close()
+        server.stop()
+        await pump
+        bus.close()
+        return part, drawn, published
+
+    part, drawn, published = asyncio.run(scenario())
+
+    assert part == b"JPEG99"
+    assert drawn == [((2, 17, 3), (330, 210), (300, 200), 80)]
+    assert published[0, 0, 0] == 2  # Other subscribers' frame is unchanged
 
 
 def test_dashboard_assets_are_served_locally_with_explicit_types():

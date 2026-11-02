@@ -69,11 +69,27 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
     return jpeg.tobytes()
 
 
+def draw_overlay_with_opencv(frame: np.ndarray, **overlay) -> np.ndarray:
+    """Draw the pose, target and centering guides on a copy of an RGB frame."""
+    from ultraskelly.ui.overlay import draw_tracking_overlay
+
+    return draw_tracking_overlay(frame, **overlay)
+
+
+@dataclass(frozen=True)
+class TrackingOverlay:
+    """Where the head steers the target and how wide its jaw zone is, drawn on a camera's video."""
+
+    aim: tuple[int, int] = (320, 240)
+    jaw_zone: int = 100
+
+
 @dataclass
 class CameraFeed:
     """Latest frame of one camera topic and its JPEG, encoded only while someone watches."""
 
     subscription: TopicSubscriptionQueue
+    overlay: TrackingOverlay | None = None
     clients: int = 0
     frames_seen: int = 0
     fps: float = 0.0
@@ -108,6 +124,7 @@ class RuntimeServerNode(Node):
     encode_jpeg: SkipValidation[Callable[[np.ndarray, int], bytes]] = Field(
         default=encode_jpeg_with_opencv, exclude=True
     )
+    draw_overlay: SkipValidation[Callable[..., np.ndarray]] = Field(default=draw_overlay_with_opencv, exclude=True)
 
     @classmethod
     def create(
@@ -119,9 +136,14 @@ class RuntimeServerNode(Node):
         recorder: CommandRecorder | None,
         motors_simulated: bool,
         node_status: Callable[[], list[dict]],
+        overlays: dict[str, TrackingOverlay] | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
+        draw_overlay: Callable[..., np.ndarray] = draw_overlay_with_opencv,
     ) -> "RuntimeServerNode":
-        """Factory method: subscribes to bot state and each camera's frame topic."""
+        """Factory method: subscribes to bot state and each camera's frame topic.
+
+        Cameras named in `overlays` get the pose, target and centering guides drawn on their video.
+        """
         node = cls(
             pubsub=pubsub,
             params=params,
@@ -129,8 +151,13 @@ class RuntimeServerNode(Node):
             motors_simulated=motors_simulated,
             node_status=node_status,
             encode_jpeg=encode_jpeg,
+            draw_overlay=draw_overlay,
         )
-        node.feeds = {name: CameraFeed(subscription=pubsub.get_subscription(topic)) for name, topic in cameras.items()}
+        overlays = overlays or {}
+        node.feeds = {
+            name: CameraFeed(subscription=pubsub.get_subscription(topic), overlay=overlays.get(name))
+            for name, topic in cameras.items()
+        }
         node.subscriptions = {
             "servo_state": pubsub.get_subscription(ServoStateTopic),
             "target": pubsub.get_subscription(TargetLocationTopic),
@@ -255,13 +282,33 @@ class RuntimeServerNode(Node):
             feed.clients -= 1
         return response
 
+    def _overlay_for(self, feed: CameraFeed) -> dict | None:
+        """The latest pose and target to draw on this camera's next frame, read on the event loop."""
+        if feed.overlay is None:
+            return None
+        pose, target = self.latest.get("pose"), self.latest.get("target")
+        target_message: TargetLocationMessage | None = target.message if target else None
+        has_target = target_message is not None and target_message.x is not None and target_message.y is not None
+        return {
+            "keypoints": pose.message.keypoints if pose else None,
+            "target": (target_message.x, target_message.y) if has_target else None,
+            "aim": feed.overlay.aim,
+            "jaw_zone": feed.overlay.jaw_zone,
+        }
+
+    def _render_jpeg(self, frame: np.ndarray, overlay: dict | None) -> bytes:
+        """Draw the overlay, if any, on a copy of the frame, then encode. Runs in a worker thread."""
+        if overlay is not None:
+            frame = self.draw_overlay(frame, **overlay)
+        return self.encode_jpeg(frame, self.params.jpeg_quality)
+
     async def _encode(self, feed: CameraFeed) -> None:
         """Encode the newest pending frame, repeating while newer frames arrive."""
         feed.encoding = True
         try:
             while feed.pending is not None and feed.clients > 0:
                 frame, feed.pending = feed.pending, None
-                jpeg = await asyncio.to_thread(self.encode_jpeg, frame, self.params.jpeg_quality)
+                jpeg = await asyncio.to_thread(self._render_jpeg, frame, self._overlay_for(feed))
                 async with feed.updated:
                     feed.jpeg, feed.jpeg_sequence = jpeg, feed.jpeg_sequence + 1
                     feed.updated.notify_all()

@@ -28,7 +28,7 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorParams,
 )
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
-from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams
+from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
 from ultraskelly.core.pubsub.bot_topics import FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
@@ -122,6 +122,7 @@ class BotLauncher(BaseModel):
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
+        orientation = self.config.orientation
         self.nodes.append(
             RuntimeServerNode.create(
                 pubsub=self.pubsub,
@@ -130,6 +131,11 @@ class BotLauncher(BaseModel):
                 recorder=self.command_recorder,
                 motors_simulated=self.config.simulate_motors,
                 node_status=self.node_status,
+                overlays={
+                    camera_name: TrackingOverlay(
+                        aim=(orientation.target_x, orientation.target_y), jaw_zone=orientation.head_deadzone
+                    )
+                },
             )
         )
 

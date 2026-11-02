@@ -1,5 +1,10 @@
 /* Live dashboard additions to the simulator's instrument-panel style. */
-.center{grid-template-rows:minmax(0,1fr) auto}
+.center{grid-template-rows:minmax(0,1fr) clamp(180px,36vh,360px) auto}
+.videos{display:grid;grid-template-rows:auto minmax(0,1fr);padding:7px}
+#video-grid{display:flex;gap:6px;min-height:0}
+.video{margin:0;flex:1;display:flex;flex-direction:column;gap:3px;min-height:0}
+.video img{flex:1;min-height:0;width:100%;object-fit:contain;background:#0b1318;border:1px solid #34444b;border-radius:3px}
+.video figcaption{display:flex;justify-content:space-between;font:8px monospace;color:var(--muted)}
 .health{padding:7px}
 #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px}
 .node{display:flex;justify-content:space-between;gap:6px;padding:5px 7px;border:1px solid var(--line);border-radius:4px;font:10px monospace;background:#10171b}
