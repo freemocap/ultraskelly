@@ -4,6 +4,7 @@ import pytest
 
 from scripts.waist_sound_test import FOCAL_PX, PROFILES, onset_metrics, parse_profile
 from ultraskelly.core.bot.motor.simulated_actuators import ActuatorCommand
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams
 
 
 def test_ramps_start_and_stop_at_their_levels():
@@ -51,3 +52,14 @@ def test_onset_reports_where_the_waist_breaks_loose_and_stalls():
     assert onset["moving_from"] == pytest.approx(0.6, abs=0.06)
     assert onset["moving_until"] == pytest.approx(0.6, abs=0.06)
     assert onset_metrics(shifts[:2], commands, 0.0, 3.0) == {}
+
+
+def test_drive_profile_matches_the_bots_waist_drive():
+    params, profile = WaistDriveParams(), PROFILES["drive"]
+    drive = WaistDrive(params)
+    bot = [drive.update(now=tick * 0.01, pan_offset=-30.0) for tick in range(100)]  # Head 30 degrees off, held
+    bench = [profile.throttle(tick * 0.01) for tick in range(100)]
+    assert bench == pytest.approx(bot, abs=1e-9)  # The same start and ramp up to the same cruise
+    end = profile.seconds
+    assert profile.throttle(end - 0.01) == pytest.approx(params.release_throttle + params.ramp_down * 0.01)
+    assert profile.throttle(end) is None

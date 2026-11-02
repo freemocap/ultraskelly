@@ -36,6 +36,7 @@ import numpy as np
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
 from ultraskelly.core.bot.motor.simulated_actuators import (
     ActuatorCommand,
     CommandRecorder,
@@ -109,6 +110,21 @@ class Profile:
         return level
 
 
+def drive_profile(params: WaistDriveParams, angle: float = 30.0, seconds: float = 1.5) -> Profile:
+    """One move of the bot's waist drive with the head held `angle` degrees off center, open loop.
+
+    The bot brakes a released waist after its coast; here it stays released through the rest.
+    """
+    cruise = min(params.max_throttle, params.min_throttle + params.gain * max(0.0, angle - params.start_angle))
+    start = min(params.start_throttle, cruise)
+    return Profile(
+        f"the bot's drive with the head {angle:.0f} deg off: {start:.2f} ramping to {cruise:.2f}, "
+        f"down to {params.release_throttle:.2f}, released",
+        cruise=cruise, seconds=seconds, start=start, ramp_up=(cruise - start) / params.ramp_up,
+        stop=params.release_throttle, ramp_down=(cruise - params.release_throttle) / params.ramp_down, coast=True,
+    )
+
+
 SLOW = dict(seconds=1.2, kick=0.75, kick_seconds=0.12, ramp_down=0.2, coast=True)
 PROFILES = {
     "current": Profile(
@@ -126,6 +142,7 @@ PROFILES = {
     "slow-55-slowdecay": Profile("slow-55 with slow decay", cruise=0.55, slow_decay=True, **SLOW),
     "slow-55-pwm500": Profile("slow-55 at 500 Hz PWM", cruise=0.55, pwm_hz=500.0, **SLOW),
     "slow-55-pwm200": Profile("slow-55 at 200 Hz PWM", cruise=0.55, pwm_hz=200.0, **SLOW),
+    "drive": drive_profile(WaistDriveParams()),
 }
 
 
