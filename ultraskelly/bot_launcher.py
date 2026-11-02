@@ -15,6 +15,11 @@ from ultraskelly.core.bot.sensory.bright_point_detection_node import (
     BrightnessDetectorParams,
 )
 from ultraskelly.core.bot.sensory.camera_node import VisionNode, VisionNodeParams
+from ultraskelly.core.bot.sensory.hailo_pose_node import (
+    HailoPoseDetectorNode,
+    HailoPoseDetectorParams,
+)
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
 from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
@@ -36,6 +41,8 @@ class LaunchConfig(NodeParams):
         default_factory=BrightnessDetectorParams
     )
     pose_detector: PoseDetectorParams = Field(default_factory=PoseDetectorParams)
+    oak_camera: OakCameraNodeParams = Field(default_factory=OakCameraNodeParams)
+    hailo_pose_detector: HailoPoseDetectorParams = Field(default_factory=HailoPoseDetectorParams)
     # head: HeadNodeParams = Field(default_factory=HeadNodeParams)
     mouth: MouthNodeParams = Field(default_factory=MouthNodeParams)
     # waist: WaistNodeParams = Field(default_factory=WaistNodeParams)
@@ -79,6 +86,15 @@ class BotLauncher(BaseModel):
         elif self.config.detector_type == DetectorType.POSE:
             self.nodes.append(
                 PoseDetectorNode.create(pubsub=self.pubsub, params=self.config.pose_detector)
+            )
+        elif self.config.detector_type == DetectorType.HAILO_POSE:
+            self.nodes.append(
+                OakCameraNode.create(pubsub=self.pubsub, params=self.config.oak_camera)
+            )
+            self.nodes.append(
+                HailoPoseDetectorNode.create(
+                    pubsub=self.pubsub, params=self.config.hailo_pose_detector
+                )
             )
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")

@@ -200,6 +200,21 @@ wheels = [
 ]
 
 [[package]]
+name = "depthai"
+version = "3.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/67/2f/ab1f8254598da8f5601543cfac165e422e9322e5607ddd27e023fb326b39/depthai-3.11.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-macosx_11_0_arm64.whl", hash = "sha256:d152c8b37d35951e9cdb8ded236414748004e1fecb97f0447a8c2ff28627c423", size = 68009064, upload-time = "2026-10-10T20:53:30.831Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/7f/9bf7295af0a08dee1de560423d09964df6320a2a661b619beb22b24ef739/depthai-3.11.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-macosx_11_0_x86_64.whl", hash = "sha256:47e7b84123ac8822925179cfa5534aafb19ce648c0a844c554fe373d043ff7f9", size = 71694985, upload-time = "2026-10-10T20:53:34.554Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/9d/9c483bd6db6b35b83727a954932c8080ada78c7ca0ce63d9b773a7b60e2c/depthai-3.11.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-manylinux_2_28_aarch64.whl", hash = "sha256:c828e08ff0de64c666a33ae3cfa09c6a45155d704e14e83369ec6e9b6d7f431f", size = 83588221, upload-time = "2026-10-10T20:53:38.361Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/c7/54298f010d2648831fdbca59dbc72a7e83722bed3e05fdf361f4a4b3eb6b/depthai-3.11.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-manylinux_2_28_x86_64.whl", hash = "sha256:f035fb1b150b3b440601d63b778ca879e98186b5cc6d697475bca4e0d7aee615", size = 89256679, upload-time = "2026-10-10T20:53:42.389Z" },
+    { url = "https://files.pythonhosted.org/packages/92/d6/8bb7d4f523ca0d40aa4f8e19942f7a2cd554628cd6127d978dd1ce9c62fc/depthai-3.11.0-cp39.cp310.cp311.cp312.cp313.cp314-cp39.cp310.cp311.cp312.cp313.cp314-win_amd64.whl", hash = "sha256:49259f1a8486a3eeb5cdef95030b95b485c31690874af19d345eeab2c4800a77", size = 71825320, upload-time = "2026-10-10T20:53:46.267Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -533,6 +548,7 @@ dependencies = [
 hardware = [
     { name = "adafruit-circuitpython-motorkit" },
     { name = "adafruit-circuitpython-servokit" },
+    { name = "depthai" },
     { name = "opencv-python" },
 ]
 
@@ -545,6 +561,7 @@ dev = [
 requires-dist = [
     { name = "adafruit-circuitpython-motorkit", marker = "extra == 'hardware'", specifier = ">=1.6.0" },
     { name = "adafruit-circuitpython-servokit", marker = "extra == 'hardware'", specifier = ">=1.3.22" },
+    { name = "depthai", marker = "extra == 'hardware'", specifier = ">=3.11" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "opencv-python", marker = "extra == 'hardware'", specifier = ">=4.10" },
     { name = "pydantic", specifier = ">=2.12.3" },

@@ -56,7 +56,21 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 Both can move motors during construction, including a full-power mouth test.
 The OpenCV display requires a graphical session.
 
-The optional `hardware` dependency group contains the Python motor and OpenCV
-packages. Picamera2, libcamera, and the IMX500 model require a matching Raspberry
-Pi OS installation; installing the extra on Windows does not provide a Pi runtime.
-See the audit for the hardware inventory and bring-up gates before running it.
+By default the robot tracks people with a Luxonis OAK USB camera and YOLOv8 pose
+on a Hailo-8 AI HAT+. The original IMX500 AI camera remains available as
+`DetectorType.POSE` in `ultraskelly/__main__bot.py`.
+
+The optional `hardware` dependency group contains the Python motor, OpenCV, and
+OAK (`depthai`) packages. Picamera2, libcamera, the IMX500 model, and the Hailo
+runtime with its pose model come from Raspberry Pi OS, so on the Pi install them,
+allow non-root OAK access, and build the environment on the system Python:
+
+```bash
+sudo apt install hailo-all python3-munkres
+echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' | sudo tee /etc/udev/rules.d/80-movidius.rules
+uv venv --system-site-packages --python /usr/bin/python3
+uv sync --locked --extra hardware --python /usr/bin/python3
+```
+
+Installing the extra on Windows does not provide a Pi runtime. See the audit for
+the hardware inventory and bring-up gates before running it.

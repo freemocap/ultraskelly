@@ -6,17 +6,21 @@ import cv2
 import numpy as np
 from pydantic import Field, SkipValidation
 
-from ultraskelly.core.pubsub.bot_topics import FrameTopic, PoseDataTopic, ServoStateTopic, TargetLocationTopic
+from ultraskelly.core.pubsub.bot_topics import (
+    FrameMessage,
+    FrameTopic,
+    PoseDataMessage,
+    PoseDataTopic,
+    ServoStateMessage,
+    ServoStateTopic,
+    TargetLocationMessage,
+    TargetLocationTopic,
+)
 from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
-from ultraskelly.core.bot.motor.head_node import ServoStateMessage, TargetLocationMessage
-from ultraskelly.core.bot.sensory.camera_node import FrameMessage
-from ultraskelly.core.bot.sensory.pose_detection_node import (
-    SKELETON_CONNECTIONS,
-    PoseDataMessage,
-)
+from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 
