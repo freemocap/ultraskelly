@@ -48,9 +48,6 @@ class LaunchConfig(NodeParams):
     # waist: WaistNodeParams = Field(default_factory=WaistNodeParams)
     orientation: OrientationNodeParams = Field(default_factory=OrientationNodeParams)
     ui: UINodeParams = Field(default_factory=UINodeParams)
-    restart_interval_seconds: float = Field(
-        default=120.0, description="How often to restart all nodes"
-    )
 
 
 class BotLauncher(BaseModel):
@@ -60,7 +57,6 @@ class BotLauncher(BaseModel):
     pubsub: SkipValidation[PubSubTopicManager]
     nodes: list[Node] = Field(default_factory=list)
     tasks: list[asyncio.Task] = Field(default_factory=list, exclude=True)
-    should_stop: bool = Field(default=False, exclude=True)
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -139,13 +135,6 @@ class BotLauncher(BaseModel):
         # Clear nodes to release resources
         self.nodes.clear()
 
-        # Retire subscriptions and frame references before constructing the next generation.
-        self.pubsub.close()
-        self.pubsub = PubSubTopicManager.create()
-        
-        # Give hardware time to release resources
-        await asyncio.sleep(1.0)
-        
         logger.info("All nodes stopped and resources released")
 
     async def _start_nodes(self) -> None:
@@ -159,38 +148,21 @@ class BotLauncher(BaseModel):
         logger.info(f"Started {len(self.tasks)} node tasks")
 
     async def run(self) -> None:
-        """Launch all nodes with periodic restarts."""
+        """Run all nodes until any one stops or crashes, then stop the rest.
+
+        A crashed node's exception is re-raised so failures surface instead of being hidden.
+        """
         logger.info("=" * 60)
         logger.info("LAUNCHING TARGET TRACKER WITH SOPHISTICATED PUBSUB")
-        logger.info(f"Auto-restart interval: {self.config.restart_interval_seconds}s")
         logger.info("=" * 60)
 
         try:
-            # Initial start
             await self._start_nodes()
-            
-            while not self.should_stop:
-                # Wait for restart interval
-                await asyncio.sleep(self.config.restart_interval_seconds)
-                
-                logger.info("Restarting cycle...")
-                
-                # Shutdown nodes and release resources
-                await self._shutdown_nodes()
-                
-                # Recreate nodes from config
-                self._create_nodes()
-                
-                # Start nodes again
-                await self._start_nodes()
-
-        except KeyboardInterrupt:
-            logger.info("\nStopping...")
-            self.should_stop = True
+            done, _ = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()  # Re-raises if the node crashed
+            logger.info("A node stopped; stopping the others...")
         finally:
-            # Final cleanup
             await self._shutdown_nodes()
-            
-            # Clean up pubsub
             self.pubsub.close()
             logger.info("All nodes stopped and pubsub closed")

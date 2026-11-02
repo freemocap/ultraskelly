@@ -68,6 +68,6 @@ class OakCameraNode(Node):
                 await self.pubsub.topics[FrameTopic].publish(FrameMessage(frame=frame))
         finally:
             self.pipeline.stop()
-            # Release the USB device so the next restart cycle can connect to it again.
+            # Release the USB device so the next run can connect to it.
             self.pipeline.getDefaultDevice().close()
             logger.info("OakCameraNode stopped")
