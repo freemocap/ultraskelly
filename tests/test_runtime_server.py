@@ -1,6 +1,9 @@
 import asyncio
+import struct
 
+import cbor2
 import numpy as np
+import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
@@ -196,3 +199,96 @@ def test_video_streams_newest_frames_and_encodes_only_while_watched():
     assert parts == [b"JPEG2", b"JPEG3"]
     assert encoded == [2, 3]
     assert missing_status == 404
+
+
+def read_image_payload(payload: bytes) -> tuple[int, str, bytes]:
+    """Frame number, first camera ID and its JPEG, read straight from SkellyCam's layout."""
+    frame_number = struct.unpack_from("<q", payload, 8)[0]
+    camera_id = payload[24 + 16:24 + 32].rstrip(b"\0").decode()
+    length = struct.unpack_from("<i", payload, 24 + 48)[0]
+    return frame_number, camera_id, payload[24 + 56:24 + 56 + length]
+
+
+async def receive_stream(socket, until) -> dict[str, list[dict]]:
+    received: dict[str, list[dict]] = {"frame": [], "robot_state": []}
+    while not until(received):
+        message = await asyncio.wait_for(socket.receive(), timeout=5)
+        decoded = cbor2.loads(message.data)
+        received[decoded["kind"]].append(decoded)
+    return received
+
+
+async def connect_stream(client, server):
+    socket = await client.ws_connect("/stream")
+    while server.stream_clients == 0:
+        await asyncio.sleep(0.005)
+    return socket
+
+
+def test_stream_sends_each_frame_with_its_own_poses_and_the_robot_state():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        encoded = []
+        server = make_server(bus, encoded=encoded, pose_camera="oak",
+                             overlays={"oak": TrackingOverlay(aim=(320, 240), jaw_zone=100)})
+        pump = asyncio.create_task(server.pump())
+        await bus.publish(FrameTopic, FrameMessage(frame=frame(5)))
+        await asyncio.sleep(0.05)
+        encoded_unwatched = list(encoded)
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            camera_frame = FrameMessage(frame=frame(7), frame_number=41, timestamp=12.5)
+            await bus.publish(FrameTopic, camera_frame)
+            keypoints = np.zeros((2, 17, 3), np.float32)
+            keypoints[0, 0], keypoints[1, 0] = [330, 200, 0.9], [100, 50, 0.4]
+            await bus.publish(PoseDataTopic, PoseDataMessage(keypoints=keypoints, scores=np.array([0.8, 0.6]),
+                                                             frame=camera_frame))
+            received = await receive_stream(
+                socket, lambda got: got["robot_state"] and any(message["trackers"] for message in got["frame"]))
+            await socket.send_str("ping")
+            pong = await asyncio.wait_for(socket.receive_str(), timeout=5)
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return encoded_unwatched, received, pong
+
+    encoded_unwatched, received, pong = asyncio.run(scenario())
+
+    assert encoded_unwatched == []
+    posed = next(message for message in received["frame"] if message["trackers"])
+    assert (posed["frame_number"], posed["sequence"], posed["timestamp"]) == (41, 41, 12.5)
+    assert posed["cameras"][0]["id"] == "oak" and posed["cameras"][0]["image_size"] == [640, 480]
+    assert len(posed["trackers"]) == 2
+    tracker = posed["trackers"][0]
+    channel = tracker["channels"][0]
+    assert (channel["kind"], channel["camera_id"], channel["names"][0], channel["image_size"]) == (
+        "OVERLAY_2D", "oak", "nose", [640, 480])
+    assert np.frombuffer(channel["data"], "<f4").reshape(17, 3)[0].tolist() == pytest.approx([330, 200, 0.9])
+    assert tracker["model_id"] is None and tracker["connection_groups"][0]["name"] == "body"
+    assert read_image_payload(posed["image"]) == (41, "oak", b"JPEG7")
+    state = received["robot_state"][0]
+    assert "pose" not in state and state["overlays"]["oak"] == {"aim": [320, 240], "jaw_zone": 100}
+    assert state["motors"]["commands"]["pan"]["value"] == 100.0
+    assert pong == "pong"
+
+
+def test_stream_keeps_video_flowing_without_poses():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[], pose_camera="oak")
+        pump = asyncio.create_task(server.pump())
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            await bus.publish(FrameTopic, FrameMessage(frame=frame(9)))
+            received = await receive_stream(socket, lambda got: got["frame"])
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return received["frame"][0]
+
+    bare = asyncio.run(scenario())
+
+    assert bare["trackers"] == [] and bare["frame_number"] == 1
+    assert read_image_payload(bare["image"])[1:] == ("oak", b"JPEG9")

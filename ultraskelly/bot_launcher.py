@@ -141,6 +141,8 @@ class BotLauncher(BaseModel):
                         aim=(orientation.target_x, orientation.target_y), jaw_zone=orientation.head_deadzone
                     )
                 },
+                # The Hailo detector reports which OAK frame each pose came from.
+                pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
             )
         )
 

@@ -65,7 +65,12 @@ class OakCameraNode(Node):
                 frame = message.getFrame()
                 if self.params.flip_camera:
                     frame = np.ascontiguousarray(frame[::-1, ::-1])
-                await self.pubsub.topics[FrameTopic].publish(FrameMessage(frame=frame))
+                await self.pubsub.topics[FrameTopic].publish(FrameMessage(
+                    frame=frame,
+                    frame_number=message.getSequenceNum(),
+                    # depthai stamps frames on the host's steady clock: time.monotonic()'s on Linux.
+                    timestamp=message.getTimestamp().total_seconds(),
+                ))
         finally:
             self.pipeline.stop()
             # Release the USB device so the next run can connect to it.

@@ -155,11 +155,11 @@ class HailoPoseDetectorNode(DetectorNode):
         """Detect poses in one RGB image and return the tracked keypoint and body angle."""
         return self._select_target(self._infer(image))
 
-    async def _publish(self, detections: PoseDetections | None) -> None:
-        """Publish the target and full pose data; None or no people means no target."""
+    async def _publish(self, detections: PoseDetections | None, frame: FrameMessage | None = None) -> None:
+        """Publish the target and full pose data detected in `frame`; None or no people means no target."""
         if detections is None or detections.count == 0:
             await self.pubsub.topics[TargetLocationTopic].publish(TargetLocationMessage())
-            await self.pubsub.topics[PoseDataTopic].publish(PoseDataMessage())
+            await self.pubsub.topics[PoseDataTopic].publish(PoseDataMessage(frame=frame))
             return
 
         x, y, angle = self._select_target(detections)
@@ -169,6 +169,7 @@ class HailoPoseDetectorNode(DetectorNode):
                 keypoints=detections.keypoints,
                 scores=detections.scores,
                 boxes=list(detections.boxes),
+                frame=frame,
             )
         )
 
@@ -202,7 +203,7 @@ class HailoPoseDetectorNode(DetectorNode):
                 # cancelled run() still waits for the thread before releasing the Hailo-8.
                 inference = asyncio.ensure_future(asyncio.to_thread(self._infer, frame_message.frame))
                 detections = await asyncio.shield(inference)
-                await self._publish(detections)
+                await self._publish(detections, frame_message)
         finally:
             if inference is not None and not inference.done():
                 await asyncio.wait({inference})

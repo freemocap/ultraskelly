@@ -1,7 +1,11 @@
-"""Live telemetry for the dashboard: JSON bot state over a WebSocket and MJPEG camera video.
+"""Live telemetry for the dashboard, streamed the way FreeMoCap streams to its browser.
 
-Every endpoint is read-only. A slow browser only skips snapshots or frames; it never
-blocks the bot's event loop. Motor values are the commands sent, not measured positions.
+`/stream` is one WebSocket of self-describing CBOR messages (freemocap-stream):
+FreeMoCap `frame` messages carry each camera's JPEG with the poses detected in
+that very image, and `robot_state` messages carry the bot's snapshot. JSON state
+and MJPEG video are also served. Every endpoint is read-only. A slow browser only
+skips snapshots or frames; it never blocks the bot's event loop. Motor values are
+the commands sent, not measured positions.
 """
 import asyncio
 import json
@@ -13,11 +17,26 @@ from typing import Callable
 
 import numpy as np
 from aiohttp import WSMsgType, web
+from freemocap_stream import (
+    OVERLAY_2D,
+    Latest,
+    PayloadImage,
+    StreamConnection,
+    channel_block,
+    connection_group,
+    encode_frame_message,
+    encode_image_payload,
+    encode_message,
+    tracker_observation,
+    uncalibrated_camera,
+)
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
+from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
+    FrameMessage,
     PoseDataMessage,
     PoseDataTopic,
     ServoStateMessage,
@@ -72,6 +91,48 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
     return jpeg.tobytes()
 
 
+POSE_TRACKER = "yolov8_pose"
+KEYPOINT_NAMES = tuple(keypoint.name.lower() for keypoint in CocoKeypoint)
+KEYPOINT_COLUMNS = ("x", "y", "visibility")
+BODY = connection_group(
+    "body", [(KEYPOINT_NAMES[start], KEYPOINT_NAMES[end]) for start, end in SKELETON_CONNECTIONS], "#3ddc84"
+)
+POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
+
+
+def encode_camera_frame(
+    camera: str,
+    index: int,
+    image: np.ndarray,
+    *,
+    frame_number: int,
+    timestamp: float,
+    poses: np.ndarray | None,
+    encode_jpeg: Callable[[np.ndarray, int], bytes],
+    jpeg_quality: int,
+) -> bytes:
+    """One FreeMoCap frame message: this camera's JPEG and each person's keypoints, in
+    pixels of that image. Pure CPU work, safe to run in a worker thread."""
+    height, width = image.shape[:2]
+    trackers = [
+        tracker_observation(
+            POSE_TRACKER,
+            [channel_block(OVERLAY_2D, KEYPOINT_COLUMNS, person, names=KEYPOINT_NAMES,
+                           camera_id=camera, image_size=(width, height))],
+            connection_groups=[BODY],
+        )
+        for person in (poses if poses is not None else ())
+    ]
+    jpeg = encode_jpeg(image, jpeg_quality)
+    return encode_frame_message(
+        frame_number=frame_number,
+        timestamp=timestamp,
+        cameras=[uncalibrated_camera(camera, index, (width, height))],
+        trackers=trackers,
+        image=encode_image_payload(frame_number, [PayloadImage(camera, index, width, height, jpeg)]),
+    )
+
+
 def draw_overlay_with_opencv(frame: np.ndarray, **overlay) -> np.ndarray:
     """Draw the pose, target and centering guides on a copy of an RGB frame."""
     from ultraskelly.ui.overlay import draw_tracking_overlay
@@ -92,7 +153,15 @@ class CameraFeed:
     """Latest frame of one camera topic and its JPEG, encoded only while someone watches."""
 
     subscription: TopicSubscriptionQueue
+    name: str = "camera"
+    index: int = 0
     overlay: TrackingOverlay | None = None
+    # /stream: the newest encoded frame message, and the frame (with its poses) waiting for encoding.
+    stream: Latest = field(default_factory=Latest)
+    stream_pending: tuple[FrameMessage, np.ndarray | None] | None = None
+    stream_encoding: bool = False
+    stream_frames: int = 0
+    last_pose_at: float | None = None
     clients: int = 0
     frames_seen: int = 0
     fps: float = 0.0
@@ -128,6 +197,11 @@ class RuntimeServerNode(Node):
         default=encode_jpeg_with_opencv, exclude=True
     )
     draw_overlay: SkipValidation[Callable[..., np.ndarray]] = Field(default=draw_overlay_with_opencv, exclude=True)
+    pose_camera: str | None = Field(default=None, description="Camera whose frames the pose detector reads")
+    state_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)
+    stream_clients: int = Field(default=0, exclude=True)
+    state_sequence: int = Field(default=0, exclude=True)
+    state_published_at: float = Field(default=0.0, exclude=True)
 
     @classmethod
     def create(
@@ -140,12 +214,14 @@ class RuntimeServerNode(Node):
         motors_simulated: bool,
         node_status: Callable[[], list[dict]],
         overlays: dict[str, TrackingOverlay] | None = None,
+        pose_camera: str | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
         draw_overlay: Callable[..., np.ndarray] = draw_overlay_with_opencv,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` get the pose, target and centering guides drawn on their video.
+        On `/stream`, `pose_camera`'s frames travel with the poses detected in them.
         """
         node = cls(
             pubsub=pubsub,
@@ -155,11 +231,14 @@ class RuntimeServerNode(Node):
             node_status=node_status,
             encode_jpeg=encode_jpeg,
             draw_overlay=draw_overlay,
+            pose_camera=pose_camera,
         )
         overlays = overlays or {}
         node.feeds = {
-            name: CameraFeed(subscription=pubsub.get_subscription(topic), overlay=overlays.get(name))
-            for name, topic in cameras.items()
+            name: CameraFeed(
+                subscription=pubsub.get_subscription(topic), name=name, index=index, overlay=overlays.get(name)
+            )
+            for index, (name, topic) in enumerate(cameras.items())
         }
         node.subscriptions = {
             "servo_state": pubsub.get_subscription(ServoStateTopic),
@@ -176,7 +255,43 @@ class RuntimeServerNode(Node):
         app.router.add_get("/api/state", self._state)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/video/{camera}.mjpg", self._video)
+        app.router.add_get("/stream", self._stream)
         return app
+
+    def robot_state(self) -> dict:
+        """The `robot_state` message: the snapshot without poses, which travel in frame
+        messages with their image, plus where each camera's guides are drawn."""
+        state = self.snapshot()
+        del state["pose"]
+        state["overlays"] = {
+            name: {"aim": list(feed.overlay.aim), "jaw_zone": feed.overlay.jaw_zone}
+            for name, feed in self.feeds.items()
+            if feed.overlay is not None
+        }
+        return state
+
+    async def _stream(self, request: web.Request) -> web.WebSocketResponse:
+        """One client of the CBOR stream: robot state and every camera's newest frame."""
+        websocket = web.WebSocketResponse(heartbeat=10)
+        await websocket.prepare(request)
+        connection = StreamConnection(websocket.send_bytes, websocket.send_str)
+        self.stream_clients += 1
+        sending = asyncio.create_task(
+            connection.follow(self.state_stream, *(feed.stream for feed in self.feeds.values()))
+        )
+        try:
+            async for message in websocket:
+                if message.type == WSMsgType.TEXT:
+                    await connection.receive_text(message.data)  # Answers the client's ping
+                elif message.type == WSMsgType.ERROR:
+                    break
+        except ConnectionResetError:
+            pass
+        finally:
+            self.stream_clients -= 1
+            sending.cancel()
+            await asyncio.gather(sending, return_exceptions=True)
+        return websocket
 
     def snapshot(self) -> dict:
         """Current bot state as JSON-ready values. Ages are seconds since this server received them."""
@@ -320,28 +435,64 @@ class RuntimeServerNode(Node):
         finally:
             feed.encoding = False
 
+    async def _stream_frames(self, feed: CameraFeed) -> None:
+        """Encode the newest pending frame message for /stream, repeating while newer ones arrive."""
+        feed.stream_encoding = True
+        try:
+            while feed.stream_pending is not None and self.stream_clients > 0:
+                (camera_frame, poses), feed.stream_pending = feed.stream_pending, None
+                feed.stream_frames += 1
+                message = await asyncio.to_thread(
+                    encode_camera_frame, feed.name, feed.index, camera_frame.frame,
+                    frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.stream_frames,
+                    timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
+                    poses=poses, encode_jpeg=self.encode_jpeg, jpeg_quality=self.params.jpeg_quality,
+                )
+                feed.stream.publish(message)
+        except Exception:
+            logger.exception("Stream frame encoding failed")
+        finally:
+            feed.stream_encoding = False
+
     async def pump(self) -> None:
-        """Drain subscriptions into the latest state and start JPEG encoding for watched cameras."""
+        """Drain subscriptions into the latest state and start encoding for watched cameras."""
         while not self.stop_event.is_set():
             now = time.monotonic()
             for name, subscription in self.subscriptions.items():
                 while not subscription.empty():
+                    message = subscription.get_nowait()
                     previous = self.latest.get(name)
-                    self.latest[name] = Received(message=subscription.get_nowait(), at=now)
+                    self.latest[name] = Received(message=message, at=now)
                     if previous is not None and now > previous.at:
                         rate = self.rates.get(name, 0.0)
                         self.rates[name] = rate + 0.1 * (1 / (now - previous.at) - rate)
+                    if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
+                        posed = self.feeds[self.pose_camera]
+                        posed.last_pose_at = now
+                        posed.stream_pending = (message.frame, message.keypoints)
             for feed in self.feeds.values():
                 while not feed.subscription.empty():
-                    frame = feed.subscription.get_nowait().frame
+                    camera_frame = feed.subscription.get_nowait()
+                    frame = camera_frame.frame
                     if feed.last_frame_at is not None and now > feed.last_frame_at:
                         feed.fps += 0.1 * (1 / (now - feed.last_frame_at) - feed.fps)
                     feed.last_frame_at, feed.shape = now, frame.shape
                     feed.frames_seen += 1
                     if feed.clients > 0:
                         feed.pending = frame
+                    # A posed camera's frames come with their poses, unless the detector has stalled.
+                    poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
+                    if feed.name != self.pose_camera or not poses_flowing:
+                        feed.stream_pending = (camera_frame, None)
                 if feed.pending is not None and feed.clients > 0 and not feed.encoding:
                     asyncio.create_task(self._encode(feed))
+                if feed.stream_pending is not None and self.stream_clients > 0 and not feed.stream_encoding:
+                    asyncio.create_task(self._stream_frames(feed))
+            if self.stream_clients > 0 and now - self.state_published_at >= 1 / self.params.state_hz:
+                self.state_published_at, self.state_sequence = now, self.state_sequence + 1
+                self.state_stream.publish(
+                    encode_message("robot_state", self.robot_state(), timestamp=now, sequence=self.state_sequence)
+                )
             await asyncio.sleep(0.005)
 
     async def _wake_video_clients(self) -> None:

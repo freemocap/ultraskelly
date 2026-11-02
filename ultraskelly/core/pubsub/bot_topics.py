@@ -7,6 +7,8 @@ from ultraskelly.core.pubsub.pubsub_abcs import TopicMessageABC, create_topic
 class FrameMessage(TopicMessageABC):
     """Raw frame from camera."""
     frame: np.ndarray
+    frame_number: int | None = None  # The camera's frame counter, when it provides one
+    timestamp: float | None = None  # Capture time in seconds on time.monotonic()'s clock, when known
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -40,6 +42,7 @@ class PoseDataMessage(TopicMessageABC):
     keypoints: np.ndarray | None = None  # Shape: (num_people, 17, 3)
     scores: np.ndarray | None = None  # Shape: (num_people,)
     boxes: list[np.ndarray] | None = None
+    frame: FrameMessage | None = None  # The camera frame these poses were detected in, so viewers can pair them
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
