@@ -78,6 +78,7 @@ class OrientationNode(Node):
     # Waist motor state
     waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
     waist_mode: WaistState = Field(default=WaistState.IDLE)
+    manual: bool = Field(default=False, description="True while a motor test drives the actuators; tracking commands nothing")
     
     # Target tracking state
     latest_target: TargetLocationMessage | None = Field(default=None, exclude=True)
@@ -172,6 +173,12 @@ class OrientationNode(Node):
             self.latest_target = await self.target_subscription.get()
             self.target_received_at = self.clock()
             fresh = True
+        if self.manual:
+            await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
+                pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=90.0,
+                is_locked_x=False, is_locked_y=False, is_locked_roll=False,
+            ))
+            return
         msg = self.latest_target
         valid = (msg is not None and msg.x is not None and msg.y is not None
                  and self.target_received_at is not None
