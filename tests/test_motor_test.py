@@ -41,7 +41,7 @@ def test_a_waist_pulse_runs_alone_for_its_time_then_brakes():
         tester.orientation.waist_motor.throttle = -0.6  # Tracking was turning the waist
         tester.mouth.mouth_motor.throttle = -1.0  # and holding the jaw open
         result = await tester.run(MotorTestRequest(actuator="waist", throttle=0.5, seconds=0.1))
-        assert result["outcome"] == "done" and 0.1 <= result["took"] < 0.3
+        assert result["outcome"] == "done" and 0.08 <= result["took"] < 0.3  # Windows timers may fire 15 ms early
         assert values(recorder, "waist")[-3:] == [0.0, 0.5, 0.0]  # Tracking's drive stopped before the pulse
         assert values(recorder, "mouth")[-1] == 0.0
         assert tester.waist_travel == pytest.approx(0.05, abs=0.01)

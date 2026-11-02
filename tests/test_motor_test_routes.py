@@ -76,3 +76,13 @@ def test_tests_can_be_turned_off():
         reply = await client.post("/api/motor-test", json={"actuator": "pan", "angle": 90})
         assert reply.status == 403
     serve(scenario, limits=MotorTestLimits(enabled=False))
+
+
+def test_the_dashboard_panel_is_served():
+    async def scenario(client, server, recorder):
+        reply = await client.get("/motor-test.js")
+        assert reply.status == 200 and reply.content_type == "text/javascript"
+        assert "export class MotorTestPanel" in await reply.text()
+        page = await (await client.get("/")).text()
+        assert 'id="motor-test"' in page
+    serve(scenario)
