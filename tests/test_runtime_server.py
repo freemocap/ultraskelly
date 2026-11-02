@@ -78,6 +78,26 @@ def test_state_reports_motor_commands_bot_state_and_nodes():
     assert state["nodes"] == [{"name": "FakeNode", "state": "running"}]
 
 
+def test_dashboard_assets_are_served_locally_with_explicit_types():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[])
+        served = {}
+        async with TestClient(TestServer(server.build_app())) as client:
+            for path in ["/", "/dashboard.js", "/dashboard.css", "/style.css", "/skeleton.js",
+                         "/vendor/three.module.js", "/vendor/three.core.js", "/vendor/OrbitControls.js"]:
+                response = await client.get(path)
+                served[path] = (response.status, response.content_type, len(await response.read()))
+        bus.close()
+        return served
+
+    served = asyncio.run(scenario())
+
+    assert all(status == 200 and size > 100 for status, _, size in served.values())
+    assert served["/"][1] == "text/html"
+    assert {served[path][1] for path in served if path.endswith(".js")} == {"text/javascript"}
+
+
 def test_websocket_streams_fresh_snapshots():
     async def scenario():
         bus = PubSubTopicManager.create()

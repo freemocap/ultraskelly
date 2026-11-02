@@ -14,7 +14,7 @@ from .engine import Simulation
 
 STATIC = Path(__file__).with_name("static")
 ASSETS = {"/": ("index.html", "text/html"), "/viewer.js": ("viewer.js", "text/javascript"),
-          "/style.css": ("style.css", "text/css")}
+          "/skeleton.js": ("skeleton.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 ASSETS["/hardware.html"] = ("hardware.html", "text/html")
 ASSETS["/hardware.svg"] = ("hardware.svg", "image/svg+xml")
 for name in ("three.module.js", "three.core.js", "OrbitControls.js"):

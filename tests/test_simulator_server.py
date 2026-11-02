@@ -66,7 +66,7 @@ def test_http_rejects_invalid_and_cross_origin_commands(local_server):
 
 def test_all_viewer_assets_are_served_locally(local_server):
     base, _ = local_server
-    for path in ['/', '/style.css', '/viewer.js', '/vendor/three.module.js', '/vendor/three.core.js', '/vendor/OrbitControls.js']:
+    for path in ['/', '/style.css', '/viewer.js', '/skeleton.js', '/vendor/three.module.js', '/vendor/three.core.js', '/vendor/OrbitControls.js']:
         with urlopen(base + path, timeout=3) as response:
             assert response.status == 200
             assert len(response.read()) > 100

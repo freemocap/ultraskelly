@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UltraSkelly · Live</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
+</head>
+<body>
+<header><div class="brand"><span class="mark">U/S</span><div><h1>UltraSkelly <span> / live</span></h1></div></div><div class="status"><span id="connection">Connecting…</span><span id="motor-mode" class="pill">—</span></div></header>
+<main>
+  <aside class="controls">
+    <section title="Values sent to the servo and motor boards. There is no waist or jaw angle sensor."><div class="section-title"><h2>Motor commands</h2><span>SENT, NOT MEASURED</span></div>
+      <table><thead><tr><th>Actuator</th><th>Command</th><th>Age</th></tr></thead><tbody>
+        <tr><td>Head pan</td><td id="pan">—</td><td id="pan-age">—</td></tr>
+        <tr><td>Head tilt</td><td id="tilt">—</td><td id="tilt-age">—</td></tr>
+        <tr><td>Waist drive</td><td id="waist">—</td><td id="waist-age">—</td></tr>
+        <tr><td>Jaw drive</td><td id="mouth">—</td><td id="mouth-age">—</td></tr>
+      </tbody></table>
+      <p class="note">Pan and tilt are servo angles. Waist and jaw are motor throttle, −1 to +1; negative jaw drive opens it.</p>
+    </section>
+    <section><div class="section-title"><h2>Target</h2><span id="target-state">NO TARGET</span></div>
+      <canvas id="camera" width="640" height="480" aria-label="Target position in the camera frame"></canvas>
+      <div class="camera-meta"><span id="target-pixel">—</span><span id="target-angle">—</span></div>
+    </section>
+  </aside>
+  <div class="center">
+    <section class="stage"><div class="stage-head"><span class="eyebrow">LIVE COMMANDS ON THE SKELETON</span><button id="view-reset">Reset view</button></div>
+      <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
+      <div class="stage-foot"><span>Head follows pan/tilt commands · jaw opens while driven · arrow shows waist drive</span><span>Drag to orbit · Scroll to zoom</span></div>
+    </section>
+    <section class="health"><div class="section-title"><h2>Nodes</h2><span id="node-summary">—</span></div><div id="nodes"></div></section>
+  </div>
+  <aside class="inspector">
+    <section><h2>Message rates</h2><dl id="rates"></dl></section>
+    <section><h2>Cameras</h2><dl id="cameras"></dl></section>
+    <section><h2>Connection</h2><dl><dt>Snapshots</dt><dd id="snapshot-rate">—</dd><dt>Last snapshot</dt><dd id="snapshot-age">—</dd></dl></section>
+    <div class="model-note"><strong>Live commands</strong><p>The skeleton shows what the motors are told to do. Without position sensors it cannot show where they actually are.</p></div>
+  </aside>
+</main>
+<div id="error" role="alert" hidden></div>
+<script type="module" src="/dashboard.js"></script>
+</body></html>

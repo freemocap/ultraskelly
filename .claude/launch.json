@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "simulator",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--locked", "python", "-m", "ultraskelly.simulator", "--port", "8765"],
+      "port": 8765
+    },
+    {
+      "name": "replay-dashboard",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--locked", "python", "-m", "ultraskelly.replay", "--serve", "--port", "8081"],
+      "port": 8081
+    }
+  ]
+}

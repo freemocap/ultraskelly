@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -29,11 +30,20 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
 
-PLACEHOLDER_PAGE = """<!doctype html><title>UltraSkelly runtime</title>
-<h1>UltraSkelly runtime</h1>
-<p>Live state: <a href="/api/state">/api/state</a> (WebSocket: <code>/ws</code>)</p>
-<img src="/video/oak.mjpg" alt="OAK camera">
-"""
+DASHBOARD = Path(__file__).with_name("dashboard")
+SHARED = Path(__file__).parents[1] / "simulator" / "static"  # Skeleton, style and vendored Three.js
+# Explicit content types: Windows can map .js to text/plain, which browsers refuse for modules.
+ASSETS: dict[str, tuple[Path, str]] = {
+    "/": (DASHBOARD / "index.html", "text/html"),
+    "/dashboard.js": (DASHBOARD / "dashboard.js", "text/javascript"),
+    "/dashboard.css": (DASHBOARD / "dashboard.css", "text/css"),
+    "/style.css": (SHARED / "style.css", "text/css"),
+    "/skeleton.js": (SHARED / "skeleton.js", "text/javascript"),
+    **{
+        f"/vendor/{name}": (SHARED / "vendor" / name, "text/javascript")
+        for name in ("three.module.js", "three.core.js", "OrbitControls.js")
+    },
+}
 
 
 class RuntimeServerParams(NodeParams):
@@ -131,7 +141,8 @@ class RuntimeServerNode(Node):
     def build_app(self) -> web.Application:
         """The aiohttp application, separate from serving so tests can host it themselves."""
         app = web.Application()
-        app.router.add_get("/", self._index)
+        for path in ASSETS:
+            app.router.add_get(path, self._asset)
         app.router.add_get("/api/state", self._state)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/video/{camera}.mjpg", self._video)
@@ -187,8 +198,12 @@ class RuntimeServerNode(Node):
             }
         return state
 
-    async def _index(self, request: web.Request) -> web.Response:
-        return web.Response(text=PLACEHOLDER_PAGE, content_type="text/html")
+    async def _asset(self, request: web.Request) -> web.Response:
+        path, content_type = ASSETS[request.path]
+        return web.Response(
+            body=path.read_bytes(), content_type=content_type, charset="utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def _state(self, request: web.Request) -> web.Response:
         return web.json_response(self.snapshot(), headers={"Cache-Control": "no-store"})
