@@ -288,6 +288,45 @@ package restores the unpatched source, so run the script again then. After the
 fix: 18,000 soak inferences in 10 minutes and a bot run with the dashboard
 watching produced no warnings.
 
+## Lost Wi-Fi and sudden power losses (2026-11-02)
+
+The Wi-Fi radio never switched off: NetworkManager found it enabled in every boot,
+and rfkill never blocked it. The Pi lost its saved network instead. Until 13:15 it
+joined `HouseHouse-5G` (5745 MHz) through the profile Raspberry Pi Imager set up
+with cloud-init and netplan (`/etc/netplan/90-NM-eaa52c7e-….yaml`). At 13:32:18–19,
+while the robot's USB devices were being rearranged by hand, NetworkManager rewrote
+that file and a second profile during a boot whose journal holds one second. Power
+was lost before the data reached the card, and both files are empty. Later boots had
+no Wi-Fi network to join until `HouseHouse` (2.4 GHz, channel 11) was added from the
+desktop at 14:56. `HouseHouse-5G` is still on the air (channel 44, −52 dBm at the
+robot). The same mechanism emptied git objects after the 10:12 reset.
+
+Of the ten boots since 10:11, only the 10:50 power-off ended with a shutdown (the
+journal's last line is `Journal stopped`); the rest ended mid-run. The current boot's
+bootloader reset status (`/proc/device-tree/chosen/bootloader/rsts`) is `0x1000`, a
+power-on reset: power was lost or cut. A reboot, kernel panic or watchdog reset sets
+bit 5 (`0x1020`). Raspberry Pi does not document these values; see the
+[forum thread](https://forums.raspberrypi.com/viewtopic.php?p=2300447) and
+[rpi-eeprom #758](https://github.com/raspberrypi/rpi-eeprom/pull/758). No boot logged
+undervoltage or USB over-current. Bursts of I2C "lost arbitration" errors on the servo
+and motor bus came before two of the losses; according to the coordinator's and W1's
+logs they were bus probes, not motor commands, while the servo board at `0x40` had
+stopped answering (since 14:43). Boot times in `journalctl --list-boots` are rough:
+after a power loss the clock restarts from the last saved time until NTP corrects it.
+
+USB power: the 5 A supply lets the four USB ports draw 1.6 A together (the firmware
+sets `usb_max_current_enable=1`; `config.txt` does not). Declared currents: ZED Mini
+512 + 100 mA, OAK-1 500 mA before it boots, the Nordic receiver 100 mA, a Genesys USB
+2 hub 100 mA and the Yeti X behind it 100 mA, 1.41 A in all. Actual draw was not
+measured; the OAK can exceed its declaration while booting and inferring. Wi-Fi
+power save was on (the driver default).
+
+Planned for the Pi setup script: sync the journal every 10 s instead of every 5
+minutes, so the last seconds before a loss survive; log at each boot the reset status
+and whether the previous boot shut down; flag emptied network profiles and git
+objects; turn Wi-Fi power save off. Shut the Pi down before re-plugging its power or
+USB devices.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
