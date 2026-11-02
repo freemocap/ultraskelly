@@ -30,9 +30,10 @@ RestartSteps=5
 RestartMaxDelaySec=1min
 # Building the nodes boots the OAK and loads the Hailo model. After that the event
 # loop must ping systemd at least every 30 s (ultraskelly/systemd_notify.py), or the
-# bot is killed with SIGABRT, which logs every thread's Python traceback.
+# bot is killed with SIGUSR1, which first logs every thread's Python traceback.
 TimeoutStartSec=2min
 WatchdogSec=30s
+WatchdogSignal=SIGUSR1
 # SIGTERM goes to the bot alone, which stops its nodes and helpers in order.
 KillMode=mixed
 TimeoutStopSec=30s

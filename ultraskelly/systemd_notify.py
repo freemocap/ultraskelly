@@ -4,13 +4,16 @@ When the bot runs as the boot service (`Type=notify` with `WatchdogSec=`), syste
 waits for READY=1 and then expects WATCHDOG=1 within every watchdog timeout. A task on
 the bot's event loop sends those pings, so they stop whenever the loop stops: a
 coroutine that blocks, a driver call that never returns, a deadlock. systemd then
-kills the bot with SIGABRT, which `PYTHONFAULTHANDLER=1` turns into every thread's
-traceback in the journal, and starts it again. Manual runs have no NOTIFY_SOCKET, so
-nothing is sent.
+kills the bot with SIGUSR1 (`WatchdogSignal=` in the unit), which first prints every
+thread's Python traceback to the journal, and starts it again. Not SIGABRT: depthai
+installs its own handler for that, which prints only native frames. Manual runs have
+no NOTIFY_SOCKET, so nothing is sent.
 """
 import asyncio
+import faulthandler
 import logging
 import os
+import signal
 import socket
 from collections.abc import Awaitable
 from typing import TypeVar
@@ -50,6 +53,8 @@ async def _heartbeat() -> None:
     timeout = watchdog_seconds()
     if timeout is None:
         return
+    if hasattr(signal, "SIGUSR1"):  # On the watchdog's signal, print all threads' tracebacks, then die of it
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
     logger.info(f"systemd watchdog: {timeout:g} s; pinging every {timeout / 2:g} s")
     while True:
         notify("WATCHDOG=1")

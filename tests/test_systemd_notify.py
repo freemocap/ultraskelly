@@ -1,12 +1,17 @@
 import asyncio
+import faulthandler
 import os
+import signal
 import socket
+import subprocess
+import sys
 
 import pytest
 
 from ultraskelly import systemd_notify
 
 needs_unix_datagrams = pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="needs Unix datagram sockets")
+needs_sigusr1 = pytest.mark.skipif(not hasattr(signal, "SIGUSR1"), reason="needs POSIX signals")
 
 
 def test_manual_runs_send_nothing(monkeypatch):
@@ -36,11 +41,41 @@ def test_ready_follows_start_up_then_pings_continue_until_the_work_ends(monkeypa
         await asyncio.sleep(0.3)
         return "stopped"
 
-    assert asyncio.run(systemd_notify.run_with_heartbeat(bot())) == "stopped"
+    try:
+        assert asyncio.run(systemd_notify.run_with_heartbeat(bot())) == "stopped"
+    finally:
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.unregister(signal.SIGUSR1)  # Registered for the watchdog; keep pytest's default
     assert sent[:2] == ["nodes built", "READY=1"]
     assert sent[-1] == "STOPPING=1"
     assert set(sent[2:-1]) == {"WATCHDOG=1"}
     assert len(sent[2:-1]) >= 3
+
+
+@needs_sigusr1
+def test_the_watchdog_signal_prints_the_frozen_coroutine_and_ends_the_process():
+    code = """
+import asyncio, os, time
+from ultraskelly import systemd_notify
+systemd_notify.notify = lambda state: True  # Stand in for systemd
+os.environ.update(WATCHDOG_USEC="60000000", WATCHDOG_PID=str(os.getpid()))
+
+async def frozen_bot():
+    await asyncio.sleep(0.1)  # The heartbeat starts
+    print("frozen", flush=True)
+    time.sleep(30)  # A call that blocks the event loop
+
+asyncio.run(systemd_notify.run_with_heartbeat(frozen_bot()))
+"""
+    bot = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert bot.stdout.readline().strip() == "frozen"
+        bot.send_signal(signal.SIGUSR1)  # What systemd sends when the pings stop
+        _, stderr = bot.communicate(timeout=10)
+    finally:
+        bot.kill()
+    assert bot.returncode == -signal.SIGUSR1
+    assert "in frozen_bot" in stderr
 
 
 @needs_unix_datagrams
