@@ -218,6 +218,40 @@ The next implementation slice should be stage 2, especially task supervision and
 freshness. A visually attractive armature cannot establish that the motors stop
 when a camera or controller fails.
 
+## Live dashboard transport (2026-11-02)
+
+At the owner's direction the dashboard moved from JSON snapshots (`/ws`,
+`/api/state`) plus annotated MJPEG (`/video/oak.mjpg`) to FreeMoCap's
+self-describing CBOR stream on one WebSocket, `/stream`. The Pi encodes with
+`freemocap-stream`; the browser decodes with the vendored `@freemocap/client`
+(both from FreeMoCap's `sfn26-ultraskelly` branch). Each frame message carries
+the OAK JPEG with the keypoints the Hailo detector found in that same image
+(`PoseDataMessage.frame`), so the browser draws the pose, target, aim point and
+jaw zone itself. `robot_state` messages carry the rest at 20 Hz.
+
+Measured on the Pi with the bot at `--hardware --simulate-motors --no-window`,
+nobody in view, viewer 1 the Pi's full-screen Chromium window and viewer 2 a
+client on another computer counting what arrives over 20 s. CPU is from
+`/proc` over the same 20 s; "of a core" sums all threads of the processes.
+
+| | MJPEG + JSON | FreeMoCap stream |
+| --- | --- | --- |
+| Viewer 2 receives | 30.1 JPEG/s (32 KiB), 19.6 JSON/s | 30.1 frames/s (29 KiB images), 18.9 `robot_state`/s |
+| Viewer 1 shows | not measurable (`<img>` MJPEG) | 30 fps drawn, camera at 30.1 fps |
+| Bot process, 1 / 2 viewers | 68% / 70% of a core | 73% / 75% of a core |
+| Chromium on the Pi, 1 / 2 viewers | 83% / 90% of a core | 107% / 109% of a core |
+| Whole Pi, 1 / 2 viewers | 41% / 43% of 4 cores | 48% / 49% of 4 cores |
+
+Delivery keeps camera rate, and extra viewers stay cheap because each frame is
+encoded once. The cost moved toward the browser: decoding JPEGs with
+`createImageBitmap`, drawing the overlay, and validating every frame message
+cost the Pi's Chromium about a fifth of a core more than native MJPEG, and the
+bot spends about 5% of a core more. Single samples; the scene and both viewers
+were held the same. With a person in view, the bot used 82-84% of a core while
+detections were drawn. Restarting the bot from a non-interactive shell also
+exposed that background jobs inherit an ignored SIGINT; `python -m ultraskelly`
+now restores Ctrl+C and maps SIGTERM to the same clean shutdown.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
