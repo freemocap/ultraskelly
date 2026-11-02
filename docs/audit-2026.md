@@ -357,9 +357,16 @@ single runs:
 | `systemctl stop` | clean shutdown, exit 0 |
 | Reboot | bot ready 16 s after boot; dashboard full screen with the live stream |
 
-The motors were not driven, so these runs do not show what the motors do when the bot
-dies: a motor board keeps its last output until told otherwise, and a hard kill skips
-the bot's own stop commands. That is part of the connection-recovery work.
+The motors were not driven in these runs. A motor board keeps its last output until
+told otherwise, and a crash or kill skips the bot's own stop commands, so the service
+now brakes the DC motors after every exit: `ExecStopPost` runs
+`scripts/stop-motors-after-bot.sh`, which runs `scripts/stop_motors.py` with a 10 s
+limit, unless the bot exited with status 75, never having started because another
+program held the robot lock. Checked with transient services on the Pi: the step ran
+after a SIGSEGV, a clean stop and a watchdog kill, was skipped after status 75, and a
+hung stand-in was cut off after 10 s. With the motor board unplugged, `stop_motors`
+gave up after ten attempts in 0.9 s, so a restart waits about a second longer. Not yet
+seen braking a running motor on the robot.
 
 `scripts/setup-pi.sh --check` reports 20 settings and 8 observations of the hardware,
 power, network and repository, changing nothing; without `--check` it puts missing
