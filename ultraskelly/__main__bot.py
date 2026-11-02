@@ -9,6 +9,7 @@ import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ async def main(*, simulate_motors: bool = False, show_window: bool = True) -> No
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
     config = LaunchConfig(
         detector_type=DetectorType.HAILO_POSE,
+        oak_camera=OakCameraNodeParams(flip_camera=True),  # The OAK's image arrives upside down
         hailo_pose_detector=HailoPoseDetectorParams(
             target_keypoint=CocoKeypoint.NOSE,
             detection_threshold=0.5,
