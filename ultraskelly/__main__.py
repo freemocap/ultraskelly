@@ -14,9 +14,13 @@ def main() -> None:
         "--simulate-motors", action="store_true",
         help="With --hardware: run the cameras but record motor commands instead of moving the motors.",
     )
+    parser.add_argument(
+        "--no-window", action="store_true",
+        help="With --hardware: skip the OpenCV camera window (the dashboard on port 8080 still runs).",
+    )
     args = parser.parse_args()
-    if args.simulate_motors and not args.hardware:
-        parser.error("--simulate-motors is used together with --hardware")
+    if (args.simulate_motors or args.no_window) and not args.hardware:
+        parser.error("--simulate-motors and --no-window are used together with --hardware")
     if not args.hardware:
         parser.print_help()
         return
@@ -25,7 +29,7 @@ def main() -> None:
     from ultraskelly.__main__bot import main as run_bot
 
     try:
-        asyncio.run(run_bot(simulate_motors=args.simulate_motors))
+        asyncio.run(run_bot(simulate_motors=args.simulate_motors, show_window=not args.no_window))
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Stopped by Ctrl+C")  # Nodes already shut down cleanly
 

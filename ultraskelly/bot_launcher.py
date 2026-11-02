@@ -58,6 +58,10 @@ class LaunchConfig(NodeParams):
         default=False,
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
     )
+    show_window: bool = Field(
+        default=True,
+        description="Show the OpenCV camera window; needs a desktop session. The dashboard works either way.",
+    )
 
 
 class BotLauncher(BaseModel):
@@ -93,7 +97,8 @@ class BotLauncher(BaseModel):
             mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
             record_hardware_commands(orientation=orientation, mouth=mouth, recorder=self.command_recorder)
             self.nodes.extend([orientation, mouth])
-        self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
+        if self.config.show_window:
+            self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
         # Create detector based on type
         if self.config.detector_type == DetectorType.BRIGHTNESS:

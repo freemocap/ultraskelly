@@ -13,11 +13,12 @@ from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams,
 logger = logging.getLogger(__name__)
 
 
-async def main(*, simulate_motors: bool = False) -> None:
+async def main(*, simulate_motors: bool = False, show_window: bool = True) -> None:
     """Launch with declarative config.
 
     Args:
         simulate_motors: Record motor commands instead of driving the motor boards.
+        show_window: Show the OpenCV camera window (needs a desktop session).
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
@@ -56,6 +57,7 @@ async def main(*, simulate_motors: bool = False) -> None:
     # )
 
     config.simulate_motors = simulate_motors
+    config.show_window = show_window
     launcher = BotLauncher.from_config(config)
     await launcher.run()
 
