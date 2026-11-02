@@ -65,6 +65,12 @@ in it, and `robot_state` messages with motor commands, target, rates and node he
 The browser decodes them with FreeMoCap's `@freemocap/client` and draws the overlay
 itself. `scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
 
+Add `--record` to save the run under `~/ultraskelly-recordings/run-<time>/`: the OAK video
+as it reached the bot, the poses found in each frame, targets, head state and every motor
+command, with times on one clock so they line up. `--microphone NAME` adds audio from the
+sound card whose name contains NAME (see `arecord -l`). `run.json` holds the configuration
+and counts any frames the disk could not keep up with.
+
 By default the robot tracks people with a Luxonis OAK USB camera and YOLOv8 pose
 on a Hailo-8 AI HAT+. The original IMX500 AI camera remains available as
 `DetectorType.POSE` in `ultraskelly/__main__bot.py`.

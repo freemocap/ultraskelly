@@ -23,9 +23,19 @@ def main() -> None:
         "--no-window", action="store_true",
         help="With --hardware: skip the OpenCV camera window (the dashboard on port 8080 still runs).",
     )
+    parser.add_argument(
+        "--record", action="store_true",
+        help="With --hardware: save the camera video, detections and motor commands under ~/ultraskelly-recordings/.",
+    )
+    parser.add_argument(
+        "--microphone", metavar="NAME",
+        help="With --record: also record audio from the sound card whose name contains NAME (see arecord -l).",
+    )
     args = parser.parse_args()
-    if (args.simulate_motors or args.no_window) and not args.hardware:
-        parser.error("--simulate-motors and --no-window are used together with --hardware")
+    if (args.simulate_motors or args.no_window or args.record) and not args.hardware:
+        parser.error("--simulate-motors, --no-window and --record are used together with --hardware")
+    if args.microphone and not args.record:
+        parser.error("--microphone is used together with --record")
     if not args.hardware:
         parser.print_help()
         return
@@ -38,7 +48,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
-        asyncio.run(run_bot(simulate_motors=args.simulate_motors, show_window=not args.no_window))
+        asyncio.run(run_bot(
+            simulate_motors=args.simulate_motors, show_window=not args.no_window,
+            record=args.record, microphone=args.microphone,
+        ))
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Stopped by Ctrl+C or SIGTERM")  # Nodes already shut down cleanly
 

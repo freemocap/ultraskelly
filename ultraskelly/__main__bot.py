@@ -8,18 +8,23 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
 logger = logging.getLogger(__name__)
 
 
-async def main(*, simulate_motors: bool = False, show_window: bool = True) -> None:
+async def main(
+    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+) -> None:
     """Launch with declarative config.
 
     Args:
         simulate_motors: Record motor commands instead of driving the motor boards.
         show_window: Show the OpenCV camera window (needs a desktop session).
+        record: Save the camera video, detections and motor commands to disk.
+        microphone: With `record`, also record audio from the sound card whose name contains this.
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
@@ -60,6 +65,7 @@ async def main(*, simulate_motors: bool = False, show_window: bool = True) -> No
 
     config.simulate_motors = simulate_motors
     config.show_window = show_window
+    config.recording = RunRecorderParams(microphone=microphone) if record else None
     launcher = BotLauncher.from_config(config)
     await launcher.run()
 

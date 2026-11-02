@@ -1,0 +1,170 @@
+import asyncio
+import csv
+import json
+import threading
+
+import numpy as np
+
+from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
+from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
+from ultraskelly.core.pubsub.bot_topics import (
+    FrameMessage,
+    FrameTopic,
+    PoseDataMessage,
+    PoseDataTopic,
+    ServoStateMessage,
+    ServoStateTopic,
+    TargetLocationMessage,
+    TargetLocationTopic,
+)
+from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+
+
+class FakeVideo:
+    """Keeps the frames a video writer was given."""
+
+    def __init__(self, path, size, fps, quality, gate=None):
+        self.path, self.size, self.frames, self.released, self.gate = path, size, [], False, gate
+
+    def write(self, frame):
+        if self.gate is not None:
+            self.gate.wait()  # A disk that has stalled
+        self.frames.append(frame.copy())
+
+    def release(self):
+        self.released = True
+
+
+def frame(number):
+    image = np.zeros((4, 6, 3), dtype=np.uint8)
+    image[..., 0] = number  # The red channel carries the frame number
+    return FrameMessage(frame=image, frame_number=number, timestamp=100.0 + number)
+
+
+def rows(path):
+    with open(path, newline="") as file:
+        return list(csv.DictReader(file))
+
+
+def make_recorder(bus, tmp_path, commands, videos, *, gate=None, queue_size=60):
+    def open_writer(*args):
+        videos.append(FakeVideo(*args, gate=gate))
+        return videos[-1]
+
+    return RunRecorderNode.create(
+        pubsub=bus,
+        params=RunRecorderParams(folder=tmp_path, queue_size=queue_size),
+        camera="oak",
+        frame_topic=FrameTopic,
+        commands=commands,
+        configuration={"note": "test run"},
+        open_writer=open_writer,
+    )
+
+
+def test_a_run_is_saved_with_its_frames_detections_and_commands(tmp_path):
+    videos = []
+
+    async def scenario():
+        bus, commands = PubSubTopicManager.create(), CommandRecorder()
+        commands.record("pan", 90.0)  # Sent before the run starts, like the head's starting angle
+        node = make_recorder(bus, tmp_path, commands, videos)
+        task = asyncio.create_task(node.run())
+        await asyncio.sleep(0.02)
+        for number in (5, 6, 8):  # Frame 7 never reaches the recorder
+            message = frame(number)
+            await bus.publish(FrameTopic, message)
+            await asyncio.sleep(0.02)
+            if number == 6:
+                await bus.publish(PoseDataTopic, PoseDataMessage(
+                    keypoints=np.ones((1, 17, 3)), scores=np.array([0.9]), boxes=[np.array([1, 2, 3, 4])], frame=message,
+                ))
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=3, y=2))
+                await bus.publish(ServoStateTopic, ServoStateMessage(
+                    pan_angle=95.0, tilt_angle=90.0, roll_angle=90.0,
+                    is_locked_x=True, is_locked_y=False, is_locked_roll=False,
+                ))
+                commands.record("waist", 0.7)
+                await asyncio.sleep(0.02)
+        node.stop()
+        await task
+        bus.close()
+        return node.folder
+
+    folder = asyncio.run(scenario())
+
+    [video] = videos
+    assert video.path == folder / "oak.avi" and video.size == (6, 4) and video.released
+    assert [int(image[0, 0, 2]) for image in video.frames] == [5, 6, 8]  # Written as BGR
+    assert int(video.frames[0][0, 0, 0]) == 0
+    assert [(r["index"], r["frame_number"], r["captured"]) for r in rows(folder / "oak_frames.csv")] == [
+        ("0", "5", "105.0"), ("1", "6", "106.0"), ("2", "8", "108.0"),
+    ]
+    [pose] = [json.loads(line) for line in (folder / "poses.jsonl").read_text().splitlines()]
+    assert (pose["frame_number"], pose["captured"], pose["people"][0]["score"]) == (6, 106.0, 0.9)
+    assert np.array(pose["people"][0]["keypoints"]).shape == (17, 3)
+    assert [(r["x"], r["y"]) for r in rows(folder / "targets.csv")] == [("3", "2")]
+    assert [(r["pan"], r["locked_x"]) for r in rows(folder / "servo_state.csv")] == [("95.0", "True")]
+    assert [(r["actuator"], r["value"]) for r in rows(folder / "commands.csv")] == [("pan", "90.0"), ("waist", "0.7")]
+    run = json.loads((folder / "run.json").read_text())
+    assert run["written"]["frame"] == 3 and run["dropped"] == {} and run["frames_missed"] == 1
+    assert run["configuration"] == {"note": "test run"} and run["camera"] == "oak"
+
+
+def test_a_stalled_disk_drops_frames_instead_of_slowing_the_bot(tmp_path):
+    videos, gate = [], threading.Event()
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = make_recorder(bus, tmp_path, None, videos, gate=gate, queue_size=2)
+        task = asyncio.create_task(node.run())
+        for number in range(10):
+            await asyncio.wait_for(bus.publish(FrameTopic, frame(number)), timeout=0.1)
+            await asyncio.sleep(0.01)
+        gate.set()  # The disk catches up
+        node.stop()
+        await task
+        bus.close()
+        return node
+
+    node = asyncio.run(scenario())
+
+    assert node.dropped["frame"] > 0
+    assert node.counts["frame"] + node.dropped["frame"] == 10
+    assert len(videos[0].frames) == node.counts["frame"]
+
+
+def test_a_failed_recording_never_stops_or_hangs_the_run(tmp_path):
+    def broken_writer(*args):
+        raise RuntimeError("no codec")
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = RunRecorderNode.create(
+            pubsub=bus, params=RunRecorderParams(folder=tmp_path, queue_size=2), camera="oak",
+            frame_topic=FrameTopic, commands=None, open_writer=broken_writer,
+        )
+        task = asyncio.create_task(node.run())
+        for number in range(10):
+            await bus.publish(FrameTopic, frame(number))
+            await asyncio.sleep(0.01)
+        node.stop()
+        await asyncio.wait_for(task, timeout=2)
+        bus.close()
+        return node
+
+    node = asyncio.run(scenario())
+
+    run = json.loads((node.folder / "run.json").read_text())
+    assert "no codec" in run["failure"] and run["dropped"]["frame"] > 0
+
+
+def test_command_listeners_hear_each_change_once():
+    commands, heard = CommandRecorder(), []
+    commands.listeners.append(heard.append)
+
+    commands.record("waist", 0.7)
+    commands.record("waist", 0.7)  # A repeat is not a change
+    commands.record("waist", None)
+
+    assert [(c.actuator, c.value) for c in heard] == [("waist", 0.7), ("waist", None)]

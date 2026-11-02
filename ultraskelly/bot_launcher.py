@@ -11,6 +11,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     create_simulated_motor_nodes,
     record_hardware_commands,
 )
+from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
@@ -66,6 +67,10 @@ class LaunchConfig(NodeParams):
     limits: ActuatorLimits = Field(
         default_factory=ActuatorLimits,
         description="Hard limits every servo angle and motor throttle is clamped to, simulated or real",
+    )
+    recording: RunRecorderParams | None = Field(
+        default=None,
+        description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
     )
 
 
@@ -155,6 +160,17 @@ class BotLauncher(BaseModel):
                 pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
             )
         )
+        if self.config.recording is not None:
+            self.nodes.append(
+                RunRecorderNode.create(
+                    pubsub=self.pubsub,
+                    params=self.config.recording,
+                    camera=camera_name,
+                    frame_topic=FrameTopic,
+                    commands=self.command_recorder,
+                    configuration=self.config.model_dump(mode="json"),
+                )
+            )
 
         logger.info(f"Created {len(self.nodes)} nodes")
 

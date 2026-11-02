@@ -41,6 +41,7 @@ class CommandRecorder:
         self.latest: dict[str, ActuatorCommand] = {}
         self.history: deque[ActuatorCommand] = deque(maxlen=history_size)
         self.change_count = 0
+        self.listeners: list[Callable[[ActuatorCommand], None]] = []  # Called with each change, such as a run recorder
 
     def record(self, actuator: str, value: float | None) -> None:
         """Store a command unless it repeats that actuator's previous command."""
@@ -51,6 +52,8 @@ class CommandRecorder:
         self.latest[actuator] = command
         self.history.append(command)
         self.change_count += 1
+        for listener in self.listeners:
+            listener(command)
 
 
 def _limit_angle(name: str, value: float | None, angle_range: tuple[float, float] | None) -> float | None:
