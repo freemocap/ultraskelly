@@ -43,6 +43,9 @@ ASSETS: dict[str, tuple[Path, str]] = {
         f"/vendor/{name}": (SHARED / "vendor" / name, "text/javascript")
         for name in ("three.module.js", "three.core.js", "OrbitControls.js")
     },
+    # @freemocap/client's browser bundle, vendored by scripts/update-freemocap-client.sh.
+    "/vendor/freemocap-client.js": (DASHBOARD / "vendor" / "freemocap-client.js", "text/javascript"),
+    "/vendor/freemocap-client.js.map": (DASHBOARD / "vendor" / "freemocap-client.js.map", "application/json"),
 }
 
 

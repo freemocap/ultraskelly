@@ -129,7 +129,8 @@ def test_dashboard_assets_are_served_locally_with_explicit_types():
         served = {}
         async with TestClient(TestServer(server.build_app())) as client:
             for path in ["/", "/dashboard.js", "/dashboard.css", "/style.css", "/skeleton.js",
-                         "/vendor/three.module.js", "/vendor/three.core.js", "/vendor/OrbitControls.js"]:
+                         "/vendor/three.module.js", "/vendor/three.core.js", "/vendor/OrbitControls.js",
+                         "/vendor/freemocap-client.js", "/vendor/freemocap-client.js.map"]:
                 response = await client.get(path)
                 served[path] = (response.status, response.content_type, len(await response.read()))
         bus.close()
@@ -140,6 +141,7 @@ def test_dashboard_assets_are_served_locally_with_explicit_types():
     assert all(status == 200 and size > 100 for status, _, size in served.values())
     assert served["/"][1] == "text/html"
     assert {served[path][1] for path in served if path.endswith(".js")} == {"text/javascript"}
+    assert served["/vendor/freemocap-client.js.map"][1] == "application/json"
 
 
 def test_websocket_streams_fresh_snapshots():
