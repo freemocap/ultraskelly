@@ -379,8 +379,11 @@ def main() -> None:
 
     try:
         servo_kit = ServoKit(channels=16)
-    except (ValueError, OSError) as error:
-        raise SystemExit(f"No head servo board ({error}); it must hold the head still while the camera measures the waist")
+    except Exception as error:  # A missing board raises ValueError; a disturbed I2C bus can raise TypeError or OSError
+        raise SystemExit(
+            f"No usable head servo board ({type(error).__name__}: {error}); it must hold the head still "
+            "while the camera measures the waist. No motor was driven."
+        )
     head = RecordingServoKit(
         kit=servo_kit,
         recorder=recorder,
