@@ -12,11 +12,13 @@ from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
+from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNodeParams
 logger = logging.getLogger(__name__)
 
 
 async def main(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    zed: bool = False, zed_only: bool = False, port: int = 8080,
 ) -> None:
     """Launch with declarative config.
 
@@ -25,6 +27,9 @@ async def main(
         show_window: Show the OpenCV camera window (needs a desktop session).
         record: Save the camera video, detections and motor commands to disk.
         microphone: With `record`, also record audio from the sound card whose name contains this.
+        zed: Also capture the ZED Mini stereo camera and stream its two eyes.
+        zed_only: Run only the ZED Mini and the dashboard, without tracking or motors.
+        port: The dashboard's port.
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
@@ -66,6 +71,9 @@ async def main(
     config.simulate_motors = simulate_motors
     config.show_window = show_window
     config.recording = RunRecorderParams(microphone=microphone) if record else None
+    config.zed_camera = ZedCameraNodeParams() if zed or zed_only else None
+    config.tracking = not zed_only
+    config.runtime_server.port = port
     launcher = BotLauncher.from_config(config)
     await launcher.run()
 

@@ -203,21 +203,29 @@ function drawFrame(image, overlays) {
   panel.drawn += 1;
 }
 
-// Decode newest-wins: while one frame decodes, only the newest arrival waits behind it.
-let decoding = false, waiting = null;
+// Decode newest-wins per source (the cameras in a payload, such as a stereo pair): while
+// a source's frame decodes, only its newest arrival waits, so no camera displaces another's.
+const sources = new Map();
 async function showFrames(frame) {
-  if (decoding) { waiting = frame; return; }
-  decoding = true;
+  let payload;
+  try { payload = readImagePayload(frame.buffer); }
+  catch (problem) { console.error('Could not read a camera frame', problem); return; }
+  const key = payload.images.map(image => image.cameraId).join(' ');
+  if (!sources.has(key)) sources.set(key, {decoding: false, waiting: null});
+  const source = sources.get(key), arrival = {payload, overlays: frame.overlays};
+  if (source.decoding) { source.waiting = arrival; return; }
+  source.decoding = true;
   try {
-    for (let next = frame; next; next = waiting, waiting = null) {
-      const images = await decodeImageBitmaps(readImagePayload(next.buffer));
+    for (let next = arrival; next; next = source.waiting, source.waiting = null) {
+      const images = await decodeImageBitmaps(next.payload);
       try { for (const image of images) drawFrame(image, next.overlays); }
       finally { for (const image of images) image.bitmap.close(); }
     }
   } catch (problem) {
+    source.waiting = null;
     console.error('Could not show a camera frame', problem);
   } finally {
-    decoding = false;
+    source.decoding = false;
   }
 }
 

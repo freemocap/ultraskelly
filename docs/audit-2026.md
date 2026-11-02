@@ -288,6 +288,53 @@ package restores the unpatched source, so run the script again then. After the
 fix: 18,000 soak inferences in 10 minutes and a bot run with the dashboard
 watching produced no warnings.
 
+## ZED Mini stereo capture (2026-11-02)
+
+The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK
+needs CUDA. `ZedCameraNode` finds its V4L2 capture node by the name the camera
+reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread, converts
+each eye to RGB and publishes both on `StereoFrameTopic`. Frame times are the kernel
+buffer timestamps, which uvcvideo takes on CLOCK_MONOTONIC: the clock of
+`time.monotonic()` and of the OAK's depthai timestamps. They mark the arrival of a
+frame's first USB packet, one transfer time (19 ms at VGA, 30 ms at HD720) before the
+frame can be read. Frame numbers count camera frame periods, so a dropped frame skips
+a number. The runtime server sends both eyes in one FreeMoCap frame message, as
+cameras `zed_left` and `zed_right`. `--zed` adds the camera to the bot; `--zed-only`
+runs only the ZED and the dashboard, so it needs no robot lock.
+
+Each mode measured for 4 s on the Pi with OpenCV 5.0: reading plus converting both eyes.
+
+| Mode, both eyes | Rate | CPU, of a core | YUYV to RGB |
+| --- | --- | --- | --- |
+| VGA 1344×376 @ 30 | 30.0 fps | 12% | 0.45 ms |
+| VGA @ 100 | 99.8 fps | 38% | 0.43 ms |
+| HD720 2560×720 @ 30 | 30.0 fps | 31% | 1.96 ms |
+| HD720 @ 60 | 60.0 fps | 66% | 1.93 ms |
+| HD1080 3840×1080 @ 30 | 29.9 fps | 70% | 4.6 ms |
+| HD2K 4416×1242 @ 15 | 15.1 fps | 45% | 6.2 ms |
+
+Frame spacing stayed within 0.2 ms of the period in every mode. The node defaults to
+VGA at 30 fps; depth quality may justify HD720.
+
+- **Orientation and view.** The image is upright, unlike the OAK's. The skull's nose
+  bridge is a fixed, out-of-focus occluder on the inner side of each eye: about the
+  right 30% of the left image, wider at the bottom, and the left 20% of the right
+  image. Only the centre of the view is seen by both eyes; depth must mask the rest.
+- **Damaged frames.** uvcvideo runs with `nodrop=1`, so frames with transfer errors
+  reach applications, and OpenCV does not report V4L2's error flag. In the first test
+  one frame of 1,061 had a band of zeroed rows across both eyes, while the OAK was
+  booting. None of 960 probe frames afterwards, nor any of 17,580 frames the node
+  captured in later runs, had one. The node drops frames whose sampled rows are mostly
+  zero bytes and counts them. If torn frames appear instead (stale data, not zeros),
+  `options uvcvideo nodrop=0` in `/etc/modprobe.d/` makes the driver drop them.
+
+With the bot (`--hardware --simulate-motors --no-window --zed`, OAK and pose at
+30 fps), a client on another computer over Wi-Fi received OAK frames and ZED pairs at
+29.1/s each (22 and 42 KiB per message) while a browser on that computer also
+watched. The bot process used 107% of a core, against about 70% without the ZED
+above, and the whole Pi 28% of four cores with no Chromium on the Pi. No throttling;
+52 °C. A ZED-only run streamed 7,141 frames in 4 minutes, none lost.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

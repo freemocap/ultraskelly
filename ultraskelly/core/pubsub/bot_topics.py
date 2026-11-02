@@ -16,6 +16,19 @@ class FrameMessage(TopicMessageABC):
     )
 
 
+class StereoFrameMessage(TopicMessageABC):
+    """A stereo camera's two images, captured together (the ZED Mini in the skull's eye sockets)."""
+    left: np.ndarray  # RGB (height, width, 3): the skeleton's left eye, on the camera's left looking out
+    right: np.ndarray  # RGB, the same size: the skeleton's right eye
+    frame_number: int | None = None  # Counts camera frame periods, so a dropped frame skips a number
+    timestamp: float | None = None  # Capture time in seconds on time.monotonic()'s clock, when known
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
 class TargetLocationMessage(TopicMessageABC):
     """Generic target location with orientation."""
     x: int | None = None
@@ -53,6 +66,7 @@ class PoseDataMessage(TopicMessageABC):
 
 # Create topics using the factory - they auto-register
 FrameTopic = create_topic(FrameMessage)
+StereoFrameTopic = create_topic(StereoFrameMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)
 PoseDataTopic = create_topic(PoseDataMessage)

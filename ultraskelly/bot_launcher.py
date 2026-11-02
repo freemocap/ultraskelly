@@ -29,9 +29,11 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
 )
+from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
-from ultraskelly.core.pubsub.bot_topics import FrameTopic
+from ultraskelly.core.pubsub.bot_topics import FrameTopic, StereoFrameTopic
+from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
 )
@@ -72,6 +74,14 @@ class LaunchConfig(NodeParams):
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
     )
+    zed_camera: ZedCameraNodeParams | None = Field(
+        default=None,
+        description="Also capture the ZED Mini stereo camera and stream its two eyes; None runs without it",
+    )
+    tracking: bool = Field(
+        default=True,
+        description="Run the tracking camera, detector and motors; False runs only the ZED and the dashboard",
+    )
 
 
 class BotLauncher(BaseModel):
@@ -87,6 +97,9 @@ class BotLauncher(BaseModel):
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
         self.nodes.clear()
+        if not self.config.tracking:
+            self._create_zed_only_nodes()
+            return
 
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
@@ -141,6 +154,7 @@ class BotLauncher(BaseModel):
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
+        stereo_cameras = self._create_stereo_nodes()
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
         orientation = self.config.orientation
         self.nodes.append(
@@ -148,6 +162,7 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub,
                 params=self.config.runtime_server,
                 cameras={camera_name: FrameTopic},
+                stereo_cameras=stereo_cameras,
                 recorder=self.command_recorder,
                 motors_simulated=self.config.simulate_motors,
                 node_status=self.node_status,
@@ -173,6 +188,30 @@ class BotLauncher(BaseModel):
             )
 
         logger.info(f"Created {len(self.nodes)} nodes")
+
+    def _create_stereo_nodes(self) -> dict[str, type[PubSubTopicABC]]:
+        """The ZED Mini's node, when configured; returns the stereo cameras for the dashboard."""
+        if self.config.zed_camera is None:
+            return {}
+        self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=self.config.zed_camera))
+        return {"zed": StereoFrameTopic}
+
+    def _create_zed_only_nodes(self) -> None:
+        """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed."""
+        self.command_recorder = None
+        stereo_cameras = self._create_stereo_nodes()
+        self.nodes.append(
+            RuntimeServerNode.create(
+                pubsub=self.pubsub,
+                params=self.config.runtime_server,
+                cameras={},
+                stereo_cameras=stereo_cameras,
+                recorder=None,
+                motors_simulated=True,
+                node_status=self.node_status,
+            )
+        )
+        logger.info(f"Created {len(self.nodes)} nodes without tracking or motors")
 
     def node_status(self) -> list[dict]:
         """Each node's name and state: starting, running, stopped, or crashed with its error."""

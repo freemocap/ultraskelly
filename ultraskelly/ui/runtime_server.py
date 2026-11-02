@@ -2,7 +2,8 @@
 
 `/stream` is one WebSocket of self-describing CBOR messages (freemocap-stream).
 FreeMoCap `frame` messages carry each camera's JPEG with the poses detected in that
-very image; `robot_state` messages carry the bot's snapshot. The browser decodes them
+very image (a stereo camera's two images travel together in one message);
+`robot_state` messages carry the bot's snapshot. The browser decodes them
 with @freemocap/client and draws the poses and guides itself. The stream is read-only
 and newest-wins: a slow browser receives fewer, newer messages and never blocks the
 bot's event loop. Motor values are the commands sent, not measured positions.
@@ -39,6 +40,7 @@ from ultraskelly.core.pubsub.bot_topics import (
     PoseDataTopic,
     ServoStateMessage,
     ServoStateTopic,
+    StereoFrameMessage,
     TargetLocationMessage,
     TargetLocationTopic,
 )
@@ -98,10 +100,15 @@ BODY = connection_group(
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
 
 
+def camera_images(message: FrameMessage | StereoFrameMessage) -> list[np.ndarray]:
+    """The images a camera message carries: one, or a stereo pair's left then right."""
+    if isinstance(message, StereoFrameMessage):
+        return [message.left, message.right]
+    return [message.frame]
+
+
 def encode_camera_frame(
-    camera: str,
-    index: int,
-    image: np.ndarray,
+    cameras: list[tuple[str, int, np.ndarray]],
     *,
     frame_number: int,
     timestamp: float,
@@ -109,8 +116,10 @@ def encode_camera_frame(
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
 ) -> bytes:
-    """One FreeMoCap frame message: this camera's JPEG and each person's keypoints, in
-    pixels of that image. Pure CPU work, safe to run in a worker thread."""
+    """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
+    together, and each person's keypoints in pixels of the first image. Pure CPU work,
+    safe to run in a worker thread."""
+    camera, _, image = cameras[0]
     height, width = image.shape[:2]
     trackers = [
         tracker_observation(
@@ -121,13 +130,17 @@ def encode_camera_frame(
         )
         for person in (poses if poses is not None else ())
     ]
-    jpeg = encode_jpeg(image, jpeg_quality)
+    images = [
+        PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
+        for camera, index, image in cameras
+    ]
     return encode_frame_message(
         frame_number=frame_number,
         timestamp=timestamp,
-        cameras=[uncalibrated_camera(camera, index, (width, height))],
+        cameras=[uncalibrated_camera(image.camera_id, image.camera_index, (image.width, image.height))
+                 for image in images],
         trackers=trackers,
-        image=encode_image_payload(frame_number, [PayloadImage(camera, index, width, height, jpeg)]),
+        image=encode_image_payload(frame_number, images),
     )
 
 
@@ -141,11 +154,13 @@ class TrackingOverlay:
 
 @dataclass
 class CameraFeed:
-    """One camera topic: its frame statistics and its stream of encoded frame messages."""
+    """One camera topic: its frame statistics and its stream of encoded frame messages.
+    A stereo camera's frame messages carry both of its images."""
 
     subscription: TopicSubscriptionQueue
     name: str = "camera"
-    index: int = 0
+    index: int = 0  # The first image's camera index; a stereo pair's right image has the next
+    views: tuple[str, ...] = ("camera",)  # Camera IDs in image order: the name, or <name>_left and <name>_right
     overlay: TrackingOverlay | None = None
     frames_seen: int = 0
     fps: float = 0.0
@@ -153,7 +168,7 @@ class CameraFeed:
     shape: tuple[int, ...] | None = None
     stream: Latest = field(default_factory=Latest)
     # The newest frame (with the poses found in it) waiting to be encoded, newest-wins.
-    pending: tuple[FrameMessage, np.ndarray | None] | None = None
+    pending: tuple[FrameMessage | StereoFrameMessage, np.ndarray | None] | None = None
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
@@ -200,11 +215,13 @@ class RuntimeServerNode(Node):
         overlays: dict[str, TrackingOverlay] | None = None,
         pose_camera: str | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
+        stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
-        `pose_camera`'s frames travel with the poses detected in them.
+        `pose_camera`'s frames travel with the poses detected in them. A stereo camera's two
+        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`.
         """
         node = cls(
             pubsub=pubsub,
@@ -216,12 +233,15 @@ class RuntimeServerNode(Node):
             pose_camera=pose_camera,
         )
         overlays = overlays or {}
-        node.feeds = {
-            name: CameraFeed(
-                subscription=pubsub.get_subscription(topic), name=name, index=index, overlay=overlays.get(name)
+        feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
+        feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
+        index = 0
+        for name, topic, views in feeds:
+            node.feeds[name] = CameraFeed(
+                subscription=pubsub.get_subscription(topic), name=name, index=index, views=views,
+                overlay=overlays.get(name),
             )
-            for index, (name, topic) in enumerate(cameras.items())
-        }
+            index += len(views)
         node.subscriptions = {
             "servo_state": pubsub.get_subscription(ServoStateTopic),
             "target": pubsub.get_subscription(TargetLocationTopic),
@@ -253,13 +273,14 @@ class RuntimeServerNode(Node):
             "servo_state": None,
             "target": None,
             "cameras": {
-                name: {
+                camera: {
                     "fps": round(feed.fps, 1),
                     "age": None if feed.last_frame_at is None else now - feed.last_frame_at,
                     "width": feed.shape[1] if feed.shape else None,
                     "height": feed.shape[0] if feed.shape else None,
                 }
-                for name, feed in self.feeds.items()
+                for feed in self.feeds.values()
+                for camera in feed.views
             },
             "overlays": {
                 name: {"aim": list(feed.overlay.aim), "jaw_zone": feed.overlay.jaw_zone}
@@ -321,8 +342,12 @@ class RuntimeServerNode(Node):
             while feed.pending is not None and self.clients > 0:
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
+                cameras = [
+                    (camera, feed.index + offset, image)
+                    for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
+                ]
                 message = await asyncio.to_thread(
-                    encode_camera_frame, feed.name, feed.index, camera_frame.frame,
+                    encode_camera_frame, cameras,
                     frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
                     timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                     poses=poses, encode_jpeg=self.encode_jpeg, jpeg_quality=self.params.jpeg_quality,
@@ -355,7 +380,7 @@ class RuntimeServerNode(Node):
                     camera_frame = feed.subscription.get_nowait()
                     if feed.last_frame_at is not None and now > feed.last_frame_at:
                         feed.fps += 0.1 * (1 / (now - feed.last_frame_at) - feed.fps)
-                    feed.last_frame_at, feed.shape = now, camera_frame.frame.shape
+                    feed.last_frame_at, feed.shape = now, camera_images(camera_frame)[0].shape
                     feed.frames_seen += 1
                     # A posed camera's frames come with their poses, unless the detector has stalled.
                     poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS

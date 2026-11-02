@@ -14,6 +14,8 @@ from ultraskelly.core.pubsub.bot_topics import (
     PoseDataTopic,
     ServoStateMessage,
     ServoStateTopic,
+    StereoFrameMessage,
+    StereoFrameTopic,
     TargetLocationMessage,
     TargetLocationTopic,
 )
@@ -172,6 +174,48 @@ def test_stream_sends_each_frame_with_its_own_poses_and_the_robot_state():
     assert state["overlays"]["oak"] == {"aim": [320, 240], "jaw_zone": 100}
     assert state["motors"]["commands"]["pan"]["value"] == 100.0
     assert pong == "pong"
+
+
+def read_payload_images(payload: bytes) -> list[tuple[str, int, int, int, bytes]]:
+    """Each camera's ID, index, width, height and JPEG, read straight from SkellyCam's layout."""
+    count = struct.unpack_from("<i", payload, 16)[0]
+    images, offset = [], 24
+    for _ in range(count):
+        camera_id = payload[offset + 16:offset + 32].rstrip(b"\0").decode()
+        index, width, height, _, length = struct.unpack_from("<iiiii", payload, offset + 32)
+        images.append((camera_id, index, width, height, payload[offset + 56:offset + 56 + length]))
+        offset += 56 + length
+    return images
+
+
+def test_a_stereo_pair_travels_as_one_frame_with_both_cameras():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[], stereo_cameras={"zed": StereoFrameTopic})
+        pump = asyncio.create_task(server.pump())
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            left, right = np.full((376, 672, 3), 3, np.uint8), np.full((376, 672, 3), 4, np.uint8)
+            await bus.publish(StereoFrameTopic, StereoFrameMessage(left=left, right=right, frame_number=8, timestamp=2.5))
+            received = await receive_stream(socket, lambda got: got["frame"] and any(
+                state["cameras"]["zed_left"]["width"] for state in got["robot_state"]))
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return received
+
+    received = asyncio.run(scenario())
+
+    pair = received["frame"][0]
+    assert (pair["frame_number"], pair["timestamp"], pair["trackers"]) == (8, 2.5, [])
+    assert [(camera["id"], camera["index"], camera["image_size"]) for camera in pair["cameras"]] == [
+        ("zed_left", 1, [672, 376]), ("zed_right", 2, [672, 376])]  # After the OAK's index 0
+    assert read_payload_images(pair["image"]) == [
+        ("zed_left", 1, 672, 376, b"JPEG3"), ("zed_right", 2, 672, 376, b"JPEG4")]
+    cameras = received["robot_state"][-1]["cameras"]
+    assert set(cameras) == {"oak", "zed_left", "zed_right"}
+    assert (cameras["zed_left"]["width"], cameras["zed_right"]["height"]) == (672, 376)
 
 
 def test_stream_keeps_video_flowing_without_poses():
