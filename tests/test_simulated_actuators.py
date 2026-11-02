@@ -1,6 +1,9 @@
 import asyncio
+import errno
 import subprocess
 import sys
+
+import pytest
 
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNode, OrientationNodeParams
@@ -12,6 +15,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     SimulatedServoKit,
     create_simulated_motor_nodes,
     record_hardware_commands,
+    stop_board_motors,
 )
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationMessage, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
@@ -176,3 +180,53 @@ create_simulated_motor_nodes(
 assert not any(name.startswith(('adafruit_', 'board', 'busio')) for name in sys.modules)
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=10)
+
+
+class FlakyBoardMotor(BoardMotor):
+    """A motor channel whose first `failures` writes fail like a disturbed I2C bus."""
+
+    def __init__(self, failures):
+        super().__init__()
+        self.failures = failures
+
+    @BoardMotor.throttle.setter
+    def throttle(self, value):
+        if self.failures:
+            self.failures -= 1
+            raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+        self.written.append(value)
+
+
+def test_motor_writes_are_retried_and_stops_hardest(monkeypatch):
+    monkeypatch.setattr("ultraskelly.core.bot.motor.simulated_actuators.time.sleep", lambda seconds: None)
+    recorder = CommandRecorder()
+    board = FlakyBoardMotor(failures=2)
+    motor = RecordingMotor(motor=board, name="waist", recorder=recorder)
+    motor.throttle = 0.5
+    assert board.written == [0.5] and motor.failed_writes == 2
+
+    board.failures = 5  # More than a drive command retries, fewer than a stop does
+    with pytest.raises(OSError):
+        motor.throttle = 0.6
+    assert motor.throttle == recorder.latest["waist"].value == 0.5  # A failed command is not recorded
+    motor.throttle = 0.0
+    assert board.written == [0.5, 0.0] and recorder.latest["waist"].value == 0.0
+
+
+def test_unchanged_throttle_is_only_resent_to_refresh_the_board():
+    now = [0.0]
+    board = BoardMotor()
+    motor = RecordingMotor(motor=board, name="waist", recorder=CommandRecorder(), clock=lambda: now[0])
+    for tick in range(100):  # One second of a 100 Hz controller holding one throttle
+        now[0] = tick * 0.01
+        motor.throttle = 0.7
+    motor.throttle = 0.65
+    assert board.written == [0.7, 0.7, 0.65]
+
+
+def test_stopping_all_motors_tries_each_before_raising(monkeypatch):
+    monkeypatch.setattr("ultraskelly.core.bot.motor.simulated_actuators.time.sleep", lambda seconds: None)
+    dead, healthy = FlakyBoardMotor(failures=100), BoardMotor()
+    with pytest.raises(OSError):
+        stop_board_motors({"motor1": dead, "motor2": healthy})
+    assert healthy.written == [0.0]

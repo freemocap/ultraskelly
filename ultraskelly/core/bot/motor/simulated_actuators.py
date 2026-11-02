@@ -6,6 +6,8 @@ wrappers sit in front of the real boards instead. Both clamp every command to th
 actuator limits before it is forwarded or recorded. Recorded values are commands,
 not measured or simulated joint positions.
 """
+import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -17,7 +19,13 @@ from ultraskelly.core.bot.motor.orientation_node import OrientationNode, Orienta
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_HISTORY_SIZE = 10_000
+WRITE_ATTEMPTS = 3  # A disturbed I2C bus fails some writes (EAGAIN after lost arbitration); try again
+STOP_ATTEMPTS = 10  # Stopping a motor matters most
+RETRY_PAUSE = 0.002  # Seconds between attempts
+REFRESH_INTERVAL = 0.5  # Seconds; an unchanged throttle is sent again this often, in case the board lost it
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,27 @@ def _limit_angle(name: str, value: float | None, angle_range: tuple[float, float
 
 def _limit_throttle(name: str, value: float | None, max_throttle: float | None) -> float | None:
     return value if max_throttle is None else clamp(name, value, -max_throttle, max_throttle)
+
+
+class _BoardWriter:
+    """Retries a board write that fails with an I2C error; re-raises after the last attempt."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.failures = 0  # Failed writes so far, including ones a retry recovered
+
+    def write(self, target: object, attribute: str, value: float | None, attempts: int) -> None:
+        for attempt in range(1, attempts + 1):
+            try:
+                setattr(target, attribute, value)
+                return
+            except OSError as error:
+                self.failures += 1
+                if attempt == attempts:
+                    raise
+                if self.failures == 1 or self.failures % 100 == 0:
+                    logger.warning(f"{self.name} write failed ({error}); retrying. {self.failures} failed writes so far")
+                time.sleep(RETRY_PAUSE)
 
 
 class SimulatedServo:
@@ -125,10 +154,24 @@ class SimulatedMotor:
         self.recorder.record(self.name, value)
 
 
+def stop_board_motors(motors: dict[str, object]) -> None:
+    """Brake every motor, retrying I2C errors; after trying them all, raise the first error, if any."""
+    errors = []
+    for name, motor in motors.items():
+        try:
+            _BoardWriter(name).write(motor, "throttle", 0.0, STOP_ATTEMPTS)
+        except OSError as error:
+            logger.error(f"Could not stop {name}: {error}")
+            errors.append(error)
+    if errors:
+        raise errors[0]
+
+
 class RecordingServo:
     """Wraps one hardware servo channel: clamps each commanded angle, forwards it, then records it.
 
-    Reading `angle` returns the last command without querying the board over I2C.
+    Reading `angle` returns the last command without querying the board over I2C. A write
+    that fails with an I2C error is retried before the error is raised.
     """
 
     def __init__(
@@ -144,6 +187,7 @@ class RecordingServo:
         self.recorder = recorder
         self.angle_range = angle_range
         self._commanded: float | None = None
+        self._writer = _BoardWriter(name)
 
     @property
     def angle(self) -> float | None:
@@ -152,7 +196,7 @@ class RecordingServo:
     @angle.setter
     def angle(self, value: float | None) -> None:
         value = _limit_angle(self.name, value, self.angle_range)
-        self._servo.angle = value
+        self._writer.write(self._servo, "angle", value, WRITE_ATTEMPTS)
         self._commanded = value
         self.recorder.record(self.name, value)
 
@@ -198,26 +242,48 @@ class RecordingServoKit:
 class RecordingMotor:
     """Wraps a hardware DC motor: clamps each commanded throttle, forwards it, then records it.
 
-    Reading `throttle` returns the last command without querying the board over I2C.
+    Reading `throttle` returns the last command without querying the board over I2C. The
+    controllers command their motors 100 times a second; an unchanged throttle is sent
+    again only every REFRESH_INTERVAL, which keeps that traffic off the I2C bus and the
+    event loop. A write that fails with an I2C error is retried, a stop (brake or release)
+    hardest, before the error is raised.
     """
 
     def __init__(
-        self, *, motor: object, name: str, recorder: CommandRecorder, max_throttle: float | None = None,
+        self,
+        *,
+        motor: object,
+        name: str,
+        recorder: CommandRecorder,
+        max_throttle: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._motor = motor
         self.name = name
         self.recorder = recorder
         self.max_throttle = max_throttle
+        self.clock = clock
         self._commanded: float | None = None
+        self._sent_at = -math.inf
+        self._writer = _BoardWriter(name)
 
     @property
     def throttle(self) -> float | None:
         return self._commanded
 
+    @property
+    def failed_writes(self) -> int:
+        return self._writer.failures
+
     @throttle.setter
     def throttle(self, value: float | None) -> None:
         value = _limit_throttle(self.name, value, self.max_throttle)
-        self._motor.throttle = value
+        now = self.clock()
+        if value == self._commanded and now - self._sent_at < REFRESH_INTERVAL:
+            return  # The board already has it
+        stopping = value is None or value == 0.0
+        self._writer.write(self._motor, "throttle", value, STOP_ATTEMPTS if stopping else WRITE_ATTEMPTS)
+        self._sent_at = now
         self._commanded = value
         self.recorder.record(self.name, value)
 

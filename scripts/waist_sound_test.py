@@ -41,6 +41,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     CommandRecorder,
     RecordingMotor,
     RecordingServoKit,
+    stop_board_motors,
 )
 from ultraskelly.core.bot.recording.microphone import RATE as AUDIO_RATE, Microphone, find_microphone
 
@@ -430,8 +431,7 @@ def main() -> None:
         raw_waist.decay_mode = dc_motor.FAST_DECAY
         return_waist(waist, camera, began, args.offset)
     finally:
-        for motor in motors.values():
-            motor.throttle = 0.0
+        stop_board_motors({f"motor{number}": motor for number, motor in motors.items()})
         raw_waist.decay_mode = dc_motor.FAST_DECAY
         kit._pca.frequency = 1600
         print("All DC motors stopped", flush=True)
