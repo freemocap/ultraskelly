@@ -1,13 +1,13 @@
 import asyncio
 import logging
 import time
-from enum import Enum
 from typing import Callable
 
 import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistState
 from ultraskelly.core.pubsub.bot_topics import (
     ServoStateMessage,
     ServoStateTopic,
@@ -18,13 +18,6 @@ from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
-
-
-class WaistControlMode(Enum):
-    """Waist motor control modes."""
-    IDLE = "idle"  # Not moving
-    CENTERING = "centering"  # Trying to center the head
-    ASSISTING = "assisting"  # Helping head reach target
 
 
 class OrientationNodeParams(NodeParams):
@@ -50,55 +43,8 @@ class OrientationNodeParams(NodeParams):
     target_timeout: float = Field(default=0.35, gt=0)
     
     # Waist motor control
-    waist_min_throttle: float = Field(
-        default=0.7,
-        ge=0.5,
-        le=1.0,
-        description="Minimum throttle to overcome static friction"
-    )
-    waist_max_throttle: float = Field(
-        default=0.8,
-        ge=0.7,
-        le=1.0,
-        description="Maximum waist motor throttle"
-    )
-    waist_gain: float = Field(
-        default=0.008,
-        gt=0.0,
-        le=0.05,
-        description="Waist motor proportional gain"
-    )
-    
-    # Pan angle thresholds for waist engagement
-    pan_center_zone: float = Field(
-        default=15.0,
-        ge=5.0,
-        le=30.0,
-        description="Pan angle from center (90°) within which waist doesn't need to center"
-    )
-    pan_assist_threshold: float = Field(
-        default=45.0,
-        ge=30.0,
-        le=60.0,
-        description="Pan angle from center beyond which waist assists"
-    )
-    pan_limit_threshold: float = Field(
-        default=60.0,
-        ge=45.0,
-        le=80.0,
-        description="Pan angle from center where waist must help (near servo limits)"
-    )
-    
-    # Safety and timing
-    waist_max_active_duration: float = Field(
-        default=0.5,
-        gt=0.0,
-        description="Maximum seconds to keep waist motor running continuously"
-    )
-    waist_cooldown_duration: float = Field(
-        default=.4,
-        gt=0.0,
-        description="Seconds to wait after waist timeout before reactivating"
+    waist: WaistDriveParams = Field(
+        default_factory=WaistDriveParams, description="How the waist turns the torso toward the head's gaze"
     )
     
     @property
@@ -130,15 +76,18 @@ class OrientationNode(Node):
     tilt_angle: float = Field(default=90.0)
     
     # Waist motor state
-    waist_mode: WaistControlMode = Field(default=WaistControlMode.IDLE)
-    waist_motor_start_time: float | None = Field(default=None)
-    waist_cooldown_end_time: float | None = Field(default=None)
+    waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
+    waist_mode: WaistState = Field(default=WaistState.IDLE)
     
     # Target tracking state
     latest_target: TargetLocationMessage | None = Field(default=None, exclude=True)
     target_received_at: float | None = Field(default=None)
     last_target_x: int | None = Field(default=None)
     last_target_y: int | None = Field(default=None)
+
+    def model_post_init(self, context: object) -> None:
+        if self.waist_drive is None:
+            self.waist_drive = WaistDrive(self.params.waist)
     
     @classmethod
     def create(
@@ -216,144 +165,6 @@ class OrientationNode(Node):
         
         return is_locked_x, is_locked_y
     
-    def _is_waist_in_cooldown(self) -> bool:
-        """Check if waist motor is in cooldown period."""
-        if self.waist_cooldown_end_time is None:
-            return False
-        
-        current_time = self.clock()
-        if current_time < self.waist_cooldown_end_time:
-            return True
-        
-        # Cooldown expired
-        self.waist_cooldown_end_time = None
-        return False
-    
-    def _check_waist_timeout(self) -> bool:
-        """Check if waist motor has timed out."""
-        if self.waist_motor_start_time is None:
-            return False
-        
-        elapsed = self.clock() - self.waist_motor_start_time
-        if elapsed > self.params.waist_max_active_duration:
-            logger.warning(
-                f"Waist motor timeout after {elapsed:.1f}s, "
-                f"entering cooldown for {self.params.waist_cooldown_duration}s"
-            )
-            # Enter cooldown
-            self.waist_cooldown_end_time = self.clock() + self.params.waist_cooldown_duration
-            self.waist_motor_start_time = None
-            self.waist_mode = WaistControlMode.IDLE
-            return True
-        
-        return False
-    
-    def _determine_waist_mode(
-        self,
-        *,
-        is_locked_x: bool
-    ) -> WaistControlMode:
-        """
-        Determine what mode the waist should be in based on head position and target lock.
-        """
-        pan_offset = abs(self.pan_angle - 90.0)
-        
-        # If head is locked on target in X
-        if is_locked_x:
-            # If pan is far from center, try to center it
-            if pan_offset > self.params.pan_center_zone:
-                return WaistControlMode.CENTERING
-            else:
-                return WaistControlMode.IDLE
-        
-        # Head is not locked on target
-        else:
-            # If pan is near limits, waist must help
-            if pan_offset > self.params.pan_limit_threshold:
-                return WaistControlMode.ASSISTING
-            # If pan is getting far from center, waist should help
-            elif pan_offset > self.params.pan_assist_threshold:
-                return WaistControlMode.ASSISTING
-            else:
-                return WaistControlMode.IDLE
-    
-    def _calculate_waist_throttle(
-        self,
-        *,
-        mode: WaistControlMode,
-        target_x: int | None
-    ) -> float:
-        """
-        Calculate waist motor throttle based on mode and head position.
-        """
-        # Check cooldown first
-        if self._is_waist_in_cooldown():
-            return 0.0
-        
-        # Check timeout
-        if self._check_waist_timeout():
-            return 0.0
-        
-        # No movement in idle mode
-        if mode == WaistControlMode.IDLE:
-            self.waist_motor_start_time = None
-            return 0.0
-        
-        # Track motor start time
-        if self.waist_motor_start_time is None:
-            self.waist_motor_start_time = self.clock()
-            logger.debug(f"Waist motor starting in {mode.value} mode")
-        
-        # Calculate base throttle based on mode
-        if mode == WaistControlMode.CENTERING:
-            # Try to center the head at 90°
-            pan_offset = self.pan_angle - 90.0
-            
-            # Small deadzone to prevent oscillation when centered
-            if abs(pan_offset) <= self.params.pan_center_zone:
-                self.waist_motor_start_time = None
-                return 0.0
-            
-            # Proportional control to center
-            raw_throttle = abs(pan_offset) * self.params.waist_gain
-            
-        elif mode == WaistControlMode.ASSISTING:
-            # Help head reach target
-            if target_x is None:
-                return 0.0
-            
-            # Use both pan offset and target error for aggressive assistance
-            pan_offset = self.pan_angle - 90.0
-            target_error = target_x - self.params.target_x - self.params.x_offset
-            
-            # Combine signals: pan offset tells us which way we're leaning,
-            # target error tells us which way we need to go
-            if np.sign(pan_offset) == np.sign(target_error):
-                # Head and target are in same direction, use stronger signal
-                raw_throttle = max(abs(pan_offset) * self.params.waist_gain * 1.5,
-                                 abs(target_error) * 0.001)
-            else:
-                # Conflicting signals, be conservative
-                raw_throttle = abs(pan_offset) * self.params.waist_gain * 0.5
-            
-            # Determine direction from pan offset
-            pan_offset = np.sign(pan_offset) * raw_throttle
-            
-        else:
-            return 0.0
-        
-        # Scale throttle to min-max range
-        throttle_range = self.params.waist_max_throttle - self.params.waist_min_throttle
-        scaled_throttle = self.params.waist_min_throttle + (raw_throttle * throttle_range)
-        scaled_throttle = min(scaled_throttle, self.params.waist_max_throttle)
-        
-        # Turn the torso toward the head's gaze in both modes. The camera
-        # loop then counter-rotates the head toward neutral as the waist turns.
-        # Preserve the existing motor polarity: negative drive increases yaw.
-        final_throttle = -scaled_throttle if pan_offset > 0 else scaled_throttle
-
-        return float(final_throttle)
-    
     async def step(self) -> None:
         """Center on new samples; hold lock between samples until a freshness timeout."""
         fresh = False
@@ -372,14 +183,13 @@ class OrientationNode(Node):
             else:
                 locked_x = abs(msg.x - self.params.target_x - self.params.x_offset) <= self.params.head_deadzone
                 locked_y = abs(msg.y - self.params.target_y - self.params.y_offset) <= self.params.head_deadzone
-            mode = self._determine_waist_mode(is_locked_x=locked_x)
-            self.waist_motor.throttle = self._calculate_waist_throttle(mode=mode, target_x=msg.x)
-            self.waist_mode = mode if self.waist_motor.throttle else WaistControlMode.IDLE
             self.last_target_x, self.last_target_y = msg.x, msg.y
-        else:
-            self.waist_motor.throttle = 0.0
-            self.waist_mode = WaistControlMode.IDLE
-            self.waist_motor_start_time = None
+        # Turn the torso toward the head's gaze. The camera loop then counter-rotates the
+        # head toward neutral as the waist turns; without a target the waist ramps to a stop.
+        self.waist_motor.throttle = self.waist_drive.update(
+            now=self.clock(), pan_offset=self.pan_angle - 90.0 if valid else None,
+        )
+        self.waist_mode = self.waist_drive.state
         # Publish explicit loss as well as valid lock state so the jaw can release.
         await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
             pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=90.0,
@@ -388,10 +198,11 @@ class OrientationNode(Node):
 
     async def run(self) -> None:
         """Main control loop."""
+        waist = self.params.waist
         logger.info(
             f"Starting OrientationNode [head_gain={self.params.head_gain}, "
-            f"waist_gain={self.params.waist_gain}, "
-            f"waist_throttle={self.params.waist_min_throttle:.1f}-{self.params.waist_max_throttle:.1f}]"
+            f"waist {waist.min_throttle:.2f}-{waist.max_throttle:.2f} from {waist.start_throttle:.2f}, "
+            f"ramps +{waist.ramp_up:.1f}/-{waist.ramp_down:.1f} per s]"
         )
         
         try:
