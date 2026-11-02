@@ -343,6 +343,19 @@ preflight, which the server does not answer. Verified with unit and endpoint tes
 the browser against `python -m ultraskelly.replay --serve`; not yet run on the robot's
 motors.
 
+**Run recording check.** With the motor boards disconnected for the rebuild, a 67-second
+run of `--hardware --simulate-motors --no-window --record --microphone "Yeti X"` (commit
+e26b349) stopped cleanly on SIGTERM and kept 1953 frames at 30.0 fps. None were dropped,
+no frame numbers were missing, and the longest gap was one frame. Frames reached the
+recorder 35 ms after capture (median; 43 ms at most). Every frame decoded with OpenCV on the
+Pi and again on the Windows PC. The Yeti X audio (48 kHz mono) starts 18 ms after the run
+and lasts 65.1 s: the stop signal reaches `arecord` too, so the last 1.7 s of shutdown are
+silent. `run.json`, poses and targets for every frame, servo state, and the command log
+were complete. Four dashboard motor tests sent during the run all ended "done" and appear in
+`commands.csv` at their times; a fifth, over the waist limit, was refused with HTTP 400.
+The OAK lay facing a keyboard, so nobody was tracked: a tracking run with a person in view
+remains to be recorded once the head is back on.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
