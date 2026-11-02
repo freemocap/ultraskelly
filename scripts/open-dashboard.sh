@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Open the UltraSkelly dashboard full-screen on the Pi's monitor.
 #
-# Waits until the bot's runtime server answers, then starts Chromium in kiosk
-# mode on the desktop session's Wayland display. Works from the desktop or over
-# SSH; run it in the background (or from a service) to keep it open after logout.
+# Waits until the bot's runtime server answers, then opens the dashboard as a
+# full-screen Chromium app window on the desktop session's Wayland display.
+# Works from the desktop or over SSH; run it in the background (or from a
+# service) to keep it open after logout.
 #
 #   scripts/open-dashboard.sh [URL]        default: http://localhost:8080/
 #   DASHBOARD_WAIT_SECONDS=300 scripts/open-dashboard.sh
 #
-# Press Alt+F4 on the Pi's keyboard to close the kiosk window.
+# On the Pi's keyboard: F12 opens DevTools, F11 leaves full screen, Alt+F4 closes.
+# Not --kiosk: kiosk mode disables DevTools and blames an organisation policy.
 set -euo pipefail
 
 url="${1:-http://localhost:8080/}"
@@ -39,7 +41,8 @@ if [[ -f "$preferences" ]]; then
 fi
 
 exec chromium \
-  --kiosk "$url" \
+  --app="$url" \
+  --start-fullscreen \
   --user-data-dir="$profile" \
   --ozone-platform=wayland \
   --no-first-run \
