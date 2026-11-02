@@ -1,3 +1,3 @@
 @freemocap/client browser bundle (AGPL-3.0-or-later; bundles zod and cbor-x, both MIT)
 built by scripts/update-freemocap-client.sh from packages/freemocap-client
-freemocap sfn26-ultraskelly fc8364c4424cbb1223476d042418956aeefaf3ea
+freemocap sfn26-ultraskelly 342c34b7214be5be0f25b1cb0fe730e9d59823d6

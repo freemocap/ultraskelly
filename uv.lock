@@ -473,7 +473,7 @@ wheels = [
 [[package]]
 name = "freemocap-stream"
 version = "0.1.0.dev0"
-source = { git = "https://github.com/freemocap/freemocap?subdirectory=packages%2Ffreemocap-stream&branch=sfn26-ultraskelly#fc8364c4424cbb1223476d042418956aeefaf3ea" }
+source = { git = "https://github.com/freemocap/freemocap?subdirectory=packages%2Ffreemocap-stream&branch=sfn26-ultraskelly#342c34b7214be5be0f25b1cb0fe730e9d59823d6" }
 dependencies = [
     { name = "cbor2" },
     { name = "numpy" },

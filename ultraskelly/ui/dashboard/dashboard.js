@@ -1,6 +1,9 @@
-// Live dashboard: renders the runtime's JSON snapshots from /ws onto the shared skeleton.
+// Live dashboard: one FreeMoCap stream from /stream drives the skeleton, readouts and video.
+// `robot_state` messages carry the bot's snapshot; FreeMoCap `frame` messages carry each
+// camera's JPEG with the poses detected in that very image, drawn here over the video.
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
+import { TransportService, readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
 import { buildSkeleton } from '/skeleton.js';
 
 const $ = id => document.getElementById(id);
@@ -8,6 +11,10 @@ const deg = THREE.MathUtils.degToRad;
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
 const JAW_OPEN_DEGREES = 28;   // Same jaw travel as the simulator's model
 const JAW_SPEED = 90;          // Degrees per second, for display easing only
+const KEYPOINT_VISIBLE = 0.3;  // Keypoints below this confidence are not drawn
+// Same colors the Pi used to draw on its video.
+const COLORS = {bone: 'rgb(0,255,255)', head: 'rgb(255,0,0)', arm: 'rgb(0,255,0)', leg: 'rgb(0,0,255)',
+                outline: '#fff', aim: 'rgb(141,227,194)', jaw: 'rgb(255,178,105)', target: 'rgb(255,178,105)'};
 
 // 3D view, framed like the simulator.
 const scene = new THREE.Scene();
@@ -42,7 +49,6 @@ const tip = new THREE.Mesh(new THREE.ConeGeometry(.06, .13, 16), driveMaterial);
 tip.rotation.z = -Math.PI / 2; tip.position.x = .32;
 waistArrow.add(shaft, tip); waistArrow.position.set(0, .05, .3); waistArrow.visible = false;
 skeleton.waist.add(waistArrow);
-window.ultraskelly = {skeleton, waistArrow};  // For inspection from the browser console
 let jawShown = 0, jawGoal = 0, lastFrame = performance.now();
 renderer.setAnimationLoop(now => {
   const dt = Math.min((now - lastFrame) / 1000, .1); lastFrame = now;
@@ -81,6 +87,8 @@ function showCommands(state) {
   mode.classList.toggle('real', !state.motors.simulated);
 }
 
+const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
+
 function showTarget(state) {
   const frame = state.cameras && Object.values(state.cameras)[0];
   const width = frame?.width || 640, height = frame?.height || 480;
@@ -93,8 +101,7 @@ function showTarget(state) {
   ctx.strokeStyle = '#8de3c2'; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.moveTo(width / 2 - 20, height / 2); ctx.lineTo(width / 2 + 20, height / 2);
   ctx.moveTo(width / 2, height / 2 - 20); ctx.lineTo(width / 2, height / 2 + 20); ctx.stroke();
-  const target = state.target;
-  const seen = target && target.x != null && target.y != null;
+  const seen = hasTarget(state), target = state.target;
   if (seen) {
     ctx.strokeStyle = '#ffb269'; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(target.x, target.y, 14, 0, Math.PI * 2); ctx.stroke();
@@ -129,57 +136,124 @@ function showHealth(state) {
   }));
   const running = state.nodes.filter(node => node.state === 'running').length;
   $('node-summary').textContent = `${running}/${state.nodes.length} RUNNING`;
+  for (const [name, camera] of cameras) videoPanel(name).cameraRate = camera.fps;
 }
 
-// One MJPEG panel per camera the runtime reports. A stream ends when the bot stops, so
-// restart it after errors and whenever the WebSocket reconnects. Streams start only after
-// the page's load event: an MJPEG image never finishes, so it would hold the page "loading".
-const videos = new Map();
-function restartStream(name) {
-  const video = videos.get(name);
-  if (!video) return;
-  const start = () => { video.img.src = `/video/${encodeURIComponent(name)}.mjpg?start=${Date.now()}`; };
-  if (document.readyState === 'complete') start();
-  else window.addEventListener('load', start, {once: true});
+// Video: one canvas per camera, created when its first image arrives.
+const panels = new Map();
+function videoPanel(cameraId) {
+  if (!panels.has(cameraId)) {
+    const grid = $('video-grid');
+    if (!panels.size) grid.replaceChildren();
+    const figure = document.createElement('figure'), canvas = document.createElement('canvas');
+    const caption = document.createElement('figcaption'), label = document.createElement('span'), rate = document.createElement('span');
+    figure.className = 'video'; canvas.setAttribute('aria-label', `${cameraId} camera with the detected poses`);
+    label.textContent = cameraId.toUpperCase();
+    caption.append(label, rate); figure.append(canvas, caption); grid.append(figure);
+    panels.set(cameraId, {canvas, rate, drawn: 0, cameraRate: null});
+  }
+  return panels.get(cameraId);
 }
-function showVideos(state) {
-  const grid = $('video-grid');
-  for (const [name, camera] of Object.entries(state.cameras)) {
-    if (!videos.has(name)) {
-      if (!videos.size) grid.replaceChildren();
-      const figure = document.createElement('figure'), img = document.createElement('img');
-      const caption = document.createElement('figcaption'), label = document.createElement('span'), rate = document.createElement('span');
-      figure.className = 'video'; img.alt = `${name} camera`;
-      img.onerror = () => setTimeout(() => restartStream(name), 1000);
-      label.textContent = name.toUpperCase();
-      caption.append(label, rate); figure.append(img, caption); grid.append(figure);
-      videos.set(name, {img, rate});
-      restartStream(name);
+
+function drawPerson(ctx, overlay) {
+  const column = name => overlay.columns.indexOf(name), width = overlay.columns.length;
+  const [x, y, visibility] = [column('x'), column('y'), column('visibility')];
+  const point = row => {
+    const values = overlay.data.subarray(row * width, row * width + width);
+    const seen = visibility < 0 || values[visibility] >= KEYPOINT_VISIBLE;
+    return seen && Number.isFinite(values[x]) && Number.isFinite(values[y]) ? [values[x], values[y]] : null;
+  };
+  const rowOf = new Map(overlay.names.map((name, row) => [name, row]));
+  ctx.strokeStyle = COLORS.bone; ctx.lineWidth = 2;
+  for (const group of overlay.connectionGroups ?? []) {
+    for (const [from, to] of group.pairs) {
+      const start = point(rowOf.get(from)), end = point(rowOf.get(to));
+      if (start && end) { ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke(); }
     }
-    videos.get(name).rate.textContent = `${camera.fps.toFixed(1)} fps from the camera`;
+  }
+  overlay.names.forEach((_, row) => {
+    const at = point(row);
+    if (!at) return;
+    // COCO order: five face points, six arm points, then hips and legs.
+    ctx.fillStyle = row <= 4 ? COLORS.head : row <= 10 ? COLORS.arm : COLORS.leg;
+    ctx.beginPath(); ctx.arc(at[0], at[1], 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = COLORS.outline; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(at[0], at[1], 6, 0, Math.PI * 2); ctx.stroke();
+  });
+}
+
+function drawFrame(image, overlays) {
+  const panel = videoPanel(image.cameraId), ctx = panel.canvas.getContext('2d');
+  if (panel.canvas.width !== image.width || panel.canvas.height !== image.height) {
+    panel.canvas.width = image.width; panel.canvas.height = image.height;
+  }
+  ctx.drawImage(image.bitmap, 0, 0);
+  const guides = latestState?.overlays?.[image.cameraId];
+  if (guides) {
+    const [aimX, aimY] = guides.aim, zone = guides.jaw_zone;
+    ctx.strokeStyle = COLORS.jaw; ctx.lineWidth = 1; ctx.strokeRect(aimX - zone, aimY - zone, 2 * zone, 2 * zone);
+    ctx.strokeStyle = COLORS.aim; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(aimX - 20, aimY); ctx.lineTo(aimX + 20, aimY); ctx.moveTo(aimX, aimY - 20); ctx.lineTo(aimX, aimY + 20); ctx.stroke();
+  }
+  for (const overlay of overlays) if (overlay.cameraId === image.cameraId) drawPerson(ctx, overlay);
+  if (guides && hasTarget(latestState)) {
+    ctx.strokeStyle = COLORS.target; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(latestState.target.x, latestState.target.y, 20, 0, Math.PI * 2); ctx.stroke();
+  }
+  panel.drawn += 1;
+}
+
+// Decode newest-wins: while one frame decodes, only the newest arrival waits behind it.
+let decoding = false, waiting = null;
+async function showFrames(frame) {
+  if (decoding) { waiting = frame; return; }
+  decoding = true;
+  try {
+    for (let next = frame; next; next = waiting, waiting = null) {
+      const images = await decodeImageBitmaps(readImagePayload(next.buffer));
+      try { for (const image of images) drawFrame(image, next.overlays); }
+      finally { for (const image of images) image.bitmap.close(); }
+    }
+  } catch (problem) {
+    console.error('Could not show a camera frame', problem);
+  } finally {
+    decoding = false;
   }
 }
 
-// Connection: reconnect with backoff; flag snapshots that stop arriving.
-let lastSnapshotAt = 0, snapshotsThisSecond = 0, retryDelay = 500;
-function connect() {
-  const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  socket.onopen = () => { retryDelay = 500; error(''); for (const name of videos.keys()) restartStream(name); };
-  socket.onmessage = event => {
-    const state = JSON.parse(event.data);
-    lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
-    showSkeleton(state); showCommands(state); showTarget(state); showHealth(state); showVideos(state);
-  };
-  socket.onclose = () => {
-    $('connection').textContent = '○ Reconnecting…';
-    setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay * 2, 5000);
-  };
-}
-connect();
+// The stream: the SDK reconnects, answers heartbeats and validates every message.
+const RobotState = {parse(message) {
+  if (typeof message?.motors !== 'object' || !Array.isArray(message?.nodes)) throw new Error('robot_state without motors or nodes');
+  return message;
+}};
+const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`, kinds: {robot_state: RobotState}});
+let latestState = null, lastSnapshotAt = 0, snapshotsThisSecond = 0;
+stream.subscribeToKind('robot_state', state => {
+  latestState = state; lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
+  showSkeleton(state); showCommands(state); showTarget(state); showHealth(state);
+});
+let frameOverlays = {frameNumber: -1, overlays: []};
+stream.subscribeToOverlay(overlay => {  // Delivered just before the image of the same frame
+  if (overlay.frameNumber !== frameOverlays.frameNumber) frameOverlays = {frameNumber: overlay.frameNumber, overlays: []};
+  frameOverlays.overlays.push(overlay);
+});
+stream.subscribeToImages((buffer, frameNumber) => {
+  showFrames({buffer, overlays: frameOverlays.frameNumber === frameNumber ? frameOverlays.overlays : []});
+});
+stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol error', problem); error(`Stream error: ${problem?.message ?? problem}`); });
+stream.on('open', () => error(''));
+stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
+stream.connect();
+window.ultraskelly = {skeleton, waistArrow, stream, panels};  // For inspection from DevTools
+
 setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
   if (lastSnapshotAt) $('connection').textContent = stale ? '○ No data' : '● Live';
   $('snapshot-age').textContent = lastSnapshotAt ? ago(age) : '—';
   $('snapshot-age').classList.toggle('stale', stale);
   $('snapshot-rate').textContent = `${snapshotsThisSecond}/s`; snapshotsThisSecond = 0;
+  for (const panel of panels.values()) {
+    const camera = panel.cameraRate == null ? '' : ` · ${panel.cameraRate.toFixed(1)} fps from the camera`;
+    panel.rate.textContent = `${panel.drawn} fps drawn${camera}`; panel.drawn = 0;
+  }
 }, 1000);

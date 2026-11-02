@@ -3,7 +3,7 @@
 .videos{display:grid;grid-template-rows:auto minmax(0,1fr);padding:7px}
 #video-grid{display:flex;gap:6px;min-height:0}
 .video{margin:0;flex:1;display:flex;flex-direction:column;gap:3px;min-height:0}
-.video img{flex:1;min-height:0;width:100%;object-fit:contain;background:#0b1318;border:1px solid #34444b;border-radius:3px}
+.video canvas{flex:1;min-height:0;width:100%;object-fit:contain;background:#0b1318;border:1px solid #34444b;border-radius:3px}
 .video figcaption{display:flex;justify-content:space-between;font:8px monospace;color:var(--muted)}
 .health{padding:7px}
 #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px}
