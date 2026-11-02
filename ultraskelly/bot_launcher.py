@@ -94,6 +94,11 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    shutting_down: bool = Field(default=False, exclude=True)
+
+    def healthy(self) -> bool:
+        """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
+        return not self.shutting_down
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -221,7 +226,8 @@ class BotLauncher(BaseModel):
     async def _shutdown_nodes(self) -> None:
         """Stop all nodes and clean up tasks."""
         logger.info("Shutting down nodes...")
-        
+        self.shutting_down = True
+
         # Stop all nodes
         for node in self.nodes:
             node.stop()

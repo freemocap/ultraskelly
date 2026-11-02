@@ -15,10 +15,10 @@ from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams,
 logger = logging.getLogger(__name__)
 
 
-async def main(
+def launch_config(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
-) -> None:
-    """Launch with declarative config.
+) -> LaunchConfig:
+    """The robot's declarative launch configuration.
 
     Args:
         simulate_motors: Record motor commands instead of driving the motor boards.
@@ -66,7 +66,16 @@ async def main(
     config.simulate_motors = simulate_motors
     config.show_window = show_window
     config.recording = RunRecorderParams(microphone=microphone) if record else None
-    launcher = BotLauncher.from_config(config)
+    return config
+
+
+async def main(
+    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+) -> None:
+    """Launch with the configuration above; the options are `launch_config`'s."""
+    launcher = BotLauncher.from_config(launch_config(
+        simulate_motors=simulate_motors, show_window=show_window, record=record, microphone=microphone,
+    ))
     await launcher.run()
 
 
