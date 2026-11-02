@@ -114,7 +114,7 @@ through `WaistDrive` (`motor/waist_drive.py`). When the head's pan is more than
 camera feedback brings the head back toward neutral, and the move continues until
 the head is within 5 degrees. A move starts at 0.45 drive, below where the waist
 is assumed to break loose, ramps up at 1.5 per second to a drive that grows with the
-head's angle (0.6 at 15 degrees, up to 0.8), ramps down at 2 per second, releases the
+head's angle (0.7 at 15 degrees, up to 0.8), ramps down at 2 per second, releases the
 motor to coast at 0.4, and brakes it 0.3 s later. Reversing passes through that stop.
 A move lasting 6 s ramps down and rests 2 s. Target loss ramps the waist to a stop.
 These levels are starting values until the waist sound test measures the real waist.

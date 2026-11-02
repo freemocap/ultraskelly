@@ -19,7 +19,7 @@ def largest_step(commands: list) -> float:
 def test_a_move_starts_below_breakaway_and_ramps_without_pulses():
     drive = WaistDrive(PARAMS)
     commands = run(drive, [30.0] * 200)
-    wanted = PARAMS.min_throttle + PARAMS.gain * (30.0 - PARAMS.start_angle)
+    wanted = min(PARAMS.max_throttle, PARAMS.min_throttle + PARAMS.gain * (30.0 - PARAMS.start_angle))
     assert commands[0] == -PARAMS.start_throttle  # Positive pan turns the torso with negative drive
     assert all(command < 0 for command in commands)  # Two seconds of drive, never braked or released
     assert largest_step(commands[1:]) <= PARAMS.ramp_up * TICK + 1e-9

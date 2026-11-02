@@ -386,7 +386,8 @@ runs at its highest PWM frequency, so the whine cannot be moved above hearing.
 **Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses. The waist starts
 when the head's pan is over 15 degrees from neutral, regardless of lock, and keeps turning
 toward the gaze until the head is within 5 degrees. Each move starts at 0.45, ramps up at
-1.5 per second to 0.6 plus 0.008 per degree beyond 15 (at most 0.8), ramps down at 2 per
+1.5 per second to 0.7 plus 0.008 per degree beyond 15 (at most 0.8; 0.7 was the old
+controller's floor for static friction and stays until measured), ramps down at 2 per
 second, releases the motor at 0.4 to coast, and brakes it 0.3 s later. Reversing passes
 through that stop. A move lasting 6 s ramps down and rests 2 s, the remaining limit on
 continuous drive. Losing the target ramps the waist down; stopping the bot still brakes at

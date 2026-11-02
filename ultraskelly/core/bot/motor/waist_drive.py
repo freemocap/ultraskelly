@@ -28,7 +28,10 @@ class WaistDriveParams(NodeParams):
 
     start_angle: float = Field(default=15.0, ge=0.0, le=90.0, description="Head pan from neutral (degrees) that starts a move")
     stop_angle: float = Field(default=5.0, ge=0.0, le=90.0, description="A move continues until the head pan is this close to neutral")
-    min_throttle: float = Field(default=0.6, ge=0.0, le=1.0, description="Drive at start_angle; enough to keep the waist moving")
+    min_throttle: float = Field(
+        default=0.7, ge=0.0, le=1.0,
+        description="Drive at start_angle; enough to keep the waist moving (the old controller's floor until measured)",
+    )
     max_throttle: float = Field(default=0.8, ge=0.0, le=1.0, description="Largest drive")
     gain: float = Field(default=0.008, gt=0.0, le=0.05, description="Extra drive per degree of head pan beyond start_angle")
     start_throttle: float = Field(default=0.45, gt=0.0, le=1.0, description="A move begins here, below where the waist breaks loose")
