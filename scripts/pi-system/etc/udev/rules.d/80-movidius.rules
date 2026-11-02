@@ -1,0 +1,2 @@
+# Let the bot open Luxonis OAK cameras (Movidius, USB vendor 03e7) without root.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Log once per boot why the Pi last stopped; ultraskelly-boot-report.service runs it.
+#
+# Two clues together: the bootloader's reset status, and how the previous boot's
+# journal ends. The status values are undocumented; as observed on Pi 4 and 5,
+# bit 5 (0x20) is set by a watchdog reset (a reboot, a kernel panic, or a hang the
+# hardware watchdog ended) and 0x1000 alone is a power-on reset (power lost or cut).
+# A shutdown ends the journal with "Journal stopped"; a sudden stop does not.
+set -uo pipefail
+
+rsts=/proc/device-tree/chosen/bootloader/rsts
+status=
+if [[ -r $rsts ]]; then
+  status=0x$(od -An -tx4 --endian=big "$rsts" | tr -d ' ')
+fi
+
+last_entry=$(journalctl -b -1 -n 1 -o short-iso 2>/dev/null | cut -d' ' -f1)
+if [[ -z $last_entry ]]; then
+  ended="no earlier boot is in the journal"
+  shutdown=unknown
+elif [[ $(journalctl -b -1 -n 1 -o cat -t systemd-journald) == "Journal stopped" ]]; then
+  ended="the previous boot shut down at $last_entry"
+  shutdown=yes
+else
+  ended="the previous boot's journal ends at $last_entry without a shutdown"
+  shutdown=no
+fi
+
+level=6  # info; journald reads the <N> prefix as the priority
+if [[ -z $status ]]; then
+  cause="unknown (no reset status from the bootloader)"
+elif ((status & 0x20)); then
+  if [[ $shutdown == yes ]]; then
+    cause="rebooted"
+  else
+    cause="reset by the watchdog after a hang, or by a kernel panic"
+    level=4
+  fi
+elif ((status & 0x1000)); then
+  if [[ $shutdown == yes ]]; then
+    cause="shut down, then powered on"
+  else
+    cause="power was lost or cut while running"
+    level=4
+  fi
+else
+  cause="unrecognised reset status"
+fi
+echo "<$level>Last stop: $cause. Reset status ${status:-unavailable}; $ended."

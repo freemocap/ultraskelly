@@ -288,6 +288,90 @@ package restores the unpatched source, so run the script again then. After the
 fix: 18,000 soak inferences in 10 minutes and a bot run with the dashboard
 watching produced no warnings.
 
+## Lost Wi-Fi and sudden power losses (2026-11-02)
+
+The Wi-Fi radio never switched off: NetworkManager found it enabled in every boot,
+and rfkill never blocked it. The Pi lost its saved network instead. Until 13:15 it
+joined `HouseHouse-5G` (5745 MHz) through the profile Raspberry Pi Imager set up
+with cloud-init and netplan (`/etc/netplan/90-NM-eaa52c7e-….yaml`). At 13:32:18–19,
+while the robot's USB devices were being rearranged by hand, NetworkManager rewrote
+that file and a second profile during a boot whose journal holds one second. Power
+was lost before the data reached the card, and both files are empty. Later boots had
+no Wi-Fi network to join until `HouseHouse` (2.4 GHz, channel 11) was added from the
+desktop at 14:56. `HouseHouse-5G` is still on the air (channel 44, −52 dBm at the
+robot). The same mechanism emptied git objects after the 10:12 reset.
+
+Of the ten boots since 10:11, only the 10:50 power-off ended with a shutdown (the
+journal's last line is `Journal stopped`); the rest ended mid-run. The current boot's
+bootloader reset status (`/proc/device-tree/chosen/bootloader/rsts`) is `0x1000`, a
+power-on reset: power was lost or cut. A reboot, kernel panic or watchdog reset sets
+bit 5 (`0x1020`). Raspberry Pi does not document these values; see the
+[forum thread](https://forums.raspberrypi.com/viewtopic.php?p=2300447) and
+[rpi-eeprom #758](https://github.com/raspberrypi/rpi-eeprom/pull/758). No boot logged
+undervoltage or USB over-current. The losses came from hands-on work on the powered
+robot. Bursts of I2C "lost arbitration" errors on the servo and motor bus came before
+them, the last one second before the 15:46 loss: the jumper-wired PCA9685 servo board
+at `0x40` had been knocked loose while USB devices were swapped, and probes of the bus
+failed; no motor was commanded. Boot times in `journalctl --list-boots` are rough:
+after a power loss the clock restarts from the last saved time until NTP corrects it.
+
+USB power: the 5 A supply lets the four USB ports draw 1.6 A together (the firmware
+sets `usb_max_current_enable=1`; `config.txt` does not). Declared currents: ZED Mini
+512 + 100 mA, OAK-1 500 mA before it boots, the Nordic receiver 100 mA, a Genesys USB
+2 hub 100 mA and the Yeti X behind it 100 mA, 1.41 A in all. Actual draw was not
+measured; the OAK can exceed its declaration while booting and inferring. Wi-Fi
+power save was on (the driver default).
+
+The Pi setup script below now syncs the journal every 10 s instead of every 5 minutes,
+so the last seconds before a loss survive (they did at 15:46); logs at each boot the
+reset status and whether the previous boot shut down
+(`journalctl -u ultraskelly-boot-report`); flags emptied network profiles and git
+objects; and turns Wi-Fi power save off. Shut the Pi down before re-plugging its power
+or USB devices.
+
+## Boot services and the Pi setup script (2026-11-02)
+
+`scripts/install-services.sh` installs `ultraskelly-bot` (a system service) and
+`ultraskelly-dashboard` (the desktop user's service) for the checkout it runs from;
+both stay disabled until the owners finish testing on the robot. The bot runs through
+`scripts/run-bot.sh`, which takes the shared robot lock without waiting: while a test
+holds it, the bot exits with status 75 naming the holder, and systemd tries again.
+After any exit systemd waits 2 s, then longer each time up to a minute, with no start
+limit. The bot reports READY once its nodes are built and pings a 30 s watchdog from
+its event loop. When the pings stop, systemd sends SIGUSR1, which prints every
+thread's Python traceback before the process dies; not SIGABRT, because depthai
+installs its own handlers for SIGABRT and SIGSEGV that print only native frames.
+Extra bot options come from `/etc/default/ultraskelly-bot`; while the motor boards are
+disconnected it holds `ULTRASKELLY_BOT_OPTIONS=--simulate-motors`.
+
+Measured on the Pi with `--simulate-motors` (the motor boards were disconnected),
+single runs:
+
+| Test | Result |
+| --- | --- |
+| SIGSEGV to the bot | restarted after 2 s; ready 7 s after the kill |
+| SIGSTOP to the bot | watchdog fired after 18 s (pings every 15 s), tracebacks of all threads logged; ready 25 s after the freeze |
+| SIGSEGV to Chromium | dashboard reopened after 5 s; it reconnected to each restarted bot on its own |
+| Test holding the robot lock | bot refused 5 times (2, 4, 8, 15 s apart), naming the holder; started once it was free |
+| Owner's `flock -n` while the bot runs | refused |
+| `systemctl stop` | clean shutdown, exit 0 |
+| Reboot | bot ready 16 s after boot; dashboard full screen with the live stream |
+
+The motors were not driven, so these runs do not show what the motors do when the bot
+dies: a motor board keeps its last output until told otherwise, and a hard kill skips
+the bot's own stop commands. That is part of the connection-recovery work.
+
+`scripts/setup-pi.sh --check` reports 20 settings and 8 observations of the hardware,
+power, network and repository, changing nothing; without `--check` it puts missing
+settings in place. The system files it installs live under `scripts/pi-system/` at
+their paths under `/`. On the robot's Pi it held the seven Hailo packages (an apt
+upgrade would replace the patched driver), turned Wi-Fi power save off, added the
+watchdog drop-in and the commented OAK rule, and removed the two empty netplan files.
+With five settings removed by hand, the check reported them missing and the script put
+all five back. After the reboot every setting was in place (27 OK); the one warning,
+once the services had stopped, was the disconnected I2C boards. Not tested: a freshly
+imaged Pi, where the script also installs packages, uv and the virtual environment.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

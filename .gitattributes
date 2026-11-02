@@ -1,4 +1,7 @@
 *.sh text eol=lf
 *.patch text eol=lf
+# Files installed on the Pi keep Linux line endings on every checkout.
+scripts/pi-system/** text eol=lf
+scripts/systemd/** text eol=lf
 # Generated bundles: never rewrite their line endings.
 ultraskelly/ui/dashboard/vendor/** -text
