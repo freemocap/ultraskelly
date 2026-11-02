@@ -1,0 +1,22 @@
+# The dashboard, full screen on the Pi's monitor, as a user service in the desktop
+# session. scripts/install-services.sh fills in @REPO@ and installs this as
+# ~/.config/systemd/user/ultraskelly-dashboard.service.
+[Unit]
+Description=UltraSkelly dashboard, full screen on the Pi's monitor
+Documentation=file://@REPO@/README.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# Wait for the desktop and the bot's server as long as they take.
+Environment=DASHBOARD_WAIT_SECONDS=0
+ExecStart=@REPO@/scripts/open-dashboard.sh
+# Reopen Chromium after it crashes. Closing the window (Alt+F4), or opening the
+# dashboard again with scripts/open-dashboard.sh, ends this one cleanly: it stays closed.
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+# The desktop (labwc) never starts graphical-session.target, so start with the
+# user's service manager, which lingering runs from boot.
+WantedBy=default.target

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Open the UltraSkelly dashboard full-screen on the Pi's monitor.
 #
-# Waits until the bot's runtime server answers, then opens the dashboard as a
-# full-screen Chromium app window on the desktop session's Wayland display.
-# Works from the desktop or over SSH; run it in the background (or from a
-# service) to keep it open after logout.
+# Waits until the bot's runtime server answers and the desktop is up, then opens
+# the dashboard as a full-screen Chromium app window on the desktop session's
+# Wayland display. Works from the desktop or over SSH; run it in the background (or
+# from a service, as ultraskelly-dashboard.service does) to keep it open after logout.
 #
 #   scripts/open-dashboard.sh [URL]        default: http://localhost:8080/
-#   DASHBOARD_WAIT_SECONDS=300 scripts/open-dashboard.sh
+#   DASHBOARD_WAIT_SECONDS=300 scripts/open-dashboard.sh   (0 waits as long as it takes)
 #
 # On the Pi's keyboard: F12 opens DevTools, F11 leaves full screen, Alt+F4 closes.
 # Not --kiosk: kiosk mode disables DevTools and blames an organisation policy.
@@ -21,9 +21,13 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 
 deadline=$((SECONDS + wait_seconds))
-until curl -fs -o /dev/null "$url"; do
-  if ((SECONDS >= deadline)); then
-    echo "No runtime server at $url after ${wait_seconds}s; is the bot running?" >&2
+until [[ -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]] && curl -fs --max-time 5 -o /dev/null "$url"; do
+  if ((wait_seconds > 0 && SECONDS >= deadline)); then
+    if [[ ! -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]]; then
+      echo "No desktop session at $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY after ${wait_seconds}s" >&2
+    else
+      echo "No runtime server at $url after ${wait_seconds}s; is the bot running?" >&2
+    fi
     exit 1
   fi
   sleep 1

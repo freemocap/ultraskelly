@@ -4,6 +4,8 @@ import asyncio
 import logging
 import signal
 
+from ultraskelly.systemd_notify import run_with_heartbeat
+
 
 def _stop_on_sigterm(_signum: int, _frame: object) -> None:
     signal.raise_signal(signal.SIGINT)  # Same clean shutdown as Ctrl+C
@@ -48,10 +50,12 @@ def main() -> None:
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
-        asyncio.run(run_bot(
+        # The bot opens its hardware before its first await, so a boot service hears
+        # READY only once the robot is up, then watchdog pings while the event loop runs.
+        asyncio.run(run_with_heartbeat(run_bot(
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
-        ))
+        )))
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Stopped by Ctrl+C or SIGTERM")  # Nodes already shut down cleanly
 
