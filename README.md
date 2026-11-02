@@ -54,7 +54,9 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 `python -m ultraskelly --hardware` explicitly starts the robot. The older
 `python -m ultraskelly.__main__bot` entry point also remains available.
 Both can move motors during construction, including a full-power mouth test.
-The OpenCV display requires a graphical session.
+Add `--simulate-motors` to run the cameras and controllers while recording motor
+commands in memory instead of driving the motor boards. The OpenCV display requires
+a graphical session.
 
 By default the robot tracks people with a Luxonis OAK USB camera and YOLOv8 pose
 on a Hailo-8 AI HAT+. The original IMX500 AI camera remains available as

@@ -8,14 +8,17 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
-from ultraskelly.core.bot.motor.head_node import HeadNodeParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
 logger = logging.getLogger(__name__)
 
 
-async def main() -> None:
-    """Launch with declarative config."""
+async def main(*, simulate_motors: bool = False) -> None:
+    """Launch with declarative config.
+
+    Args:
+        simulate_motors: Record motor commands instead of driving the motor boards.
+    """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
     config = LaunchConfig(
@@ -35,7 +38,6 @@ async def main() -> None:
     #         detection_threshold=0.4,
     #         keypoint_threshold=0.4,
     #     ),
-    #     head=HeadNodeParams(gain=0.08, deadzone=40),
     # )
 
     # Example : Track left wrist
@@ -53,6 +55,7 @@ async def main() -> None:
     #     motor=HeadNodeParams(gain=0.08, deadzone=20),
     # )
 
+    config.simulate_motors = simulate_motors
     launcher = BotLauncher.from_config(config)
     await launcher.run()
 

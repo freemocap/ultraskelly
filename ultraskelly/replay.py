@@ -5,39 +5,22 @@ This observes commanded state; it is not a physical model of the robot.
 import argparse
 import asyncio
 import json
-from dataclasses import dataclass, field
 
-from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
-from ultraskelly.core.bot.motor.orientation_node import OrientationNode, OrientationNodeParams
-from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic, ServoStateTopic
+from ultraskelly.core.bot.motor.mouth_node import MouthNodeParams
+from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, create_simulated_motor_nodes
+from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-
-
-@dataclass
-class FakeServo:
-    angle: float = 90.0
-
-
-@dataclass
-class FakeServoKit:
-    servo: list[FakeServo] = field(default_factory=lambda: [FakeServo() for _ in range(16)])
-
-
-@dataclass
-class FakeMotor:
-    throttle: float = 0.0
 
 
 def create_controllers():
     """Inject memory-only actuators without calling either hardware factory."""
     bus = PubSubTopicManager.create()
-    orientation = OrientationNode(
-        pubsub=bus, params=OrientationNodeParams(), servo_kit=FakeServoKit(),
-        waist_motor=FakeMotor(), target_subscription=bus.get_subscription(TargetLocationTopic),
-    )
-    mouth = MouthNode(
-        pubsub=bus, params=MouthNodeParams(), mouth_motor=FakeMotor(),
-        head_servo_subscription=bus.get_subscription(ServoStateTopic),
+    orientation, mouth = create_simulated_motor_nodes(
+        pubsub=bus,
+        orientation_params=OrientationNodeParams(),
+        mouth_params=MouthNodeParams(),
+        recorder=CommandRecorder(),
     )
     return bus, orientation, mouth
 

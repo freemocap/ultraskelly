@@ -5,11 +5,10 @@ from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
-from ultraskelly.core.bot.motor.waist_node import WaistNode, WaistNodeParams
+from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, create_simulated_motor_nodes
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
-from ultraskelly.core.bot.motor.head_node import HeadNode, HeadNodeParams
 from ultraskelly.core.bot.sensory.bright_point_detection_node import (
     BrightnessDetectorNode,
     BrightnessDetectorParams,
@@ -48,6 +47,10 @@ class LaunchConfig(NodeParams):
     # waist: WaistNodeParams = Field(default_factory=WaistNodeParams)
     orientation: OrientationNodeParams = Field(default_factory=OrientationNodeParams)
     ui: UINodeParams = Field(default_factory=UINodeParams)
+    simulate_motors: bool = Field(
+        default=False,
+        description="Drive memory-only servo and motor stand-ins instead of the motor boards",
+    )
 
 
 class BotLauncher(BaseModel):
@@ -57,16 +60,30 @@ class BotLauncher(BaseModel):
     pubsub: SkipValidation[PubSubTopicManager]
     nodes: list[Node] = Field(default_factory=list)
     tasks: list[asyncio.Task] = Field(default_factory=list, exclude=True)
+    # Commands sent to the simulated actuators; None when driving the real motor boards.
+    command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
         self.nodes.clear()
-        
+
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
         # self.nodes.append(WaistNode.create(pubsub=self.pubsub, params=self.config.waist))
-        self.nodes.append(OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation))
-        self.nodes.append(MouthNode.create(pubsub=self.pubsub, params=self.config.mouth))
+        if self.config.simulate_motors:
+            logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
+            self.command_recorder = CommandRecorder()
+            self.nodes.extend(
+                create_simulated_motor_nodes(
+                    pubsub=self.pubsub,
+                    orientation_params=self.config.orientation,
+                    mouth_params=self.config.mouth,
+                    recorder=self.command_recorder,
+                )
+            )
+        else:
+            self.nodes.append(OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation))
+            self.nodes.append(MouthNode.create(pubsub=self.pubsub, params=self.config.mouth))
         self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
         # Create detector based on type

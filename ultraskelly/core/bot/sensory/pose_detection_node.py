@@ -10,10 +10,15 @@ from picamera2.devices.imx500.postprocess_highernet import postprocess_higherhrn
 from libcamera import Transform  # Import Transform for camera flipping
 
 from ultraskelly import FAIL_ON_IMPORTS
-from ultraskelly.core.pubsub.bot_topics import PoseDataMessage, TargetLocationTopic, PoseDataTopic, FrameTopic
+from ultraskelly.core.pubsub.bot_topics import (
+    PoseDataMessage,
+    TargetLocationMessage,
+    TargetLocationTopic,
+    PoseDataTopic,
+    FrameTopic,
+)
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
-from ultraskelly.core.bot.motor.head_node import TargetLocationMessage
 from ultraskelly.core.bot.sensory.camera_node import FrameMessage
 from ultraskelly.core.bot.sensory.pose_common import (  # re-exported for existing importers
     SKELETON_CONNECTIONS,

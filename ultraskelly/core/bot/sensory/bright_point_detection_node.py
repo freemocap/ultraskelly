@@ -6,12 +6,11 @@ import numpy as np
 from pydantic import Field, SkipValidation, field_validator
 
 from ultraskelly import FAIL_ON_IMPORTS
-from ultraskelly.core.pubsub.bot_topics import TargetLocationTopic, FrameTopic
+from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic, FrameTopic
 
 logger = logging.getLogger(__name__)
 
 from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
-from ultraskelly.core.bot.motor.head_node import TargetLocationMessage
 from ultraskelly.core.bot.sensory.camera_node import FrameMessage
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
