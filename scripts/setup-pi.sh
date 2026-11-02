@@ -135,7 +135,7 @@ missing_packages() {
 }
 check_packages() {
   local absent
-  absent=$(missing_packages | tr '\n' ' ')
+  absent=$(missing_packages | paste -sd ' ' -)
   [[ -z $absent ]] || { echo "not installed: $absent"; return 1; }
   echo "${packages[*]}; HailoRT $(dpkg-query -W -f='${Version}' hailort)"
 }
@@ -154,7 +154,7 @@ check_hailo_hold() {
   local installed unheld
   installed=$(hailo_packages)
   [[ -n $installed ]] || { echo "no Hailo packages installed"; return 1; }
-  unheld=$(comm -23 <(sort <<<"$installed") <(apt-mark showhold | sort) | tr '\n' ' ')
+  unheld=$(comm -23 <(sort <<<"$installed") <(apt-mark showhold | sort) | paste -sd ' ' -)
   [[ -z $unheld ]] || { echo "not held, so an apt upgrade could replace them: $unheld"; return 1; }
   echo "$(wc -l <<<"$installed") Hailo packages held at their installed versions"
 }
@@ -244,7 +244,10 @@ check_watchdog() {
   echo "a hang resets the Pi after $timeout"
 }
 fix_watchdog() {
-  install_file /etc/systemd/system.conf.d/90-ultraskelly-watchdog.conf && sudo systemctl daemon-reexec
+  install_file /etc/systemd/system.conf.d/90-ultraskelly-watchdog.conf || return 1
+  # systemd reads it at boot; restart systemd now only if the watchdog is off.
+  [[ $(systemctl show -p RuntimeWatchdogUSec --value) =~ ^(0|infinity)$ ]] || return 0
+  sudo systemctl daemon-reexec
 }
 
 check_wifi_power_save() {
@@ -262,7 +265,7 @@ empty_profiles() {
 }
 check_network_profiles() {
   local empty
-  empty=$(empty_profiles | tr '\n' ' ')
+  empty=$(empty_profiles | paste -sd ' ' -)
   [[ -z $empty ]] || { echo "empty, as after a power loss mid-write: $empty"; return 1; }
   echo "no empty network profiles"
 }
@@ -400,7 +403,7 @@ check_hailo_device() {
   speed=$(<"$device/current_link_speed")
   [[ -e /dev/hailo0 ]] || { echo "on PCIe but no /dev/hailo0: is hailo_pci loaded?"; return 1; }
   [[ $speed == 8.0* ]] || { echo "/dev/hailo0 on a $speed link, not Gen 3 (8.0 GT/s)"; return 1; }
-  echo "/dev/hailo0 on a ${speed% PCIe} link"
+  echo "/dev/hailo0; PCIe link at ${speed% PCIe} (Gen 3)"
 }
 
 check_i2c_boards() {
@@ -434,7 +437,7 @@ check_wifi() {
 check_repo() {
   local objects empty
   objects=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/objects
-  empty=$(find "$objects" -type f -empty 2>/dev/null | head -n 3 | tr '\n' ' ')
+  empty=$(find "$objects" -type f -empty 2>/dev/null | head -n 3 | paste -sd ' ' -)
   [[ -z $empty ]] || { echo "empty git objects, as after a power loss mid-write: $empty"; return 1; }
   git -C "$repo" fsck --connectivity-only --no-progress >/dev/null 2>&1 || { echo "git fsck finds damage"; return 1; }
   echo "$(git -C "$repo" rev-parse --abbrev-ref HEAD) at $(git -C "$repo" rev-parse --short HEAD); no damaged objects"
