@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from enum import IntEnum
 
 import numpy as np
 from pydantic import Field, SkipValidation
@@ -16,55 +15,13 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
 from ultraskelly.core.bot.motor.head_node import TargetLocationMessage
 from ultraskelly.core.bot.sensory.camera_node import FrameMessage
+from ultraskelly.core.bot.sensory.pose_common import (  # re-exported for existing importers
+    SKELETON_CONNECTIONS,
+    CocoKeypoint,
+    select_target,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class CocoKeypoint(IntEnum):
-    """COCO pose estimation keypoint indices."""
-    NOSE = 0
-    LEFT_EYE = 1
-    RIGHT_EYE = 2
-    LEFT_EAR = 3
-    RIGHT_EAR = 4
-    LEFT_SHOULDER = 5
-    RIGHT_SHOULDER = 6
-    LEFT_ELBOW = 7
-    RIGHT_ELBOW = 8
-    LEFT_WRIST = 9
-    RIGHT_WRIST = 10
-    LEFT_HIP = 11
-    RIGHT_HIP = 12
-    LEFT_KNEE = 13
-    RIGHT_KNEE = 14
-    LEFT_ANKLE = 15
-    RIGHT_ANKLE = 16
-
-
-SKELETON_CONNECTIONS: list[tuple[CocoKeypoint, CocoKeypoint]] = [
-    # Head
-    (CocoKeypoint.NOSE, CocoKeypoint.LEFT_EYE),
-    (CocoKeypoint.NOSE, CocoKeypoint.RIGHT_EYE),
-    (CocoKeypoint.LEFT_EYE, CocoKeypoint.LEFT_EAR),
-    (CocoKeypoint.RIGHT_EYE, CocoKeypoint.RIGHT_EAR),
-    # Torso
-    (CocoKeypoint.LEFT_SHOULDER, CocoKeypoint.RIGHT_SHOULDER),
-    (CocoKeypoint.LEFT_SHOULDER, CocoKeypoint.LEFT_HIP),
-    (CocoKeypoint.RIGHT_SHOULDER, CocoKeypoint.RIGHT_HIP),
-    (CocoKeypoint.LEFT_HIP, CocoKeypoint.RIGHT_HIP),
-    # Left arm
-    (CocoKeypoint.LEFT_SHOULDER, CocoKeypoint.LEFT_ELBOW),
-    (CocoKeypoint.LEFT_ELBOW, CocoKeypoint.LEFT_WRIST),
-    # Right arm
-    (CocoKeypoint.RIGHT_SHOULDER, CocoKeypoint.RIGHT_ELBOW),
-    (CocoKeypoint.RIGHT_ELBOW, CocoKeypoint.RIGHT_WRIST),
-    # Left leg
-    (CocoKeypoint.LEFT_HIP, CocoKeypoint.LEFT_KNEE),
-    (CocoKeypoint.LEFT_KNEE, CocoKeypoint.LEFT_ANKLE),
-    # Right leg
-    (CocoKeypoint.RIGHT_HIP, CocoKeypoint.RIGHT_KNEE),
-    (CocoKeypoint.RIGHT_KNEE, CocoKeypoint.RIGHT_ANKLE),
-]
 
 
 class PoseDetectorParams(NodeParams):
@@ -188,56 +145,14 @@ class PoseDetectorNode(DetectorNode):
             self.latest_scores = None
             self.latest_boxes = None
 
-    def _calculate_body_angle(self, *, keypoints: np.ndarray) -> float | None:
-        """Calculate body orientation from shoulder line."""
-        left_shoulder = keypoints[CocoKeypoint.LEFT_SHOULDER]
-        right_shoulder = keypoints[CocoKeypoint.RIGHT_SHOULDER]
-
-        # Check confidence
-        if (
-                left_shoulder[2] < self.params.keypoint_threshold
-                or right_shoulder[2] < self.params.keypoint_threshold
-        ):
-            return None
-
-        # Calculate angle of shoulder line
-        dx = right_shoulder[0] - left_shoulder[0]
-        dy = right_shoulder[1] - left_shoulder[1]
-
-        # Convert to degrees, 0° = vertical
-        angle = np.degrees(np.arctan2(dx, -dy))
-
-        # Normalize to [-90, 90]
-        while angle > 90:
-            angle -= 180
-        while angle < -90:
-            angle += 180
-
-        return float(angle)
-
     def detect(self) -> tuple[int | None, int | None, float | None]:
         """Extract target keypoint from latest detection results."""
-        if self.latest_keypoints is None or self.latest_scores is None:
-            return (None, None, None)
-
-        # Find person with highest score
-        best_person_idx = int(np.argmax(self.latest_scores))
-        keypoints = self.latest_keypoints[best_person_idx]
-
-        # Get target keypoint (enum value IS the index)
-        target_kp = keypoints[self.params.target_keypoint]
-
-        # Check confidence
-        if target_kp[2] < self.params.keypoint_threshold:
-            return (None, None, None)
-
-        x = int(target_kp[0])
-        y = int(target_kp[1])
-
-        # Calculate body orientation
-        angle = self._calculate_body_angle(keypoints=keypoints)
-
-        return (x, y, angle if angle is not None else 0.0)
+        return select_target(
+            keypoints=self.latest_keypoints,
+            scores=self.latest_scores,
+            target_keypoint=self.params.target_keypoint,
+            keypoint_threshold=self.params.keypoint_threshold,
+        )
 
     async def run(self) -> None:
         """Main detection loop."""
