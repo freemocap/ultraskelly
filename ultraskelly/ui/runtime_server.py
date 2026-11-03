@@ -39,6 +39,8 @@ from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
     DepthFrameMessage,
+    FaceLocationMessage,
+    FaceLocationTopic,
     FrameMessage,
     PoseDataMessage,
     PoseDataTopic,
@@ -332,6 +334,7 @@ class RuntimeServerNode(Node):
             "servo_state": pubsub.get_subscription(ServoStateTopic),
             "target": pubsub.get_subscription(TargetLocationTopic),
             "pose": pubsub.get_subscription(PoseDataTopic),
+            "face": pubsub.get_subscription(FaceLocationTopic),
         }
         return node
 
@@ -392,6 +395,16 @@ class RuntimeServerNode(Node):
         if target := self.latest.get("target"):
             message: TargetLocationMessage = target.message
             state["target"] = {"x": message.x, "y": message.y, "angle": message.angle, "age": now - target.at}
+        if face := self.latest.get("face"):
+            message: FaceLocationMessage = face.message
+            state["face"] = {
+                "position_head": None if message.position_head is None else list(message.position_head),
+                "position_camera": None if message.position_camera is None else list(message.position_camera),
+                "distance": message.distance,
+                "pixel": None if message.pixel is None else list(message.pixel),
+                "alignment": message.alignment,
+                "age": now - face.at,
+            }
         return state
 
     async def _asset(self, request: web.Request) -> web.Response:

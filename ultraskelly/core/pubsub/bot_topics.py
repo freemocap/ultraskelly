@@ -47,6 +47,20 @@ class DepthFrameMessage(TopicMessageABC):
     )
 
 
+class FaceLocationMessage(TopicMessageABC):
+    """Where the tracked face is in 3D, found from the OAK's target pixel and the ZED's depth.
+    Positions are None when no face was found (no target, no recent depth, or no surface on its ray)."""
+    position_camera: tuple[float, float, float] | None = None  # Metres, the ZED's rectified left camera frame
+    position_head: tuple[float, float, float] | None = None  # Metres, the head frame (x forward, y left, z up)
+    distance: float | None = None  # Metres from the head frame's origin, between the eye sockets
+    pixel: tuple[int, int] | None = None  # The target pixel in the OAK image
+    pose_timestamp: float | None = None  # The OAK frame's capture time
+    depth_timestamp: float | None = None  # The depth frame's capture time
+    alignment: str = "nominal"  # Which OAK-ZED alignment placed it: its file name, or "nominal"
+
+    model_config = ConfigDict(frozen=True)
+
+
 class TargetLocationMessage(TopicMessageABC):
     """Generic target location with orientation."""
     x: int | None = None
@@ -88,6 +102,7 @@ class PoseDataMessage(TopicMessageABC):
 FrameTopic = create_topic(FrameMessage)
 StereoFrameTopic = create_topic(StereoFrameMessage)
 DepthFrameTopic = create_topic(DepthFrameMessage)
+FaceLocationTopic = create_topic(FaceLocationMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)
 PoseDataTopic = create_topic(PoseDataMessage)

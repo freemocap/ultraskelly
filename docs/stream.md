@@ -84,6 +84,7 @@ values are the commands sent, not measured positions.
 | `motors` | `simulated`, and `commands` with `value` and `age` (seconds) for `pan`, `tilt` (servo degrees), `waist`, `mouth` (throttle -1 to 1) |
 | `servo_state` | the head controller's `pan`, `tilt`, `roll`, `locked_x`, `locked_y`, `age` |
 | `target` | the controllers' latest target `x`, `y`, `angle`, `age`; not paired with any image |
+| `face` | with `--zed --depth`: where the tracked face is in 3D. `position_head` [x forward, y left, z up] and `position_camera` [x right, y down, z forward] in metres, `distance` from the point between the eye sockets, the OAK `pixel` it came from, which `alignment` placed it (`nominal` until measured) and `age`. Positions and distance are null when no face was found |
 | `cameras` | per camera ID (`oak`; with the ZED also `zed_left`, `zed_right`, and with depth `zed_rectified`, `zed_depth`): `fps`, `age` of the newest frame, `width`, `height` |
 | `overlays` | per camera: the `aim` pixel the head steers the target to, and the `jaw_zone` half-width |
 | `rates` | message rates in Hz: `servo_state`, `target`, `pose` |

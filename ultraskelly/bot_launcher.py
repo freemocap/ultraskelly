@@ -32,6 +32,7 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
 )
+from ultraskelly.core.bot.sensory.face_locator_node import FaceLocatorNode, FaceLocatorParams
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
@@ -93,6 +94,10 @@ class LaunchConfig(NodeParams):
     stereo_depth: StereoDepthNodeParams | None = Field(
         default=None,
         description="With zed_camera, also compute depth from its pair; None computes none",
+    )
+    face_locator: FaceLocatorParams = Field(
+        default_factory=FaceLocatorParams,
+        description="With ZED depth and pose tracking, where the tracked face is in 3D",
     )
     tracking: bool = Field(
         default=True,
@@ -243,6 +248,9 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
             ))
             feeds["depth_cameras"] = {"zed": DepthFrameTopic}
+            if self.config.tracking and self.config.detector_type == DetectorType.HAILO_POSE:
+                # The Hailo detector reports the frame each target came from, so its time can be matched.
+                self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
         return feeds
 
     def _create_zed_only_nodes(self) -> None:

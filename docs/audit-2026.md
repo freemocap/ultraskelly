@@ -739,6 +739,26 @@ SDK is recorded on its `sfn26-ultraskelly` branch, in
 a lossless depth block in the frame message, a calibrated-camera helper, a named camera
 optical frame, and per-source decoding in the client.
 
+**The tracked face in 3D.** With `--zed --depth` and pose tracking, `FaceLocatorNode`
+follows the target pixel the pose detector found in the OAK image (the nose by default)
+into the ZED's depth. The OAK-ZED alignment gives that pixel's ray in the ZED's rectified
+left camera frame. The ray is marched in 2 cm steps, then 2 mm steps, to the first point
+where it passes behind the surface the depth image sees: the median of a 5×5 window,
+with unknown depth never counted as a crossing. Each result uses the newest depth frame
+taken within 0.25 s of the OAK frame. It goes into `robot_state.face` in the camera frame
+and the head frame, with its distance from the point between the eye sockets. One ray
+takes 1.2 ms on the Pi, and the bot with it all ran at 94% of a core with pose at 30 fps.
+Until it is measured, the alignment is nominal: the OAK upright, centred between the eyes
+and 3.5 cm below them, facing the same way, with intrinsics from the OAK-1's datasheet
+field of view (69 by 55 degrees), since this OAK has no factory calibration.
+`python -m scripts.oak_zed_alignment` (robot lock; motors untouched) measures it: it
+matches features between OAK frames and ZED depth frames taken within 20 ms of each other
+and fits the OAK's pose to the ZED depth under them with `solvePnPRansac`, writing
+`ultraskelly/calibration/oak-zed-alignment.json`. On synthetic points it recovered a known
+pose to 1 cm and 0.3° with a tenth of the matches wrong. Tonight it found no feature both
+cameras see, because the skull blocks the ZED's view, so the alignment and a check against
+a tape-measured face distance wait for the re-seated lenses.
+
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 
 FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
