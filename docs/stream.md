@@ -97,6 +97,36 @@ On the producer side, `freemocap-stream` rejects non-integer frame numbers, came
 indices, widths and heights (NumPy integers are fine, floats are not) and non-finite
 timestamps.
 
+## Checking a stream
+
+`scripts/stream_acceptance.py` runs FreeMoCap's consumer acceptance checks against any
+`/stream` in headless Chromium, with a throwaway profile, no keyring and no proxy lookups,
+and prints the results as JSON. It serves its page over plain HTTP from the machine's
+network address, so the page is not a secure context. On the Pi, against the synthetic
+camera (no robot lock needed):
+
+```bash
+.venv/bin/python -m ultraskelly.replay --serve --people 3 --host 0.0.0.0 --port 8085 &
+.venv/bin/python -m scripts.stream_acceptance --stream ws://$(hostname -I | cut -d' ' -f1):8085/stream --people 3
+```
+
+Against the bot, start it under the robot lock and point `--stream` at port 8080 with
+`--people 0`; the checks that need people in view then report `applicable: false`.
+
+| Check | Passes when |
+| --- | --- |
+| `plain_http_connection` | the page connects without TLS |
+| `custom_robot_state` | `robot_state` arrives and parses, at least 5 per second |
+| `camera_decoding` | frames decode and draw, with every bitmap closed |
+| `several_tracked_subjects` | at least two people (or `--people`) share a frame |
+| `identities_survive_reordering` | in every frame, the overlay declared `target` is the person the target channel points at, wherever their row is |
+| `custom_numeric_channel` | `ultraskelly.target` arrives with its descriptor, one row and finite x, y |
+| `reconnect_mid_stream` | after `disconnect()`, and in a new client, the first frame draws without earlier messages |
+| `retries_stop_after_disconnect` | a client that disconnects during a connection failure makes no further attempt |
+
+It then times the protocol (CBOR decode and validation, frame resolution, channel views) and
+the image path (payload read, JPEG decode, draw) per frame on the frames it captured.
+
 ## Moving the SDK
 
 `pyproject.toml` takes `freemocap-stream` from FreeMoCap's `sfn26-ultraskelly` branch, and
