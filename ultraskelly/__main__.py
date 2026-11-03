@@ -56,14 +56,18 @@ def main() -> None:
         help="With --depth: also stream the depth as colour images (cameras zed_rectified and zed_depth); "
              "the depth_frame messages carry the same, so the dashboard needs none.",
     )
+    parser.add_argument(
+        "--no-oak-models", action="store_true",
+        help="With --hardware: run no models on the OAK's own chip (face detection, head pose, gaze, face landmarks).",
+    )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    if (args.simulate_motors or args.window or args.record or args.zed) and not args.hardware:
-        parser.error("--simulate-motors, --window, --record and --zed are used together with --hardware")
+    if (args.simulate_motors or args.window or args.record or args.zed or args.no_oak_models) and not args.hardware:
+        parser.error("--simulate-motors, --window, --record, --zed and --no-oak-models are used together with --hardware")
     if args.window and args.no_window:
         parser.error("--window and --no-window contradict each other")
     if args.microphone and not args.record:
@@ -78,6 +82,8 @@ def main() -> None:
     # One OpenBLAS thread for NumPy, set before NumPy loads: its idle workers also spin after
     # each call; the ZED IMU node alone used 6.3% of a core with them and 2.6% without.
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    # The robot stays local: depthai uploads usage events to Luxonis unless told not to.
+    os.environ.setdefault("DEPTHAI_TELEMETRY", "0")
     import cv2
 
     # One OpenCV thread for the whole bot: the pool's idle workers spin between calls, which on
@@ -94,7 +100,7 @@ def main() -> None:
             simulate_motors=args.simulate_motors, show_window=args.window,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
-            port=args.port,
+            port=args.port, oak_models=not args.no_oak_models,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

@@ -2,7 +2,7 @@ import threading
 from collections.abc import Callable
 
 import numpy as np
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectification
 from ultraskelly.core.pubsub.pubsub_abcs import TopicMessageABC, create_topic
@@ -131,6 +131,50 @@ class ServoStateMessage(TopicMessageABC):
     model_config = ConfigDict(frozen=True)
 
 
+class FaceObservation(BaseModel):
+    """One face the OAK's own chip found and measured in one of its frames. Pixels are the frame's."""
+    box: tuple[float, float, float, float]  # x1, y1, x2, y2
+    score: float  # YuNet's confidence, 0 to 1
+    landmarks: np.ndarray  # (5, 2) x, y: right eye, left eye, nose, right and left mouth corner (the person's own sides)
+    head_pose: tuple[float, float, float] | None = None  # Yaw, pitch, roll in degrees, as the head pose network gives them
+    gaze: tuple[float, float, float] | None = None  # Unit gaze direction in the gaze network's axes (docs/stream.md)
+    mesh: np.ndarray | None = None  # (468, 3) MediaPipe face landmarks: x, y and relative depth z, in pixels
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
+class HandObservation(BaseModel):
+    """One hand the OAK's own chip found in one of its frames. Pixels are the frame's."""
+    palm_box: tuple[float, float, float, float]  # x1, y1, x2, y2 of the palm the detector found
+    palm_score: float  # The palm detector's confidence, 0 to 1
+    points: np.ndarray  # (21, 3) MediaPipe hand landmarks: x, y and relative depth z, in pixels
+    presence: float  # The hand landmarker's confidence that a hand is there, 0 to 1
+    handedness: float  # The hand landmarker's handedness score, 0 to 1; above 0.5 it calls the hand a right one
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
+class OakResultsMessage(TopicMessageABC):
+    """What the models on the OAK's own chip found in one OAK frame: its faces, and on the frames
+    they are looked for in, its hands."""
+    faces: list[FaceObservation]
+    hands: list[HandObservation] | None = None  # None: not looked for in this frame; []: none found
+    image_size: tuple[int, int]  # (width, height) of the frame the pixels belong to
+    frame_number: int | None = None  # The OAK frame's number, as in its FrameMessage
+    timestamp: float | None = None  # That frame's capture time, on time.monotonic()'s clock
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
 class PoseDataMessage(TopicMessageABC):
     """Full pose detection data for visualization."""
     keypoints: np.ndarray | None = None  # Shape: (num_people, 17, 3)
@@ -152,6 +196,7 @@ FrameTopic = create_topic(FrameMessage)
 StereoFrameTopic = create_topic(StereoFrameMessage)
 DepthFrameTopic = create_topic(DepthFrameMessage)
 FaceLocationTopic = create_topic(FaceLocationMessage)
+OakResultsTopic = create_topic(OakResultsMessage)
 ImuTopic = create_topic(ImuMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)

@@ -47,6 +47,8 @@ from ultraskelly.core.pubsub.bot_topics import (
     FaceLocationTopic,
     FrameMessage,
     ImuTopic,
+    OakResultsMessage,
+    OakResultsTopic,
     PoseDataMessage,
     PoseDataTopic,
     ServoStateMessage,
@@ -58,6 +60,7 @@ from ultraskelly.core.pubsub.bot_topics import (
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
 from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
 from ultraskelly.ui.imu_stream import encode_imu_batch
+from ultraskelly.ui.oak_stream import oak_trackers
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
@@ -172,6 +175,8 @@ BODY = connection_group(
     "body", [(KEYPOINT_NAMES[start], KEYPOINT_NAMES[end]) for start, end in SKELETON_CONNECTIONS], "#3ddc84"
 )
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
+RESULTS_WAIT_SECONDS = 0.1  # A frame waits at most this long for what the OAK found in it
+RECENT_FRAMES = 16  # Frames of the results camera waiting for their results, at most
 
 
 def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
@@ -194,18 +199,19 @@ def encode_camera_frame(
     jpeg_quality: int,
     scale: float = 1.0,
     resize: Callable[[np.ndarray, tuple[int, int]], np.ndarray] = resize_with_opencv,
+    results: OakResultsMessage | None = None,
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
-    together, shrunk by `scale` when it is below 1, and each person's keypoints in pixels
-    of the first image (so frames with poses keep their size). Pure CPU work, safe to run
-    in a worker thread."""
+    together, shrunk by `scale` when it is below 1, and each person's keypoints and the faces
+    and hands the OAK found in pixels of the first image (so frames with poses keep their
+    size). Pure CPU work, safe to run in a worker thread."""
     if scale < 1:
         cameras = [(camera, index, resize(image, (max(1, round(image.shape[1] * scale)),
                                                   max(1, round(image.shape[0] * scale)))))
                    for camera, index, image in cameras]
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
-    trackers = person_trackers(camera, (width, height), poses)
+    trackers = person_trackers(camera, (width, height), poses) + oak_trackers(camera, results)
     images = [
         PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
         for camera, index, image in cameras
@@ -348,6 +354,10 @@ class CameraFeed:
     encoder: asyncio.Task | None = None  # The task encoding this feed's frames, while one runs
     encoded: int = 0
     last_pose_at: float | None = None
+    # The results camera's frames waiting for what the OAK found in them, by frame number, with when
+    # they arrived; the oldest becomes `pending` once its results are in or its wait is over.
+    waiting: dict[int, tuple[tuple, float]] = field(default_factory=dict)
+    release_timer: asyncio.TimerHandle | None = None  # Ends the oldest waiting frame's wait
 
 
 @dataclass
@@ -386,6 +396,9 @@ class RuntimeServerNode(Node):
     imu_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # imu messages
     imu_sequence: int = Field(default=0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    results_camera: str | None = Field(default=None, description="Camera whose frames the OAK's own models read")
+    results_for: SkipValidation[Callable[[int], OakResultsMessage | None]] = Field(default=lambda number: None, exclude=True)
+    oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
 
     @property
     def clients(self) -> int:
@@ -408,15 +421,20 @@ class RuntimeServerNode(Node):
         motor_tests: MotorTester | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
+        results_camera: str | None = None,
+        results_for: Callable[[int], OakResultsMessage | None] | None = None,
+        oak_status: Callable[[], dict] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
-        `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
-        the dashboard can run motor tests through /api/motor-test. A stereo camera's two
-        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`;
-        a depth frame's as `<name>_rectified` and, with `depth_previews`, `<name>_depth`, the
-        depth drawn in colour.
+        `pose_camera`'s frames travel with the poses detected in them, and `results_camera`'s with
+        the faces and hands the OAK found in them, which `results_for` gives by frame number. With
+        `motor_tests`, the dashboard can run motor tests through /api/motor-test. A stereo camera's
+        two images travel together in one frame message, as cameras `<name>_left` and
+        `<name>_right`; a depth frame's as `<name>_rectified` and, with `depth_previews`,
+        `<name>_depth`, the depth drawn in colour. `oak_status` reports the OAK's model rates and
+        chip load for robot_state.
         """
         node = cls(
             pubsub=pubsub,
@@ -427,7 +445,11 @@ class RuntimeServerNode(Node):
             encode_jpeg=encode_jpeg,
             pose_camera=pose_camera,
             motor_tests=motor_tests,
+            results_camera=results_camera,
+            oak_status=oak_status,
         )
+        if results_for is not None:
+            node.results_for = results_for
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
         feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
@@ -447,6 +469,7 @@ class RuntimeServerNode(Node):
             "pose": pubsub.get_subscription(PoseDataTopic),
             "face": pubsub.get_subscription(FaceLocationTopic),
             "imu": pubsub.get_subscription(ImuTopic),
+            "results": pubsub.get_subscription(OakResultsTopic),  # Wakes frames waiting for their results
         }
         return node
 
@@ -493,6 +516,7 @@ class RuntimeServerNode(Node):
             "rates": {name: round(hz, 1) for name, hz in self.rates.items()},
             "nodes": self.node_status(),
             "motor_test": None if self.motor_tests is None else self.motor_tests.state(),
+            "oak": None if self.oak_status is None else self.oak_status(),
         }
         if servo := self.latest.get("servo_state"):
             message: ServoStateMessage = servo.message
@@ -630,6 +654,9 @@ class RuntimeServerNode(Node):
                         (camera, feed.index + offset, image)
                         for offset, (camera, image) in enumerate(zip(feed.views, images))
                     ]
+                    results = None
+                    if feed.name == self.results_camera and isinstance(camera_frame, FrameMessage):
+                        results = self.results_for(camera_frame.frame_number)
                     message = await asyncio.to_thread(
                         encode_camera_frame, cameras,
                         frame_number=(camera_frame.frame_number if camera_frame.frame_number is not None
@@ -637,6 +664,7 @@ class RuntimeServerNode(Node):
                         timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                         poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
                         scale=self._scale(feed, (images[0].shape[1], images[0].shape[0])), resize=self.resize,
+                        results=results,
                     )
                     feed.stream.publish(message)
                 if depth_shown:  # The depth itself, for depth tiles and 3D views
@@ -644,6 +672,8 @@ class RuntimeServerNode(Node):
                     self.depth_stream.publish(
                         await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence, jpegs)
                     )
+                if feed.waiting:  # The next waiting frame whose results are in, in turn
+                    self._release(feed, time.monotonic())
         except Exception:
             logger.exception("Frame encoding failed")
         finally:
@@ -665,8 +695,9 @@ class RuntimeServerNode(Node):
             if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
                 posed = self.feeds[self.pose_camera]
                 posed.last_pose_at = now
-                posed.pending = (message.frame, message)
-                self._kick(posed)
+                self._offer(posed, (message.frame, message), now)
+            if name == "results" and self.results_camera in self.feeds:
+                self._release_and_kick(self.feeds[self.results_camera])
 
     async def _take_frames(self, feed: CameraFeed) -> None:
         """Count a camera's frames and offer each one for encoding."""
@@ -680,8 +711,50 @@ class RuntimeServerNode(Node):
             # A posed camera's frames come with their poses, unless the detector has stalled.
             poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
             if feed.name != self.pose_camera or not poses_flowing:
-                feed.pending = (camera_frame, None)
-                self._kick(feed)
+                self._offer(feed, (camera_frame, None), now)
+
+    def _offer(self, feed: CameraFeed, entry: tuple, now: float) -> None:
+        """Make a frame (with its poses) the feed's next to encode; the results camera's frames first
+        wait for what the OAK found in them."""
+        number = entry[0].frame_number if isinstance(entry[0], FrameMessage) else None
+        if feed.name != self.results_camera or number is None:
+            feed.pending = entry
+            self._kick(feed)
+            return
+        feed.waiting[number] = (entry, now)
+        while len(feed.waiting) > RECENT_FRAMES:
+            del feed.waiting[min(feed.waiting)]
+        self._release_and_kick(feed)
+
+    def _release(self, feed: CameraFeed, now: float) -> bool:
+        """The oldest waiting frame becomes pending once its results are in or it has waited
+        RESULTS_WAIT_SECONDS; newer frames wait behind it, so a frame whose results take longer is
+        not skipped for a quicker one. One at a time: the encoder takes each in turn, unless it
+        falls behind, when the newest pending one wins as for every feed."""
+        if not feed.waiting:
+            return False
+        number = min(feed.waiting)
+        entry, since = feed.waiting[number]
+        if self.results_for(number) is None and now - since < RESULTS_WAIT_SECONDS:
+            return False
+        del feed.waiting[number]
+        feed.pending = entry
+        return True
+
+    def _release_and_kick(self, feed: CameraFeed) -> None:
+        """Release the oldest waiting frame if it is ready and encode it; check again when its wait ends."""
+        now = time.monotonic()
+        if self._release(feed, now):
+            self._kick(feed)
+        if feed.waiting and feed.release_timer is None:
+            since = feed.waiting[min(feed.waiting)][1]
+            feed.release_timer = asyncio.get_running_loop().call_later(
+                max(0.0, since + RESULTS_WAIT_SECONDS - now), self._wait_over, feed
+            )
+
+    def _wait_over(self, feed: CameraFeed) -> None:
+        feed.release_timer = None
+        self._release_and_kick(feed)
 
     async def _publish_state(self) -> None:
         """Publish robot state at state_hz while anyone watches."""
@@ -709,6 +782,9 @@ class RuntimeServerNode(Node):
             for task in done:
                 task.result()
         finally:
+            for feed in self.feeds.values():
+                if feed.release_timer is not None:
+                    feed.release_timer.cancel()
             tasks = [stopped, *parts, *(feed.encoder for feed in self.feeds.values() if feed.encoder is not None)]
             for task in tasks:
                 task.cancel()

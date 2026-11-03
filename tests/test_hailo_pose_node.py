@@ -58,3 +58,16 @@ def test_pose_data_without_people_follows_nobody():
 
     assert pose.target_person is None
     assert pose.target == target and (target.x, target.y, target.angle) == (None, None, None)
+
+
+def test_the_letterbox_padding_is_filled_once_per_frame_size():
+    node = HailoPoseDetectorNode(pubsub=PubSubTopicManager.create(), params=HailoPoseDetectorParams())
+    node.input_size, node.input_buffer = 640, np.zeros((640, 640, 3), np.uint8)
+
+    node._letterbox(np.full((480, 640, 3), 7, np.uint8))
+    assert node.input_buffer[0, 0, 0] == node.input_buffer[639, 0, 0] == 114 and node.input_buffer[80, 0, 0] == 7
+    node.input_buffer[0] = 1  # Marks the padding: an unchanged frame size must leave it alone
+    node._letterbox(np.full((480, 640, 3), 9, np.uint8))
+    assert node.input_buffer[0, 0, 0] == 1 and node.input_buffer[559, 0, 0] == 9
+    node._letterbox(np.full((360, 640, 3), 5, np.uint8))  # A new size fills it again
+    assert node.input_buffer[0, 0, 0] == 114 and node.input_buffer[140, 0, 0] == 5
