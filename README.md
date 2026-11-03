@@ -108,6 +108,7 @@ and the poses found in it, and `robot_state` messages with motor commands, targe
 and node health. The browser decodes them with FreeMoCap's `@freemocap/client` and
 draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
 `scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
+[The dashboard layout](docs/dashboard.md) describes its panels and sizing.
 
 The dashboard's **Motor test** panel moves one actuator at a time: pan or tilt by 10°
 or to center, a short waist pulse either way, or a jaw opening pulse. Tests are separate

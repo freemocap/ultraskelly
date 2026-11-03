@@ -8,39 +8,80 @@
   <link rel="stylesheet" href="/dashboard.css">
   <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
 </head>
-<body>
-<header><div class="brand"><span class="mark">U/S</span><div><h1>UltraSkelly <span> / live</span></h1></div></div><div class="status"><span id="connection">Connecting…</span><span id="motor-mode" class="pill">—</span></div></header>
-<main>
-  <aside class="controls">
-    <section title="Values sent to the servo and motor boards. There is no waist or jaw angle sensor."><div class="section-title"><h2>Motor commands</h2><span>SENT, NOT MEASURED</span></div>
-      <table><thead><tr><th>Actuator</th><th>Command</th><th>Age</th></tr></thead><tbody>
-        <tr><td>Head pan</td><td id="pan">—</td><td id="pan-age">—</td></tr>
-        <tr><td>Head tilt</td><td id="tilt">—</td><td id="tilt-age">—</td></tr>
-        <tr><td>Waist drive</td><td id="waist">—</td><td id="waist-age">—</td></tr>
-        <tr><td>Jaw drive</td><td id="mouth">—</td><td id="mouth-age">—</td></tr>
-      </tbody></table>
-      <p class="note">Pan and tilt are servo angles. Waist and jaw are motor throttle, −1 to +1; negative jaw drive opens it.</p>
-    </section>
-    <section id="motor-test" aria-label="Move one actuator at a time"></section>
-    <section><div class="section-title"><h2>Target</h2><span id="target-state">NO TARGET</span></div>
-      <canvas id="camera" width="640" height="480" aria-label="Target position in the camera frame"></canvas>
-      <div class="camera-meta"><span id="target-pixel">—</span><span id="target-angle">—</span></div>
-    </section>
-  </aside>
-  <div class="center">
-    <section class="stage"><div class="stage-head"><span class="eyebrow">LIVE COMMANDS ON THE SKELETON</span><button id="view-reset">Reset view</button></div>
-      <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
-      <div class="stage-foot"><span>Head follows pan/tilt commands · jaw opens while driven · arrow shows waist drive</span><span>Drag to orbit · Scroll to zoom</span></div>
-    </section>
-    <section class="videos"><div class="section-title"><h2>Camera video</h2><span>POSE, TARGET AND AIM DRAWN IN THE BROWSER</span></div><div id="video-grid"><p class="note">No cameras in this run.</p></div></section>
-    <section class="health"><div class="section-title"><h2>Nodes</h2><span id="node-summary">—</span></div><div id="nodes"></div></section>
+<body class="dashboard">
+<header>
+  <div class="brand"><span class="mark">U/S</span><h1>UltraSkelly <span>/ live</span></h1></div>
+  <div class="status">
+    <span id="connection">Connecting…</span>
+    <span id="state-rate" title="robot_state messages per second">—</span>
+    <span id="motor-mode" class="pill">—</span>
   </div>
-  <aside class="inspector">
-    <section><h2>Message rates</h2><dl id="rates"></dl></section>
-    <section><h2>Cameras</h2><dl id="cameras"></dl></section>
-    <section><h2>Connection</h2><dl><dt>Snapshots</dt><dd id="snapshot-rate">—</dd><dt>Last snapshot</dt><dd id="snapshot-age">—</dd></dl></section>
-    <div class="model-note"><strong>Live commands</strong><p>The skeleton shows what the motors are told to do. Without position sensors it cannot show where they actually are.</p></div>
+</header>
+<main class="layout">
+  <section class="stage" aria-label="3D scene">
+    <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
+    <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p></div>
+    <div class="stage-foot">
+      <span class="hint">Drag to orbit · scroll to zoom</span>
+      <div class="views" role="group" aria-label="Camera view">
+        <button data-view="orbit" aria-pressed="true">Orbit</button><button data-view="behind">Behind head</button><button data-view="side">Side</button><button data-view="top">Top</button>
+      </div>
+    </div>
+  </section>
+  <div id="enlarged" class="enlarged" hidden>
+    <canvas aria-label="Enlarged camera view"></canvas>
+    <div class="enlarged-bar"><span id="enlarged-label"></span><button id="enlarged-close" title="Back to the 3D scene (Esc)">Close</button></div>
+  </div>
+  <aside id="motor-drawer" class="drawer" aria-label="Motor tests" hidden>
+    <button id="motor-drawer-close" class="drawer-close" title="Close the motor tests" aria-label="Close the motor tests">×</button>
+    <section id="motor-test" aria-label="Move one actuator at a time"></section>
   </aside>
+  <div class="sensors">
+    <section class="sensor oak" aria-label="Tracking camera">
+      <div class="sensor-title"><h2>Tracking camera <span id="tracking-name">OAK</span></h2><span id="oak-rate" class="rate">—</span></div>
+      <figure class="tile" data-camera="oak" data-label="Tracking camera (OAK)" title="Click to enlarge">
+        <canvas width="640" height="480" aria-label="OAK video with the poses found in each frame"></canvas>
+      </figure>
+      <div class="target-row">
+        <span id="target-state" class="badge">No target</span>
+        <span id="target-pixel">—</span><span id="target-angle"></span><span id="target-lock"></span><span id="target-age"></span>
+      </div>
+    </section>
+    <section class="sensor zed" aria-label="Eyes and depth">
+      <div class="sensor-title"><h2>Eyes and depth <span>ZED Mini</span></h2><span id="zed-rate" class="rate">—</span></div>
+      <div class="tiles">
+        <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>Left eye</figcaption><p class="empty">No ZED video yet</p></figure>
+        <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>Right eye</figcaption><p class="empty">No ZED video yet</p></figure>
+        <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty">No depth yet</p></figure>
+        <figure class="tile" data-camera="depth_raw" data-label="Raw depth" title="Click to enlarge"><canvas aria-label="Raw depth"></canvas><figcaption>Raw depth</figcaption><p class="empty">No depth yet</p></figure>
+      </div>
+      <div class="depth-legend" id="depth-legend">Depth aligned to the left eye</div>
+    </section>
+  </div>
+  <div class="strip">
+    <section class="card motors" title="Values sent to the servo and motor boards. There is no waist or jaw angle sensor.">
+      <div class="card-title"><h2>Motor commands</h2><span>Sent, not measured</span></div>
+      <table>
+        <tr data-motor="pan"><th>Head pan</th><td class="value">—</td><td class="meter"><i></i></td><td class="age">—</td></tr>
+        <tr data-motor="tilt"><th>Head tilt</th><td class="value">—</td><td class="meter"><i></i></td><td class="age">—</td></tr>
+        <tr data-motor="waist"><th>Waist drive</th><td class="value">—</td><td class="meter signed"><i></i></td><td class="age">—</td></tr>
+        <tr data-motor="mouth"><th>Jaw drive</th><td class="value">—</td><td class="meter signed"><i></i></td><td class="age">—</td></tr>
+      </table>
+    </section>
+    <section class="card tests">
+      <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds">—</span></div>
+      <p id="tests-status" class="tests-status">Checking…</p>
+      <div class="tests-buttons"><button id="tests-open">Open</button><button id="tests-stop" class="stop">■ Stop</button></div>
+    </section>
+    <section class="card nodes">
+      <div class="card-title"><h2>Nodes</h2><span id="node-summary">—</span></div>
+      <div id="nodes"></div>
+    </section>
+    <section class="card rates">
+      <div class="card-title"><h2>Rates and link</h2><span id="snapshot-age">—</span></div>
+      <dl id="rates"></dl>
+    </section>
+  </div>
 </main>
 <div id="error" role="alert" hidden></div>
 <script type="module" src="/dashboard.js"></script>

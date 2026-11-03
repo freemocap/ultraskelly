@@ -110,7 +110,7 @@ def test_dashboard_assets_are_served_locally_with_explicit_types():
         server = make_server(bus, encoded=[])
         served = {}
         async with TestClient(TestServer(server.build_app())) as client:
-            for path in ["/", "/dashboard.js", "/dashboard.css", "/style.css", "/skeleton.js",
+            for path in ["/", "/dashboard.js", "/dashboard.css", "/scene.js", "/tiles.js", "/style.css", "/skeleton.js",
                          "/vendor/three.module.js", "/vendor/three.core.js", "/vendor/OrbitControls.js",
                          "/vendor/freemocap-client.js", "/vendor/freemocap-client.js.map"]:
                 response = await client.get(path)
