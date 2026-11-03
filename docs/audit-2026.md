@@ -791,6 +791,11 @@ read's reports and time to the node, and starts it again if it stops. In the ful
 `--record`, `imu.csv` held all 35,795 samples of a 45 s run, none missed. The dashboard gets
 them as `imu` messages, about 15 batches a second (docs/stream.md).
 
+NumPy's OpenBLAS thread pool spins after each call, like OpenCV's: the IMU node alone used
+6.3% of a core with the default pool and 2.6% with one thread. `python -m ultraskelly` now
+sets `OPENBLAS_NUM_THREADS=1` before NumPy loads. Its effect on the whole bot is not
+measured yet: the robot was in use by the other workstreams.
+
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 
 FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
