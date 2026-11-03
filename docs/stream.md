@@ -128,6 +128,32 @@ On the producer side, `freemocap-stream` rejects non-integer frame numbers, came
 indices, widths and heights (NumPy integers are fine, floats are not) and non-finite
 timestamps.
 
+## What a viewer draws
+
+A viewer may tell the server what it draws, so the Pi encodes only the feeds someone shows.
+It sends one JSON text message on `/stream`, FreeMoCap's inbound display feedback
+(`TransportService.sendDisplayFeedback`) with one more field:
+
+```json
+{"frameNumber": 1234,
+ "displayImageSizes": {"oak": {"width": 640, "height": 480},
+                       "zed_left": {"width": 317, "height": 178}, "zed_right": {"width": 317, "height": 178}},
+ "kinds": ["depth_frame"]}
+```
+
+- `displayImageSizes`: every camera ID the viewer draws, with the size in device pixels it
+  draws it at. A camera that is not listed is not wanted. A stereo pair is wanted when
+  either eye is listed.
+- `kinds`: the application kinds the viewer wants besides `robot_state`, which always
+  flows. Today that is `depth_frame`.
+- `frameNumber`: the newest frame the viewer drew.
+
+The dashboard sends it after every connect and whenever what it shows changes, at most
+every 250 ms: a tile scrolled out of view, a tile enlarged, the 3D depth turned off, or the
+page hidden, which asks for nothing. A viewer that never sends one gets every feed.
+`robot_state.cameras` keeps reporting every camera. Status: the dashboard sends it; the
+server does not act on it yet.
+
 ## Checking a stream
 
 `scripts/stream_acceptance.py` runs FreeMoCap's consumer acceptance checks against any
