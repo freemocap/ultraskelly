@@ -188,7 +188,7 @@ def test_a_palm_becomes_a_hand_crop_request_and_the_hand_joins_its_frame():
     hand_request = node.crop_requests.sent[1]
     [detection] = hand_request.detections
     assert (detection.label, detection.confidence, hand_request.sequence) == (5, 0.0, 9)
-    (x, y), (width, height), angle = detection.rect.center, detection.rect.size, detection.rect.angle
+    (x, _), (width, height), angle = detection.rect.center, detection.rect.size, detection.rect.angle
     assert x == pytest.approx(0.5, abs=0.04) and angle == pytest.approx(0.0)  # The anchor nearest the middle
     assert width * 640 == pytest.approx(height * 480)  # A square in pixels, normalized per axis
     assert published(node) == []

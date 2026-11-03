@@ -10,7 +10,6 @@ from ultraskelly.core.pubsub.bot_topics import (
     FaceObservation,
     HandObservation,
     OakResultsMessage,
-    OakResultsTopic,
     FrameMessage,
     FrameTopic,
     PoseDataMessage,
