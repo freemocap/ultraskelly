@@ -52,7 +52,7 @@ says where the head is steering in this image:
 | Column | Meaning |
 | --- | --- |
 | `x`, `y` | the target keypoint (the nose by default) in whole pixels of `image_size`, as the controllers receive it |
-| `body_angle_deg` | the shoulder line's angle from vertical in degrees, -90 to 90 (±90 for level shoulders, the sign set by which shoulder is on the left of the image); 0 when the shoulders are not visible |
+| `body_angle_deg` | the shoulder line's angle from vertical in degrees, -90 to 90 (Â±90 for level shoulders, the sign set by which shoulder is on the left of the image); 0 when the shoulders are not visible |
 
 It has one row, named `target`, with the same `camera_id` and `image_size` as the person's
 keypoints. It is absent when the head follows nobody: no person, or the best person's

@@ -505,8 +505,8 @@ address, so not a secure context): against the synthetic camera all eight checks
 including identities kept through row reordering (303 of 303 frames), the custom channel's
 descriptor and values, retries stopping after a disconnect during a connection failure,
 and a reconnect drawing its first frame without earlier messages. Against the bot, with
-the OAK and the Hailo-8 and simulated motors, the five checks that need nobody in view
-passed: 30.1 frames/s decoded and drawn and 19.1 `robot_state`/s. Per frame on the OAK's
+the OAK and the Hailo-8 and simulated motors, the five checks that do not need people in
+view passed: 30.1 frames/s decoded and drawn and 19.1 `robot_state`/s. Per frame on the OAK's
 29 KB frames:
 
 | Protocol | ms | Image path | ms |
