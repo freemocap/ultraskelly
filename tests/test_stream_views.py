@@ -60,8 +60,16 @@ def oak(value, **fields):
     return FrameMessage(frame=np.full((4, 6, 3), value, np.uint8), **fields)
 
 
+def stereo(value, size=(6, 4)):
+    """A ZED pair as the camera sends it, YUYV, its eyes' brightness `value` and `value + 1`."""
+    width, height = size
+    yuyv = np.full((height, 2 * width, 2), 128, np.uint8)
+    yuyv[:, :width, 0], yuyv[:, width:, 0] = value, value + 1
+    return StereoFrameMessage(yuyv=yuyv)
+
+
 def zed(value):
-    return StereoFrameMessage(left=np.full((4, 6, 3), value, np.uint8), right=np.full((4, 6, 3), value + 1, np.uint8))
+    return stereo(value)
 
 
 def depth(value):
@@ -275,9 +283,7 @@ EYES = (672, 376)  # The ZED's eyes at VGA, width and height
 
 
 def eyes(value):
-    width, height = EYES
-    return StereoFrameMessage(left=np.full((height, width, 3), value, np.uint8),
-                              right=np.full((height, width, 3), value + 1, np.uint8))
+    return stereo(value, EYES)
 
 
 def sent_sizes(inbox):
@@ -341,16 +347,25 @@ def test_the_oak_keeps_its_pixels_for_its_guides_and_poses():
 
 
 def test_the_resize_averages_colour_and_keeps_depth_values_exact():
-    pytest.importorskip("cv2", reason="OpenCV comes with the hardware extra")
+    cv2 = pytest.importorskip("cv2", reason="OpenCV comes with the hardware extra")
     colour = np.zeros((376, 672, 3), np.uint8)
     colour[:, ::2] = 200  # Alternate columns: averaging gives about 100
     depth_image = np.zeros((376, 672), np.uint16)
     depth_image[:, ::2] = 1500
+    yuyv = np.full((376, 672, 2), 128, np.uint8)  # A grey eye as the ZED sends it: no colour
+    yuyv[:, ::2, 0] = 200  # Brightness 200 and 128 in alternate columns, 164 on average
+    averaged = np.full((2, 2, 2), 128, np.uint8)
+    averaged[..., 0] = 164
 
     small_colour, small_depth = resize_with_opencv(colour, (336, 188)), resize_with_opencv(depth_image, (336, 188))
+    small_eye = resize_with_opencv(stereo(0, (672, 376)).eye(0), (336, 188))  # A view into the pair's frame
+    grey_eye = resize_with_opencv(yuyv, (336, 188))
 
     assert small_colour.shape == (188, 336, 3) and abs(int(small_colour.mean()) - 100) <= 1
     assert small_depth.dtype == np.uint16 and set(np.unique(small_depth)) <= {0, 1500}
+    assert small_eye.shape == grey_eye.shape == (188, 336, 3)  # Eyes come back as RGB
+    assert np.ptp(grey_eye.reshape(-1, 3).mean(axis=0)) < 2  # Still grey
+    assert abs(grey_eye.mean() - cv2.cvtColor(averaged, cv2.COLOR_YUV2RGB_YUYV).mean()) <= 1  # Averaged
 
 
 def test_display_feedback_is_read_in_freemocaps_shape_with_kinds():

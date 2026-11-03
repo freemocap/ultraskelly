@@ -131,11 +131,15 @@ def depth_to_rgb(depth: np.ndarray) -> np.ndarray:
 
 
 def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
-    """Encode an RGB frame as JPEG; a 2-D uint16 depth image is drawn in colour first."""
+    """Encode an RGB frame as JPEG, or a (height, width, 2) YUYV one as the ZED sends it, each
+    converted once, straight into the BGR OpenCV encodes; a 2-D uint16 depth image is drawn
+    in colour first."""
     import cv2
 
     if frame.ndim == 2 and frame.dtype == np.uint16:
         bgr = depth_to_bgr(frame)
+    elif frame.ndim == 3 and frame.shape[2] == 2:
+        bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_YUYV)
     else:
         bgr = cv2.cvtColor(np.ascontiguousarray(frame[..., :3]), cv2.COLOR_RGB2BGR)
     ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -145,9 +149,12 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
 
 
 def resize_with_opencv(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
-    """`image` at `size` (width, height), averaging pixels; a uint16 depth image keeps exact values."""
+    """`image` at `size` (width, height), averaging pixels. A YUYV image comes back as RGB, since
+    its interleaved colour cannot be averaged; a uint16 depth image keeps exact values."""
     import cv2
 
+    if image.ndim == 3 and image.shape[2] == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_YUV2RGB_YUYV)
     nearest = image.ndim == 2 and image.dtype == np.uint16
     return cv2.resize(image, size, interpolation=cv2.INTER_NEAREST if nearest else cv2.INTER_AREA)
 
@@ -165,10 +172,10 @@ POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its
 
 
 def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
-    """The images a camera message carries: one, a stereo pair's left then right, or a
-    depth frame's rectified left image then its depth."""
+    """The images a camera message carries, unconverted: one, a stereo pair's left then right
+    eye (YUYV views), or a depth frame's rectified left image then its depth."""
     if isinstance(message, StereoFrameMessage):
-        return [message.left, message.right]
+        return [message.eye(0), message.eye(1)]
     if isinstance(message, DepthFrameMessage):
         return [message.color, message.depth]
     return [message.frame]

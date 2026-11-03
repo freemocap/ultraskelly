@@ -34,18 +34,33 @@ class FrameMessage(TopicMessageABC):
 
 
 class StereoFrameMessage(TopicMessageABC):
-    """A stereo camera's two images, captured together (the ZED Mini in the skull's eye sockets)."""
-    left: np.ndarray  # RGB (height, width, 3): the skeleton's left eye, on the camera's left looking out
-    right: np.ndarray  # RGB, the same size: the skeleton's right eye
+    """A stereo camera's two eyes, captured together, as the camera sends them: one YUYV frame
+    with the left eye's half first (the ZED Mini in the skull's eye sockets; its left eye is the
+    skeleton's left, on the camera's left looking out). Each consumer converts only what it
+    needs: `grey` is an eye's Y bytes as they are, with no colour conversion; colour comes
+    from `eye` with OpenCV (`yuyv_to_rgb_with_opencv`, or COLOR_YUV2BGR_YUYV for JPEG)."""
+    yuyv: np.ndarray  # (height, 2 * width, 2) uint8: each pixel's Y, then alternately U and V
     frame_number: int | None = None  # Counts camera frame periods, so a dropped frame skips a number
     timestamp: float | None = None  # Capture time in seconds on time.monotonic()'s clock, when known
-    # The camera both images now share, when they were rectified; None for the camera's own images.
-    rectification: StereoRectification | None = None
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         frozen=True
     )
+
+    @property
+    def eye_size(self) -> tuple[int, int]:
+        """One eye's (width, height)."""
+        return self.yuyv.shape[1] // 2, self.yuyv.shape[0]
+
+    def eye(self, index: int) -> np.ndarray:
+        """Eye `index` (0 left, 1 right) as YUYV, (height, width, 2): a view, not a copy."""
+        width = self.yuyv.shape[1] // 2
+        return self.yuyv[:, index * width:(index + 1) * width]
+
+    def grey(self, index: int) -> np.ndarray:
+        """Eye `index`'s brightness, (height, width) uint8: its Y bytes, copied out."""
+        return np.ascontiguousarray(self.eye(index)[..., 0])
 
 
 class DepthFrameMessage(TopicMessageABC):
