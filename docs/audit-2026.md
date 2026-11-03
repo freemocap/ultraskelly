@@ -390,24 +390,71 @@ and a PWM whine near 1.6 kHz with harmonics. The camera saw the torso swing back
 12-25 deg/s after each brake, a wobble of about 2 Hz. The motor board's PCA9685 already
 runs at its highest PWM frequency, so the whine cannot be moved above hearing.
 
-**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses. The waist starts
-when the head's pan is over 15 degrees from neutral, regardless of lock, and keeps turning
-toward the gaze until the head is within 5 degrees. Each move starts at 0.45, ramps up at
-1.5 per second to 0.7 plus 0.008 per degree beyond 15 (at most 0.8; 0.7 was the old
-controller's floor for static friction and stays until measured), ramps down at 2 per
-second, releases the motor at 0.4 to coast, and brakes it 0.3 s later. Reversing passes
-through that stop. A move lasting 6 s ramps down and rests 2 s, the remaining limit on
-continuous drive. Losing the target ramps the waist down; stopping the bot still brakes at
-once. These levels are provisional: the simulator (a linear plant) shows 9-17 moves of 1-6 s
-per minute of a sweeping target instead of half-second bursts, but no robot measurement
-exists yet. Round 2 of the sound test with the Yeti X (ALSA card 3, mixer 0-21 dB, run at
-12) waits for the robot's rebuild, as does a recorded tracking run comparing old and new.
-The sound test now centers and holds the head, refuses to run while the OAK sees too
-little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with the
-lens covered), bounds its return move by the measured angle, measures where the waist
-breaks loose and stalls, and has a `drive` profile that replays the bot's own drive.
-`scripts/analyze_run.py` summarizes a recorded run: what was kept, the waist's moves and
-stops, and the sound while it moves.
+**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses with one continuous
+move per recentering. With the microphone shelved (the Yeti X left the Pi; round 2 is
+deferred, not cancelled), its shape follows published guidance and round 1's data:
+
+- *Slow decay.* The waist motor brakes between PWM pulses (adafruit_motor `SLOW_DECAY`).
+  That is the TB6612FNG's own PWM mode, alternating drive and short brake
+  ([datasheet](https://toshiba.semicon-storage.com/info/TB6612FNG_datasheet_en_20141001.pdf));
+  adafruit_motor defaults to fast decay, which leaves both inputs low (high impedance)
+  between pulses ([API](https://docs.circuitpython.org/projects/motor/en/latest/api.html)).
+  Slow decay recirculates the current through the low-side switches with less ripple
+  ([TI SLVA321](https://www.ti.com/lit/pdf/slva321)). Adafruit's measurements on a geared
+  hobby motor found it lowers the slowest speed the motor can turn at from 3000 to 1200 RPM
+  and makes speed follow throttle almost linearly
+  ([guide](https://learn.adafruit.com/improve-brushed-dc-motor-performance)). That
+  matches the waist's behavior: nothing below about 0.7 in fast decay, then a lurch.
+- *PWM frequency stays at the PCA9685's top* (prescale 3, about 1.5 kHz). The chip
+  offers 24-1526 Hz, the same for every output
+  ([datasheet](https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf)), so the usual
+  advice to switch above 20 kHz to avoid audible ripple
+  ([Portescap](https://www.portescap.com/-/media/project/automation-specialty/portescap/portescap/pdf/whitepapers/wp_controlling_brushed_dc_motors_using_pwm.pdf))
+  would need the bridge's PWM pin driven by the Pi's own hardware PWM, a rewiring.
+  Adafruit's guide recommends 50-100 Hz for low-speed torque but warns of chatter, and
+  ripple grows as the frequency falls. A lower frequency is the first thing to try once
+  the microphone is back: `LaunchConfig.motor_pwm_hz` sets it for both motor factories,
+  which must agree because the board has one PWM clock (the jaw's factory used to reset
+  it). A 2025 scratch test (`scratch/motor_pwm_test.py`) listed 5-25 kHz, beyond the
+  chip, and kept only 1600 Hz; it ran the jaw at full drive, where nothing switches, so it
+  says nothing about the whine.
+- *S-curve ramps.* Jerk-limited profiles spread each change of acceleration over time and
+  inject less vibration, and so less noise, than linear ramps with corners
+  ([PMD](https://info.pmdcorp.com/hubfs/Resources/Articles%20and%20Papers/s-curve-motion-profiles-are-vital-PMDCORP.pdf),
+  [Zaber](https://www.zaber.com/articles/jerk-control)). The drive's rate is limited to
+  1.5 per second rising and 2 falling, and its change to 10 per second squared, so torque
+  never steps and no ramp has a corner.
+- *Gentle start, lower running drive, bounded breakaway.* Static friction exceeds running
+  friction, and pushing harder until the error clears makes a mechanism with friction
+  hunt in a limit cycle ([friction and backlash](http://wescottdesign.com/articles/Friction/friction.pdf)).
+  A move starts at 0.15 and eases up to a running drive of 0.5 at 15 degrees, plus 0.008
+  per degree, at most 0.7. Only while the head shows no progress (2 degrees within 0.5 s
+  at the running drive) does extra drive build, 0.3 per second toward 0.8, the hard limit.
+  It drains at the same rate once the head comes back, a leaky integrator, so a waist that
+  breaks loose does not lurch.
+- *Ramp down, coast, then brake.* Round 1 saw the torso swing back at 12-25 deg/s after
+  each brake at speed. With slow decay a falling drive slows the motor with it; the
+  motor is released at 0.2 to coast and braked 0.3 s later, once still.
+- *Deadband with hysteresis.* The same paper's cure for hunting is a deadband at least as
+  wide as the jump the motor makes when it restarts. The waist starts past 15 degrees and
+  stops within 5, and a stopping move never resumes, so it rests between the two.
+
+A move lasting 6 s still ramps down and rests 2 s, the remaining limit on continuous
+drive. Losing the target ramps the waist down; stopping the bot still brakes at once. In
+the simulator (now with optional friction), a minute of sweeping target gives 8-13
+continuous moves of 1.3-6.4 s, none ending in a brake at speed. With friction slowing the
+simulated waist it could not keep up with the sweep and hit the 6 s limit twice a minute.
+With breakaway set above the running drive, the waist still starts and recenters the head
+on a still target. Within a move the drive changes by at most 0.02 per 10 ms tick, and its
+slope by at most 0.002. None of these
+levels has run on the robot: they wait for the motors and, for loudness, the microphone.
+Round 1's speed (18-23 deg/s at 0.75 in fast decay) is the only measured anchor. Round 2's
+tools remain: the sound test centers and holds the head, refuses to run while the OAK sees
+too little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with
+the lens covered), bounds its return move by the measured angle, measures where the waist
+breaks loose and stalls, and its `drive` profile replays the bot's own drive for one
+recentering. `scripts/analyze_run.py` summarizes a recorded run: what was kept, the
+waist's moves and stops, and the sound while it moves.
 
 **Motor board writes.** While the servo board's loose jumper disturbed the I2C bus, motor
 board transfers failed with EAGAIN after lost arbitration. adafruit_motor writes a DC
@@ -416,11 +463,32 @@ on before the second, so a brake cut short there drives the motor at full power.
 recording wrappers now retry a failed write (3 attempts, stops 10). They also send an
 unchanged throttle again only every 0.5 s: the 100 Hz controllers had been rewriting both
 motors' unchanged values, about 400 transfers a second on a 100 kHz bus, roughly a fifth of
-the event loop's time. A bus that dies for good between a brake's two transfers remains
-uncovered; writing both channels in one transfer (motor 1 uses channels 9 and 10, motor 2
-uses 11 and 12) would close it. If the bot exits without its cleanup (killed, or crashed
-in native code), the motor board keeps its last command: `scripts/stop_motors.py` brakes
-all four motors and suits a service's `ExecStopPost`.
+the event loop's time. `motor/bridge_motor.py` now sets both of a motor's bridge inputs in
+one transfer. The PCA9685 changes its outputs when a transfer ends, however many PWM
+registers it carried (MODE2's OCH bit, 0 by default; NXP data sheet Rev. 4, Table 6), and
+each motor's inputs are neighbouring channels (motor 1 uses 9 and 10, motor 2 uses 11 and
+12), so the two inputs switch together and a failed transfer changes neither. On the Pi,
+against adafruit_pca9685 3.4.20 and adafruit_motor 3.4.18 over a recording bus, it left
+the same register values as the libraries' own DCMotor for every throttle in both decay
+modes, in one transfer where theirs took two. The bot's motor factories, the stop script
+and the bench scripts all drive the motors this way. If the bot exits without its
+cleanup (killed, or crashed in native code), the motor board keeps its last command:
+`scripts/stop_motors.py` brakes all four motors, and the bot service runs it after every
+exit unless another program holds the robot lock.
+
+**Motor watchdog.** The controllers and their cleanup run on the bot's event loop, so a
+loop that stalls mid-move would leave the waist turning. `motor/motor_watchdog.py` runs on
+its own thread. The orientation controller's first tick arms it, so the slow camera and
+Hailo startup does not count. When no tick comes for 0.5 s it brakes both DC motors once,
+through the same wrappers, so the brake is retried and recorded. When ticks resume, the
+waist drive, having seen no update for over 0.5 s, starts its next move from rest rather
+than jumping back to its old drive. It is the fastest of three layers. The stall monitor
+stops the bot when camera frames or pose results stop for 5 s. systemd kills a bot whose
+event loop stops pinging it for 30 s and then brakes the motors through the stop script.
+A stall in code that holds Python's global interpreter lock also stops the watchdog's
+thread; those reach the systemd watchdog. Tested on Windows with a blocked event loop,
+braked from the thread 0.15-0.4 s after the last tick, with a 0.2 s timeout; not yet run
+with the motor boards.
 
 **Motor tests.** The dashboard can move one actuator at a time through its own command
 contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it
