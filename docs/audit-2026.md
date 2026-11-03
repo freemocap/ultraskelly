@@ -463,11 +463,32 @@ on before the second, so a brake cut short there drives the motor at full power.
 recording wrappers now retry a failed write (3 attempts, stops 10). They also send an
 unchanged throttle again only every 0.5 s: the 100 Hz controllers had been rewriting both
 motors' unchanged values, about 400 transfers a second on a 100 kHz bus, roughly a fifth of
-the event loop's time. A bus that dies for good between a brake's two transfers remains
-uncovered; writing both channels in one transfer (motor 1 uses channels 9 and 10, motor 2
-uses 11 and 12) would close it. If the bot exits without its cleanup (killed, or crashed
-in native code), the motor board keeps its last command: `scripts/stop_motors.py` brakes
-all four motors and suits a service's `ExecStopPost`.
+the event loop's time. `motor/bridge_motor.py` now sets both of a motor's bridge inputs in
+one transfer. The PCA9685 changes its outputs when a transfer ends, however many PWM
+registers it carried (MODE2's OCH bit, 0 by default; NXP data sheet Rev. 4, Table 6), and
+each motor's inputs are neighbouring channels (motor 1 uses 9 and 10, motor 2 uses 11 and
+12), so the two inputs switch together and a failed transfer changes neither. On the Pi,
+against adafruit_pca9685 3.4.20 and adafruit_motor 3.4.18 over a recording bus, it left
+the same register values as the libraries' own DCMotor for every throttle in both decay
+modes, in one transfer where theirs took two. The bot's motor factories, the stop script
+and the bench scripts all drive the motors this way. If the bot exits without its
+cleanup (killed, or crashed in native code), the motor board keeps its last command:
+`scripts/stop_motors.py` brakes all four motors, and the bot service runs it after every
+exit unless another program holds the robot lock.
+
+**Motor watchdog.** The controllers and their cleanup run on the bot's event loop, so a
+loop that stalls mid-move would leave the waist turning. `motor/motor_watchdog.py` runs on
+its own thread. The orientation controller's first tick arms it, so the slow camera and
+Hailo startup does not count. When no tick comes for 0.5 s it brakes both DC motors once,
+through the same wrappers, so the brake is retried and recorded. When ticks resume, the
+waist drive, having seen no update for over 0.5 s, starts its next move from rest rather
+than jumping back to its old drive. It is the fastest of three layers. The stall monitor
+stops the bot when camera frames or pose results stop for 5 s. systemd kills a bot whose
+event loop stops pinging it for 30 s and then brakes the motors through the stop script.
+A stall in code that holds Python's global interpreter lock also stops the watchdog's
+thread; those reach the systemd watchdog. Tested on Windows with a blocked event loop,
+braked from the thread 0.15-0.4 s after the last tick, with a 0.2 s timeout; not yet run
+with the motor boards.
 
 **Motor tests.** The dashboard can move one actuator at a time through its own command
 contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it

@@ -118,9 +118,11 @@ the other DC motor. Set `motor_tests.enabled` to False to turn the panel off. Wi
 `python -m ultraskelly.replay --serve`, which needs no hardware.
 
 The waist turns toward where the head looks in continuous, ramped moves
-(`motor/waist_drive.py`). If the bot ever exits without stopping its motors, for
-example when killed, the motor board keeps its last command:
-`.venv/bin/python -m scripts.stop_motors` brakes them all.
+(`motor/waist_drive.py`). A watchdog thread brakes both DC motors if the control loop
+stalls for half a second (`motor/motor_watchdog.py`), and each motor command sets both of a
+motor's bridge inputs in one I2C transfer (`motor/bridge_motor.py`). If the bot ever exits
+without stopping its motors, for example when killed, the motor board keeps its last
+command: `.venv/bin/python -m scripts.stop_motors` brakes them all.
 
 Add `--record` to save the run under `~/ultraskelly-recordings/run-<time>/`: the OAK video
 as it reached the bot, the poses found in each frame, targets, head state and every motor
