@@ -1,7 +1,7 @@
 // Depth views (docs/depth-stream.md). Each depth_frame is copied out of the stream decoder, whose
 // storage a later message may reuse, and decoded in depth-worker.js. Its results draw the heat-map
-// and raw tiles and the metre scale, answer "how far is that?" under the cursor, and feed the 3D
-// point cloud and mesh. Newest wins: while the worker is busy, only the newest frame waits.
+// tile and its metre scale, answer "how far is that?" under the cursor, and feed the 3D point cloud
+// and mesh. Newest wins: while the worker is busy, only the newest frame waits.
 import { turboGradient } from '/colormap.js';
 
 const metres = mm => `${(mm / 1000).toFixed(2)} m`;
@@ -16,7 +16,7 @@ export class DepthViews {
     this.inFlight = null; this.waiting = null; this.sent = 0; this.shown = 0;
     this.latest = null;  // The newest depth drawn: millimetres, grid size, step, intrinsics and pose
     legend.ramp.style.background = turboGradient();
-    for (const key of ['depth_heat', 'depth_raw']) this.readout(tiles.tiles.get(key));
+    this.readout(tiles.tiles.get('depth_heat'));
   }
 
   // One depth_frame message from the stream.
@@ -45,8 +45,7 @@ export class DepthViews {
     if (result.error) { console.error('Could not show a depth frame:', result.error); return; }
     this.shown += 1;
     this.tiles.showBitmap('depth_heat', result.heat);
-    this.tiles.showBitmap('depth_raw', result.raw);
-    result.heat.close(); result.raw.close();
+    result.heat.close();
     this.latest = {mm: result.mm, width: result.width, height: result.height, step: meta.step,
                    camera: meta.camera, cameraToHead: meta.cameraToHead};
     const {near, ramp, far, info} = this.legend;

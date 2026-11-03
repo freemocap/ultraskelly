@@ -65,8 +65,11 @@ export class CameraTiles {
     this.slots = new Map();    // Source key -> {busy, waiting}
     this.unknown = new Set();
     this.visible = new Set();
+    this.onChange = null;      // Called when what the page shows changes (wanted views, docs/stream.md)
+    this.lastFrameNumber = 0;
     const watch = new IntersectionObserver(entries => {
       for (const entry of entries) this.visible[entry.isIntersecting ? 'add' : 'delete'](entry.target.dataset.camera);
+      this.onChange?.();
     });
     for (const {figure} of this.tiles.values()) watch.observe(figure);
   }
@@ -89,6 +92,7 @@ export class CameraTiles {
     try { payload = readImagePayload(buffer); }
     catch (problem) { console.error('Unreadable image payload', problem); return; }
     const ids = payload.images.map(image => image.cameraId);
+    this.lastFrameNumber = payload.frameNumber;
     for (const id of ids) {
       if (this.keyOf(id) == null && !IGNORED.has(id) && !this.unknown.has(id)) { this.unknown.add(id); console.warn(`No dashboard tile for camera ${id}`); }
     }
@@ -182,10 +186,24 @@ export class CameraTiles {
     }
   }
 
+  // Each camera this page shows, with the size it is drawn at in device pixels: what the server need encode.
+  // Tiles out of view and a hidden page show nothing; the depth tile is not a camera.
+  displayImageSizes() {
+    const sizes = {}, scale = devicePixelRatio || 1;
+    if (document.hidden) return sizes;
+    for (const [key, tile] of this.tiles) {
+      if (key === 'depth_heat' || !(this.visible.has(key) || this.enlargedId === key)) continue;
+      const canvas = this.enlargedId === key ? this.enlarged.canvas : tile.canvas;
+      sizes[key === 'oak' ? this.trackingId : key] = {width: Math.round(canvas.clientWidth * scale), height: Math.round(canvas.clientHeight * scale)};
+    }
+    return sizes;
+  }
+
   // Show one camera large (null closes the view). The tile keeps drawing as well.
   enlarge(cameraId) {
     this.enlargedId = cameraId && this.tiles.has(cameraId) ? cameraId : null;
     this.enlarged.element.hidden = !this.enlargedId;
+    this.onChange?.();
     if (!this.enlargedId) return;
     const tile = this.tiles.get(this.enlargedId);
     this.enlarged.label.textContent = tile.label || this.enlargedId;

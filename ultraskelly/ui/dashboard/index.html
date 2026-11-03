@@ -49,8 +49,9 @@
       </figure>
       <div class="target-row">
         <span id="target-state" class="badge">No target</span>
-        <span id="target-pixel">—</span><span id="target-angle"></span><span id="target-lock"></span><span id="target-age"></span>
-        <span id="target-face" title="Where the gaze ray meets the ZED depth, from between the eyes. Both cameras' poses are best guesses."></span>
+        <span id="target-pixel">—</span>
+        <span id="target-face" title="The Pi's face locator: the target found in the ZED's depth, its distance from between the eyes"></span>
+        <span id="target-lock"></span><span id="target-angle"></span><span id="target-age"></span>
       </div>
     </section>
     <section class="sensor zed" aria-label="Eyes and depth">
@@ -59,7 +60,12 @@
         <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>Left eye</figcaption><p class="empty">No ZED video yet</p></figure>
         <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>Right eye</figcaption><p class="empty">No ZED video yet</p></figure>
         <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty">No depth yet</p></figure>
-        <figure class="tile" data-camera="depth_raw" data-label="Raw depth" title="Click to enlarge"><canvas aria-label="Raw depth"></canvas><figcaption>Raw depth</figcaption><p class="empty">No depth yet</p></figure>
+        <section class="face-card" aria-label="The tracked face in 3D" title="The Pi's face locator: the OAK's target pixel found in the ZED's depth, in the head frame">
+          <div class="face-head"><span>Face</span><span id="face-alignment" title="Which OAK-to-ZED alignment placed it: nominal until measured"></span></div>
+          <div class="face-distance" id="face-distance">—</div>
+          <div class="face-position" id="face-position">No face located</div>
+          <div class="face-foot" id="face-foot"></div>
+        </section>
       </div>
       <div class="depth-legend" title="Depth is aligned to the left eye. Hover a depth tile to read the distance.">
         <span id="depth-near">near</span><i id="depth-ramp"></i><span id="depth-far">far</span><span id="depth-info">Depth aligned to the left eye</span>
@@ -67,14 +73,10 @@
     </section>
   </div>
   <div class="strip">
-    <section class="card motors" title="Values sent to the servo and motor boards. There is no waist or jaw angle sensor.">
-      <div class="card-title"><h2>Motor commands</h2><span>Sent, not measured</span></div>
-      <table>
-        <tr data-motor="pan"><th>Head pan</th><td class="value">—</td><td class="meter"><i></i></td><td class="age">—</td></tr>
-        <tr data-motor="tilt"><th>Head tilt</th><td class="value">—</td><td class="meter"><i></i></td><td class="age">—</td></tr>
-        <tr data-motor="waist"><th>Waist drive</th><td class="value">—</td><td class="meter signed"><i></i></td><td class="age">—</td></tr>
-        <tr data-motor="mouth"><th>Jaw drive</th><td class="value">—</td><td class="meter signed"><i></i></td><td class="age">—</td></tr>
-      </table>
+    <section class="card series" aria-label="Time series of the last 30 seconds">
+      <div class="card-title"><h2>Time series <span>last 30 s</span></h2>
+        <span title="Motor values are the commands sent to the boards: the servos have no position feedback and the DC motors no encoders. The ZED's IMU is measured.">commands as sent · no motor reports its position · IMU measured</span></div>
+      <canvas id="series" aria-label="Head and drive commands, target offset, face distance and the ZED IMU over the last 30 seconds"></canvas>
     </section>
     <section class="card tests">
       <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds">—</span></div>
@@ -82,11 +84,8 @@
       <div class="tests-buttons"><button id="tests-open">Open</button><button id="tests-stop" class="stop">■ Stop</button></div>
     </section>
     <section class="card nodes">
-      <div class="card-title"><h2>Nodes</h2><span id="node-summary">—</span></div>
+      <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
       <div id="nodes"></div>
-    </section>
-    <section class="card rates">
-      <div class="card-title"><h2>Rates and link</h2><span id="snapshot-age">—</span></div>
       <dl id="rates"></dl>
     </section>
   </div>
