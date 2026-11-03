@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ultraskelly.core.bot.sensory.oak_camera_node import turn_image
 from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, PLATFORM, without_telemetry
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS
 from ultraskelly.core.bot.sensory.yolov8_pose import Letterbox, PoseDetections, decode_yolov8_pose
@@ -114,7 +115,7 @@ def main() -> None:
 
         pipeline = stack.enter_context(dai.Pipeline())
         camera = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
-        camera.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+        turn_image(dai, camera)
         rgb = camera.requestOutput((640, 480), dai.ImgFrame.Type.RGB888i, fps=30).createOutputQueue(maxSize=30, blocking=False)
         network = pipeline.create(dai.node.DetectionNetwork)
         archive = dai.NNArchive(str(dai.getModelFromZoo(dai.NNModelDescription(OAK_MODEL, platform=PLATFORM), useCached=True,

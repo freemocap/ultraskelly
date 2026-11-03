@@ -57,8 +57,8 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 The robot runs on a Raspberry Pi 5 with Raspberry Pi OS Trixie (desktop). By default it
 tracks people with a Luxonis OAK USB camera and YOLOv8 pose on a Hailo-8 AI HAT+, and
 drives a servo board at I²C `0x40` and a DC motor HAT at `0x60`; see
-[the hardware notes](docs/hardware.md). The OAK's own chip turns and encodes its frames and
-runs face and hand models from Luxonis' Model Zoo: YuNet face detection on every frame, head
+[the hardware notes](docs/hardware.md). The OAK reads its frames out the right way up,
+encodes them on its own chip and runs face and hand models from Luxonis' Model Zoo: YuNet face detection on every frame, head
 pose, gaze and MediaPipe face landmarks on the faces it finds, and MediaPipe hands five times
 a second (`--no-oak-models` turns them off; what runs where, and why, is in the audit). Fetch
 the models once with `.venv/bin/python -m scripts.fetch_oak_models`; the bot then loads them

@@ -23,6 +23,7 @@ from pathlib import Path
 import depthai as dai
 import numpy as np
 
+from ultraskelly.core.bot.sensory.oak_camera_node import turn_image
 from ultraskelly.core.bot.sensory.oak_models import without_telemetry
 
 CACHE = Path.home() / "ultraskelly-models" / "oak-zoo"
@@ -184,7 +185,7 @@ def summarize(values: list[float]) -> dict:
 def run(parts: list[str], args: argparse.Namespace) -> dict:
     with dai.Pipeline() as pipeline:
         camera = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
-        camera.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+        turn_image(dai, camera)
         bench = Bench(pipeline, camera, args)
         for spec in parts:
             spec, _, rate = spec.partition(":")

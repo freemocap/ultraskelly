@@ -42,7 +42,7 @@ def launch_config(
     config = LaunchConfig(
         detector_type=DetectorType.HAILO_POSE,
         oak_camera=OakCameraNodeParams(
-            flip_camera=True,  # The OAK's image arrives upside down; its ISP turns it
+            flip_camera=True,  # The OAK sits upside down; its sensor reads the image out turned
             models=OakModelParams() if oak_models else None,
         ),
         hailo_pose_detector=HailoPoseDetectorParams(
