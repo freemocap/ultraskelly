@@ -33,6 +33,7 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
 )
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
+from ultraskelly.ui.runtime_server import encode_jpeg_with_opencv
 from ultraskelly.core.pubsub.bot_topics import FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
@@ -63,8 +64,8 @@ class LaunchConfig(NodeParams):
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
     )
     show_window: bool = Field(
-        default=True,
-        description="Show the OpenCV camera window; needs a desktop session. The dashboard works either way.",
+        default=False,
+        description="Also show the OpenCV camera window (`--window`); needs a desktop session. The dashboard works either way.",
     )
     limits: ActuatorLimits = Field(
         default_factory=ActuatorLimits,
@@ -184,6 +185,9 @@ class BotLauncher(BaseModel):
                     frame_topic=FrameTopic,
                     commands=self.command_recorder,
                     configuration=self.config.model_dump(mode="json"),
+                    # The stream's encoder and quality: a frame both keep is encoded once.
+                    encode_jpeg=encode_jpeg_with_opencv,
+                    stream_jpeg_quality=self.config.runtime_server.jpeg_quality,
                 )
             )
         self.nodes.append(
