@@ -42,7 +42,6 @@ from ultraskelly.core.pubsub.bot_topics import (
     FaceLocationMessage,
     FaceLocationTopic,
     FacesMessage,
-    FacesTopic,
     FrameMessage,
     ImuTopic,
     PoseDataMessage,
@@ -151,7 +150,7 @@ BODY = connection_group(
 )
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
 FACES_WAIT_SECONDS = 0.1  # A frame waits at most this long for the OAK's faces in it
-RECENT_FACES = 16  # Faces kept by frame number until their frame is encoded
+RECENT_FRAMES = 16  # Frames of the faces camera waiting for their faces, at most
 
 
 def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
@@ -302,7 +301,7 @@ class RuntimeServerNode(Node):
     state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
     faces_camera: str | None = Field(default=None, description="Camera whose frames the OAK's face models read")
-    faces: SkipValidation[dict[int, FacesMessage]] = Field(default_factory=dict, exclude=True)  # Recent, by frame number
+    faces_for: SkipValidation[Callable[[int], FacesMessage | None]] = Field(default=lambda number: None, exclude=True)
     oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
 
     @classmethod
@@ -322,13 +321,15 @@ class RuntimeServerNode(Node):
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         faces_camera: str | None = None,
+        faces_for: Callable[[int], FacesMessage | None] | None = None,
         oak_status: Callable[[], dict] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
         `pose_camera`'s frames travel with the poses detected in them, and `faces_camera`'s with
-        the faces the OAK found in them. With `motor_tests`, the dashboard can run motor tests
+        the faces the OAK found in them, which `faces_for` gives by frame number. With `motor_tests`,
+        the dashboard can run motor tests
         through /api/motor-test. A stereo camera's two images travel together in one frame
         message, as cameras `<name>_left` and `<name>_right`; a depth frame's as
         `<name>_rectified` and, with `depth_previews`, `<name>_depth`, the depth drawn in colour.
@@ -346,6 +347,8 @@ class RuntimeServerNode(Node):
             faces_camera=faces_camera,
             oak_status=oak_status,
         )
+        if faces_for is not None:
+            node.faces_for = faces_for
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
         feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
@@ -364,7 +367,6 @@ class RuntimeServerNode(Node):
             "target": pubsub.get_subscription(TargetLocationTopic),
             "pose": pubsub.get_subscription(PoseDataTopic),
             "face": pubsub.get_subscription(FaceLocationTopic),
-            "faces": pubsub.get_subscription(FacesTopic),
             "imu": pubsub.get_subscription(ImuTopic),
         }
         return node
@@ -494,7 +496,7 @@ class RuntimeServerNode(Node):
                 if isinstance(camera_frame, FrameMessage):  # The camera's own JPEG, or one encoding for every consumer
                     jpegs = JpegCache(lambda image, quality, frame=camera_frame: frame.jpeg_bytes(quality, self.encode_jpeg))
                     if feed.name == self.faces_camera:
-                        faces = self.faces.get(camera_frame.frame_number)
+                        faces = self.faces_for(camera_frame.frame_number)
                 depth = isinstance(camera_frame, DepthFrameMessage)
                 if self.params.depth_previews or not depth:
                     message = await asyncio.to_thread(
@@ -522,20 +524,19 @@ class RuntimeServerNode(Node):
             feed.pending = entry
             return
         feed.waiting[number] = (entry, now)
-        while len(feed.waiting) > RECENT_FACES:
+        while len(feed.waiting) > RECENT_FRAMES:
             del feed.waiting[min(feed.waiting)]
 
     def _release(self, feed: CameraFeed, now: float) -> None:
-        """The newest waiting frame whose faces are in, or that waited FACES_WAIT_SECONDS, or any
-        once faces stop coming, becomes pending; older waiting frames are dropped, newest-wins."""
-        faces_flowing = "faces" in self.latest and now - self.latest["faces"].at < POSE_STALL_SECONDS
-        for number in sorted(feed.waiting, reverse=True):
-            entry, since = feed.waiting[number]
-            if not faces_flowing or number in self.faces or now - since >= FACES_WAIT_SECONDS:
-                feed.pending = entry
-                for older in [waiting for waiting in feed.waiting if waiting <= number]:
-                    del feed.waiting[older]
-                return
+        """The oldest waiting frame becomes pending once its faces are in or it has waited
+        FACES_WAIT_SECONDS; newer frames wait behind it, so a frame whose faces take longer is not
+        skipped for a quicker one. One frame per pump: the encoder takes each in turn, unless it
+        falls behind, when the newest pending one wins as for every feed."""
+        number = min(feed.waiting)
+        entry, since = feed.waiting[number]
+        if self.faces_for(number) is not None or now - since >= FACES_WAIT_SECONDS:
+            del feed.waiting[number]
+            feed.pending = entry
 
     async def pump(self) -> None:
         """Drain subscriptions into the latest state; while anyone watches, encode the
@@ -557,10 +558,6 @@ class RuntimeServerNode(Node):
                         posed = self.feeds[self.pose_camera]
                         posed.last_pose_at = now
                         self._hold(posed, (message.frame, message), now)
-                    if name == "faces" and message.frame_number is not None:
-                        self.faces[message.frame_number] = message
-                        while len(self.faces) > RECENT_FACES:
-                            del self.faces[min(self.faces)]
             for feed in self.feeds.values():
                 while not feed.subscription.empty():
                     camera_frame = feed.subscription.get_nowait()

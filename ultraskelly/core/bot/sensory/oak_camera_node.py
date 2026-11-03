@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 YUNET_INPUT = (320, 240)
 RATE_WINDOW = 2.0  # Seconds of arrivals each reported rate counts
+RECENT_FACES = 32  # Frames whose faces faces_for still finds
 CROP_SIZES = {"head_pose": 60, "left_eye": 60, "right_eye": 60, "mesh": 192}  # Each crop's network input side
 # Inference threads and SHAVEs per thread for each network. depthai's defaults starve the
 # chain; these held every network at 30 fps together on the robot's OAK-1 (audit).
@@ -96,6 +97,8 @@ class OakCameraNode(Node):
     arrivals: SkipValidation[dict[str, deque]] = Field(default_factory=dict, exclude=True)
     arrivals_lock: SkipValidation[threading.Lock] = Field(default_factory=threading.Lock, exclude=True)
     chip: dict = Field(default_factory=dict, exclude=True)  # The newest SystemLogger report
+    # The faces of recent frames by frame number, for consumers that need every frame's (faces_for).
+    recent_faces: SkipValidation[dict[int, FacesMessage]] = Field(default_factory=dict, exclude=True)
     dropped: int = Field(default=0, exclude=True)  # Messages the event loop was too busy to take
 
     @classmethod
@@ -207,6 +210,12 @@ class OakCameraNode(Node):
             mesh_every=faces.mesh_every,
         )
 
+    def faces_for(self, frame_number: int) -> FacesMessage | None:
+        """The faces found in a recent frame, once its measurements are in; None before (or long after).
+        FacesTopic keeps only the newest message, and two can be published together."""
+        with self.arrivals_lock:
+            return self.recent_faces.get(frame_number)
+
     def status(self) -> dict:
         """For the dashboard: per second over the last RATE_WINDOW, frames, face detections and the
         faces published with each measurement; and the chip's load and temperature."""
@@ -252,6 +261,10 @@ class OakCameraNode(Node):
     def _post(self, loop: asyncio.AbstractEventLoop, topic: type[PubSubTopicABC] | None, message: object) -> None:
         if isinstance(message, FacesMessage):
             now = time.monotonic()
+            with self.arrivals_lock:
+                self.recent_faces[message.frame_number] = message
+                while len(self.recent_faces) > RECENT_FACES:
+                    del self.recent_faces[min(self.recent_faces)]
             for measurement, count in (
                 ("head_pose", sum(face.head_pose is not None for face in message.faces)),
                 ("gaze", sum(face.gaze is not None for face in message.faces)),
