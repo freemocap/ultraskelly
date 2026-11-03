@@ -38,6 +38,7 @@ from ultraskelly.core.bot.motor.motor_test import MotorTester
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
+    DepthFrameMessage,
     FrameMessage,
     PoseDataTopic,
     ServoStateMessage,
@@ -84,10 +85,22 @@ class RuntimeServerParams(NodeParams):
     jpeg_quality: int = Field(default=80, ge=10, le=100)
 
 
-def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
-    """Encode an RGB frame as JPEG."""
+def depth_to_rgb(depth: np.ndarray, near: float = 300.0, far: float = 5000.0) -> np.ndarray:
+    """Draw a uint16 millimetre depth image in colour: red near, blue far, black unknown."""
     import cv2
 
+    scaled = np.clip((far - depth.astype(np.float32)) / (far - near), 0.0, 1.0)
+    rgb = cv2.cvtColor(cv2.applyColorMap((255 * scaled).astype(np.uint8), cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
+    rgb[depth == 0] = 0
+    return rgb
+
+
+def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
+    """Encode an RGB frame as JPEG; a 2-D uint16 depth image is drawn in colour first."""
+    import cv2
+
+    if frame.ndim == 2 and frame.dtype == np.uint16:
+        frame = depth_to_rgb(frame)
     bgr = cv2.cvtColor(np.ascontiguousarray(frame[..., :3]), cv2.COLOR_RGB2BGR)
     ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
@@ -104,10 +117,13 @@ BODY = connection_group(
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
 
 
-def camera_images(message: FrameMessage | StereoFrameMessage) -> list[np.ndarray]:
-    """The images a camera message carries: one, or a stereo pair's left then right."""
+def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
+    """The images a camera message carries: one, a stereo pair's left then right, or a
+    depth frame's rectified left image then its depth."""
     if isinstance(message, StereoFrameMessage):
         return [message.left, message.right]
+    if isinstance(message, DepthFrameMessage):
+        return [message.color, message.depth]
     return [message.frame]
 
 
@@ -172,7 +188,7 @@ class CameraFeed:
     shape: tuple[int, ...] | None = None
     stream: Latest = field(default_factory=Latest)
     # The newest frame (with the poses found in it) waiting to be encoded, newest-wins.
-    pending: tuple[FrameMessage | StereoFrameMessage, np.ndarray | None] | None = None
+    pending: tuple[FrameMessage | StereoFrameMessage | DepthFrameMessage, np.ndarray | None] | None = None
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
@@ -222,13 +238,15 @@ class RuntimeServerNode(Node):
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
         motor_tests: MotorTester | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
+        depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
         `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
         the dashboard can run motor tests through /api/motor-test. A stereo camera's two
-        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`.
+        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`;
+        a depth frame's as `<name>_rectified` and `<name>_depth`, the depth drawn in colour.
         """
         node = cls(
             pubsub=pubsub,
@@ -243,6 +261,8 @@ class RuntimeServerNode(Node):
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
         feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
+        feeds += [(f"{name}_depth", topic, (f"{name}_rectified", f"{name}_depth"))
+                  for name, topic in (depth_cameras or {}).items()]
         index = 0
         for name, topic, views in feeds:
             node.feeds[name] = CameraFeed(

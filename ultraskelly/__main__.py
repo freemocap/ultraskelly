@@ -41,8 +41,14 @@ def main() -> None:
         "--zed-only", action="store_true",
         help="Run only the ZED Mini and the dashboard: no OAK, Hailo or motors, so the robot can be in use.",
     )
+    parser.add_argument(
+        "--depth", action="store_true",
+        help="With --zed or --zed-only: also compute depth from the ZED's pair (OpenCV on the CPU, at most 5 Hz).",
+    )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
+    if args.depth and not (args.zed or args.zed_only):
+        parser.error("--depth is used together with --zed or --zed-only")
     if (args.simulate_motors or args.no_window or args.record or args.zed) and not args.hardware:
         parser.error("--simulate-motors, --no-window, --record and --zed are used together with --hardware")
     if args.microphone and not args.record:
@@ -66,7 +72,7 @@ def main() -> None:
         asyncio.run(run_with_heartbeat(run_bot(
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
-            zed=args.zed, zed_only=args.zed_only, port=args.port,
+            zed=args.zed, zed_only=args.zed_only, depth=args.depth, port=args.port,
         )))
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("Stopped by Ctrl+C or SIGTERM")  # Nodes already shut down cleanly

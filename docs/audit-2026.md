@@ -525,6 +525,34 @@ takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.
 a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
 off by default), and depth rectifies only the pairs it uses, at its own rate.
 
+**Depth, CPU baseline.** `StereoDepthNode` (`--depth` with `--zed` or `--zed-only`)
+takes the newest pair at most 5 times a second, rectifies the left eye in colour and
+the right in grey, and matches them with OpenCV's StereoSGBM in 3-way mode (64
+disparities, 5-pixel window, uniqueness 10, speckle filter). Depth is
+`focal_length × baseline / disparity`, published as uint16 millimetres beside the
+rectified left image (0 = unknown, nearer than 0.3 m or further than 8 m). Matches
+within 4 px of the 64-pixel search limit are dropped: where the true disparity lies
+beyond it, as for the skull a few centimetres in front of the eyes, the matcher
+settles at the limit. On a live pair that pile-up held 22% of the valid pixels, and it
+moved when the search range grew. The nearest depth kept at VGA is therefore 0.36 m.
+The dashboard shows each depth frame as `zed_rectified` and `zed_depth` (red near,
+blue far, black unknown); the depth message for the 3D view follows.
+
+Measured on the Pi at VGA, capture and depth without the server, 15 s each. The skull
+hides most of the view, so 18% of pixels had a depth.
+
+| OpenCV threads | Depth rate | Compute per frame | Age when published | CPU, of a core |
+| --- | --- | --- | --- | --- |
+| 4 (default) | 5 Hz | 47 ms | 79 ms | 91% |
+| 1 | 5 Hz | 67 ms | 88 ms | 39% |
+| 1 | as fast as possible: 15.1 Hz | 66 ms | 100 ms | 106% |
+| 4 | as fast as possible: 21.1 Hz | 47 ms | 85 ms | 331% |
+
+OpenCV's default thread pool doubles the CPU of the same work here (idle workers
+spin). `cv2.setNumThreads(1)` applies to the whole process, so it is a bot-wide
+choice, not made here. With the server streaming 30 raw pairs and 5 depth frames a
+second, a ZED-only run used 122% of a core.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

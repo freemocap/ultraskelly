@@ -30,10 +30,11 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
 )
-from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNode, ZedCameraNodeParams
+from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
+from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
-from ultraskelly.core.pubsub.bot_topics import FrameTopic, StereoFrameTopic
+from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
@@ -82,6 +83,10 @@ class LaunchConfig(NodeParams):
     zed_camera: ZedCameraNodeParams | None = Field(
         default=None,
         description="Also capture the ZED Mini stereo camera and stream its two eyes; None runs without it",
+    )
+    stereo_depth: StereoDepthNodeParams | None = Field(
+        default=None,
+        description="With zed_camera, also compute depth from its pair; None computes none",
     )
     tracking: bool = Field(
         default=True,
@@ -160,7 +165,7 @@ class BotLauncher(BaseModel):
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
-        stereo_cameras = self._create_stereo_nodes()
+        stereo_feeds = self._create_stereo_nodes()
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
         aim = self.config.orientation
         self.nodes.append(
@@ -168,7 +173,7 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub,
                 params=self.config.runtime_server,
                 cameras={camera_name: FrameTopic},
-                stereo_cameras=stereo_cameras,
+                **stereo_feeds,
                 recorder=self.command_recorder,
                 motors_simulated=self.config.simulate_motors,
                 node_status=self.node_status,
@@ -194,23 +199,32 @@ class BotLauncher(BaseModel):
 
         logger.info(f"Created {len(self.nodes)} nodes")
 
-    def _create_stereo_nodes(self) -> dict[str, type[PubSubTopicABC]]:
-        """The ZED Mini's node, when configured; returns the stereo cameras for the dashboard."""
-        if self.config.zed_camera is None:
+    def _create_stereo_nodes(self) -> dict[str, dict[str, type[PubSubTopicABC]]]:
+        """The ZED Mini's nodes, when configured: capture, and depth if asked for.
+        Returns the dashboard's stereo and depth camera feeds."""
+        zed = self.config.zed_camera
+        if zed is None:
             return {}
-        self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=self.config.zed_camera))
-        return {"zed": StereoFrameTopic}
+        self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=zed))
+        feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
+        if self.config.stereo_depth is not None:
+            width, height = ZED_MODES[zed.resolution][0]
+            self.nodes.append(StereoDepthNode.create(
+                pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
+            ))
+            feeds["depth_cameras"] = {"zed": DepthFrameTopic}
+        return feeds
 
     def _create_zed_only_nodes(self) -> None:
         """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed."""
         self.command_recorder = None
-        stereo_cameras = self._create_stereo_nodes()
+        stereo_feeds = self._create_stereo_nodes()
         self.nodes.append(
             RuntimeServerNode.create(
                 pubsub=self.pubsub,
                 params=self.config.runtime_server,
                 cameras={},
-                stereo_cameras=stereo_cameras,
+                **stereo_feeds,
                 recorder=None,
                 motors_simulated=True,
                 node_status=self.node_status,

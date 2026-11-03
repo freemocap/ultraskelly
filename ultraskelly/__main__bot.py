@@ -12,13 +12,14 @@ from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
+from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNodeParams
 logger = logging.getLogger(__name__)
 
 
 async def main(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
-    zed: bool = False, zed_only: bool = False, port: int = 8080,
+    zed: bool = False, zed_only: bool = False, depth: bool = False, port: int = 8080,
 ) -> None:
     """Launch with declarative config.
 
@@ -29,6 +30,7 @@ async def main(
         microphone: With `record`, also record audio from the sound card whose name contains this.
         zed: Also capture the ZED Mini stereo camera and stream its two eyes.
         zed_only: Run only the ZED Mini and the dashboard, without tracking or motors.
+        depth: With the ZED, also compute depth from its pair.
         port: The dashboard's port.
     """
 
@@ -72,6 +74,7 @@ async def main(
     config.show_window = show_window
     config.recording = RunRecorderParams(microphone=microphone) if record else None
     config.zed_camera = ZedCameraNodeParams() if zed or zed_only else None
+    config.stereo_depth = StereoDepthNodeParams() if depth else None
     config.tracking = not zed_only
     config.runtime_server.port = port
     launcher = BotLauncher.from_config(config)

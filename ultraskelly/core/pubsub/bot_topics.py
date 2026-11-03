@@ -32,6 +32,21 @@ class StereoFrameMessage(TopicMessageABC):
     )
 
 
+class DepthFrameMessage(TopicMessageABC):
+    """Depth from the stereo camera, pixel-aligned with its rectified left image."""
+    depth: np.ndarray  # uint16 (height, width): millimetres along the camera's forward axis; 0 = unknown
+    color: np.ndarray  # RGB (height, width, 3): the rectified left image the depth belongs to
+    rectification: StereoRectification  # The pinhole camera both share, and the baseline
+    frame_number: int | None = None  # The stereo pair's frame number
+    timestamp: float | None = None  # The stereo pair's capture time, on time.monotonic()'s clock
+    method: str = ""  # How disparity was found: "sgbm" (OpenCV on the CPU) or "stereonet" (Hailo-8)
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
 class TargetLocationMessage(TopicMessageABC):
     """Generic target location with orientation."""
     x: int | None = None
@@ -70,6 +85,7 @@ class PoseDataMessage(TopicMessageABC):
 # Create topics using the factory - they auto-register
 FrameTopic = create_topic(FrameMessage)
 StereoFrameTopic = create_topic(StereoFrameMessage)
+DepthFrameTopic = create_topic(DepthFrameMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)
 PoseDataTopic = create_topic(PoseDataMessage)
