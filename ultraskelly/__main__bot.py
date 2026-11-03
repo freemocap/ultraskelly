@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def launch_config(
-    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
 ) -> LaunchConfig:
     """The robot's declarative launch configuration.
@@ -81,7 +81,7 @@ def launch_config(
 
 
 async def main(
-    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
 ) -> None:
     """Launch with the configuration above; the options are `launch_config`'s."""

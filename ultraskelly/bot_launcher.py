@@ -70,8 +70,9 @@ class LaunchConfig(NodeParams):
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
     )
     show_window: bool = Field(
-        default=True,
-        description="Show the OpenCV camera window; needs a desktop session. The dashboard works either way.",
+        default=False,
+        description="Also show the OpenCV camera window (`--window`), which needs a desktop session; "
+                    "the dashboard works either way.",
     )
     limits: ActuatorLimits = Field(
         default_factory=ActuatorLimits,
