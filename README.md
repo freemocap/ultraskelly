@@ -122,6 +122,12 @@ The waist turns toward where the head looks in continuous, ramped moves
 example when killed, the motor board keeps its last command:
 `.venv/bin/python -m scripts.stop_motors` brakes them all.
 
+Add `--zed` to also capture the ZED Mini stereo camera in the skull's eye sockets: its
+left and right images (672×376 each at 30 fps) travel together in one `frame` message,
+as cameras `zed_left` and `zed_right`, and appear as two more video panels.
+`python -m ultraskelly --zed-only --port 8081` runs only the ZED and the dashboard,
+without the OAK, Hailo or motors, so it can run while someone else uses the robot.
+
 Add `--record` to save the run under `~/ultraskelly-recordings/run-<time>/`: the OAK video
 as it reached the bot, the poses found in each frame, targets, head state and every motor
 command, with times on one clock so they line up. `--microphone NAME` adds audio from the

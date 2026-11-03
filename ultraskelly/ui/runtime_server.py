@@ -2,7 +2,8 @@
 
 `/stream` is one WebSocket of self-describing CBOR messages (freemocap-stream).
 FreeMoCap `frame` messages carry each camera's JPEG with the poses detected in that
-very image; `robot_state` messages carry the bot's snapshot. The browser decodes them
+very image (a stereo camera's two images travel together in one message);
+`robot_state` messages carry the bot's snapshot. The browser decodes them
 with @freemocap/client and draws the poses and guides itself. The stream is read-only
 and newest-wins: a slow browser receives fewer, newer messages and never blocks the
 bot's event loop. Motor values are the commands sent, not measured positions.
@@ -37,14 +38,17 @@ from ultraskelly.core.bot.motor.motor_test import MotorTester
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
+    DepthFrameMessage,
     FrameMessage,
     PoseDataTopic,
     ServoStateMessage,
     ServoStateTopic,
+    StereoFrameMessage,
     TargetLocationMessage,
     TargetLocationTopic,
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
+from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
@@ -82,10 +86,22 @@ class RuntimeServerParams(NodeParams):
     jpeg_quality: int = Field(default=80, ge=10, le=100)
 
 
-def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
-    """Encode an RGB frame as JPEG."""
+def depth_to_rgb(depth: np.ndarray, near: float = 300.0, far: float = 5000.0) -> np.ndarray:
+    """Draw a uint16 millimetre depth image in colour: red near, blue far, black unknown."""
     import cv2
 
+    scaled = np.clip((far - depth.astype(np.float32)) / (far - near), 0.0, 1.0)
+    rgb = cv2.cvtColor(cv2.applyColorMap((255 * scaled).astype(np.uint8), cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
+    rgb[depth == 0] = 0
+    return rgb
+
+
+def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
+    """Encode an RGB frame as JPEG; a 2-D uint16 depth image is drawn in colour first."""
+    import cv2
+
+    if frame.ndim == 2 and frame.dtype == np.uint16:
+        frame = depth_to_rgb(frame)
     bgr = cv2.cvtColor(np.ascontiguousarray(frame[..., :3]), cv2.COLOR_RGB2BGR)
     ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
@@ -102,10 +118,18 @@ BODY = connection_group(
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
 
 
+def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
+    """The images a camera message carries: one, a stereo pair's left then right, or a
+    depth frame's rectified left image then its depth."""
+    if isinstance(message, StereoFrameMessage):
+        return [message.left, message.right]
+    if isinstance(message, DepthFrameMessage):
+        return [message.color, message.depth]
+    return [message.frame]
+
+
 def encode_camera_frame(
-    camera: str,
-    index: int,
-    image: np.ndarray,
+    cameras: list[tuple[str, int, np.ndarray]],
     *,
     frame_number: int,
     timestamp: float,
@@ -113,8 +137,10 @@ def encode_camera_frame(
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
 ) -> bytes:
-    """One FreeMoCap frame message: this camera's JPEG and each person's keypoints, in
-    pixels of that image. Pure CPU work, safe to run in a worker thread."""
+    """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
+    together, and each person's keypoints in pixels of the first image. Pure CPU work,
+    safe to run in a worker thread."""
+    camera, _, image = cameras[0]
     height, width = image.shape[:2]
     trackers = [
         tracker_observation(
@@ -125,13 +151,17 @@ def encode_camera_frame(
         )
         for person in (poses if poses is not None else ())
     ]
-    jpeg = encode_jpeg(image, jpeg_quality)
+    images = [
+        PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
+        for camera, index, image in cameras
+    ]
     return encode_frame_message(
         frame_number=frame_number,
         timestamp=timestamp,
-        cameras=[uncalibrated_camera(camera, index, (width, height))],
+        cameras=[uncalibrated_camera(image.camera_id, image.camera_index, (image.width, image.height))
+                 for image in images],
         trackers=trackers,
-        image=encode_image_payload(frame_number, [PayloadImage(camera, index, width, height, jpeg)]),
+        image=encode_image_payload(frame_number, images),
     )
 
 
@@ -145,11 +175,13 @@ class TrackingOverlay:
 
 @dataclass
 class CameraFeed:
-    """One camera topic: its frame statistics and its stream of encoded frame messages."""
+    """One camera topic: its frame statistics and its stream of encoded frame messages.
+    A stereo camera's frame messages carry both of its images."""
 
     subscription: TopicSubscriptionQueue
     name: str = "camera"
-    index: int = 0
+    index: int = 0  # The first image's camera index; a stereo pair's right image has the next
+    views: tuple[str, ...] = ("camera",)  # Camera IDs in image order: the name, or <name>_left and <name>_right
     overlay: TrackingOverlay | None = None
     frames_seen: int = 0
     fps: float = 0.0
@@ -157,7 +189,7 @@ class CameraFeed:
     shape: tuple[int, ...] | None = None
     stream: Latest = field(default_factory=Latest)
     # The newest frame (with the poses found in it) waiting to be encoded, newest-wins.
-    pending: tuple[FrameMessage, np.ndarray | None] | None = None
+    pending: tuple[FrameMessage | StereoFrameMessage | DepthFrameMessage, np.ndarray | None] | None = None
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
@@ -189,6 +221,8 @@ class RuntimeServerNode(Node):
     state_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)
     clients: int = Field(default=0, exclude=True)
     state_sequence: int = Field(default=0, exclude=True)
+    depth_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # depth_frame messages
+    depth_sequence: int = Field(default=0, exclude=True)
     state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
 
@@ -206,12 +240,16 @@ class RuntimeServerNode(Node):
         pose_camera: str | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
         motor_tests: MotorTester | None = None,
+        stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
+        depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
         `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
-        the dashboard can run motor tests through /api/motor-test.
+        the dashboard can run motor tests through /api/motor-test. A stereo camera's two
+        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`;
+        a depth frame's as `<name>_rectified` and `<name>_depth`, the depth drawn in colour.
         """
         node = cls(
             pubsub=pubsub,
@@ -224,12 +262,17 @@ class RuntimeServerNode(Node):
             motor_tests=motor_tests,
         )
         overlays = overlays or {}
-        node.feeds = {
-            name: CameraFeed(
-                subscription=pubsub.get_subscription(topic), name=name, index=index, overlay=overlays.get(name)
+        feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
+        feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
+        feeds += [(f"{name}_depth", topic, (f"{name}_rectified", f"{name}_depth"))
+                  for name, topic in (depth_cameras or {}).items()]
+        index = 0
+        for name, topic, views in feeds:
+            node.feeds[name] = CameraFeed(
+                subscription=pubsub.get_subscription(topic), name=name, index=index, views=views,
+                overlay=overlays.get(name),
             )
-            for index, (name, topic) in enumerate(cameras.items())
-        }
+            index += len(views)
         node.subscriptions = {
             "servo_state": pubsub.get_subscription(ServoStateTopic),
             "target": pubsub.get_subscription(TargetLocationTopic),
@@ -263,13 +306,14 @@ class RuntimeServerNode(Node):
             "servo_state": None,
             "target": None,
             "cameras": {
-                name: {
+                camera: {
                     "fps": round(feed.fps, 1),
                     "age": None if feed.last_frame_at is None else now - feed.last_frame_at,
                     "width": feed.shape[1] if feed.shape else None,
                     "height": feed.shape[0] if feed.shape else None,
                 }
-                for name, feed in self.feeds.items()
+                for feed in self.feeds.values()
+                for camera in feed.views
             },
             "overlays": {
                 name: {"aim": list(feed.overlay.aim), "jaw_zone": feed.overlay.jaw_zone}
@@ -309,7 +353,7 @@ class RuntimeServerNode(Node):
         connection = StreamConnection(websocket.send_bytes, websocket.send_str)
         self.clients += 1
         sending = asyncio.create_task(
-            connection.follow(self.state_stream, *(feed.stream for feed in self.feeds.values()))
+            connection.follow(self.state_stream, self.depth_stream, *(feed.stream for feed in self.feeds.values()))
         )
         try:
             async for message in websocket:
@@ -325,6 +369,13 @@ class RuntimeServerNode(Node):
             await asyncio.gather(sending, return_exceptions=True)
         return websocket
 
+    def _encode_depth_frame(self, frame: DepthFrameMessage, sequence: int) -> bytes:
+        """The `depth_frame` message for a depth frame (docs/depth-stream.md). Runs in a worker thread."""
+        return encode_depth_frame(
+            frame, sequence=sequence, color_jpeg=self.encode_jpeg(frame.color, self.params.jpeg_quality),
+            camera_to_head=nominal_camera_to_head(frame.rectification),
+        )
+
     async def _encode(self, feed: CameraFeed) -> None:
         """Encode the newest pending frame message, repeating while newer ones arrive."""
         feed.encoding = True
@@ -332,13 +383,22 @@ class RuntimeServerNode(Node):
             while feed.pending is not None and self.clients > 0:
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
+                cameras = [
+                    (camera, feed.index + offset, image)
+                    for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
+                ]
                 message = await asyncio.to_thread(
-                    encode_camera_frame, feed.name, feed.index, camera_frame.frame,
+                    encode_camera_frame, cameras,
                     frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
                     timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                     poses=poses, encode_jpeg=self.encode_jpeg, jpeg_quality=self.params.jpeg_quality,
                 )
                 feed.stream.publish(message)
+                if isinstance(camera_frame, DepthFrameMessage):  # Also the depth itself, for 3D views
+                    self.depth_sequence += 1
+                    self.depth_stream.publish(
+                        await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence)
+                    )
         except Exception:
             logger.exception("Frame encoding failed")
         finally:
@@ -366,7 +426,7 @@ class RuntimeServerNode(Node):
                     camera_frame = feed.subscription.get_nowait()
                     if feed.last_frame_at is not None and now > feed.last_frame_at:
                         feed.fps += 0.1 * (1 / (now - feed.last_frame_at) - feed.fps)
-                    feed.last_frame_at, feed.shape = now, camera_frame.frame.shape
+                    feed.last_frame_at, feed.shape = now, camera_images(camera_frame)[0].shape
                     feed.frames_seen += 1
                     # A posed camera's frames come with their poses, unless the detector has stalled.
                     poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS

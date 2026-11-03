@@ -5,3 +5,5 @@ scripts/pi-system/** text eol=lf
 scripts/systemd/** text eol=lf
 # Generated bundles: never rewrite their line endings.
 ultraskelly/ui/dashboard/vendor/** -text
+# Downloaded calibration files keep their exact bytes (their hashes are recorded).
+ultraskelly/calibration/** -text

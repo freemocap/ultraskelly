@@ -482,6 +482,111 @@ real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port an
 adapter in software with the waist at rest. A motor board that dies between a brake's two
 transfers can still leave a motor driven (above).
 
+## ZED Mini stereo capture (2026-11-02)
+
+The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK
+needs CUDA. `ZedCameraNode` finds its V4L2 capture node by the name the camera
+reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread, converts
+each eye to RGB and publishes both on `StereoFrameTopic`. Frame times are the kernel
+buffer timestamps, which uvcvideo takes on CLOCK_MONOTONIC: the clock of
+`time.monotonic()` and of the OAK's depthai timestamps. They mark the arrival of a
+frame's first USB packet, one transfer time (19 ms at VGA, 30 ms at HD720) before the
+frame can be read. Frame numbers count camera frame periods, so a dropped frame skips
+a number. The runtime server sends both eyes in one FreeMoCap frame message, as
+cameras `zed_left` and `zed_right`. `--zed` adds the camera to the bot; `--zed-only`
+runs only the ZED and the dashboard, so it needs no robot lock.
+
+Each mode measured for 4 s on the Pi with OpenCV 5.0: reading plus converting both eyes.
+
+| Mode, both eyes | Rate | CPU, of a core | YUYV to RGB |
+| --- | --- | --- | --- |
+| VGA 1344×376 @ 30 | 30.0 fps | 12% | 0.45 ms |
+| VGA @ 100 | 99.8 fps | 38% | 0.43 ms |
+| HD720 2560×720 @ 30 | 30.0 fps | 31% | 1.96 ms |
+| HD720 @ 60 | 60.0 fps | 66% | 1.93 ms |
+| HD1080 3840×1080 @ 30 | 29.9 fps | 70% | 4.6 ms |
+| HD2K 4416×1242 @ 15 | 15.1 fps | 45% | 6.2 ms |
+
+Frame spacing stayed within 0.2 ms of the period in every mode. The node defaults to
+VGA at 30 fps; depth quality may justify HD720.
+
+- **Orientation and view.** The image is upright, unlike the OAK's. The skull's nose
+  bridge is a fixed, out-of-focus occluder on the inner side of each eye: about the
+  right 30% of the left image, wider at the bottom, and the left 20% of the right
+  image. Only the centre of the view is seen by both eyes; depth must mask the rest.
+- **Damaged frames.** uvcvideo runs with `nodrop=1`, so frames with transfer errors
+  reach applications, and OpenCV does not report V4L2's error flag. In the first test
+  one frame of 1,061 had a band of zeroed rows across both eyes, while the OAK was
+  booting. None of 960 probe frames afterwards, nor any of 17,580 frames the node
+  captured in later runs, had one. The node drops frames whose sampled rows are mostly
+  zero bytes and counts them. If torn frames appear instead (stale data, not zeros),
+  `options uvcvideo nodrop=0` in `/etc/modprobe.d/` makes the driver drop them.
+  Damaged frames also appeared when the reader fell behind: rectifying HD720 pairs in
+  the capture thread (136% of a core) lost 8 of 173 frames. Keep the capture loop light.
+
+With the bot (`--hardware --simulate-motors --no-window --zed`, OAK and pose at
+30 fps), a client on another computer over Wi-Fi received OAK frames and ZED pairs at
+29.1/s each (22 and 42 KiB per message) while a browser on that computer also
+watched. The bot process used 107% of a core, against about 70% without the ZED
+above, and the whole Pi 28% of four cores with no Chromium on the Pi. No throttling;
+52 °C. A ZED-only run streamed 7,141 frames in 4 minutes, none lost.
+
+**Rectification.** Stereolabs' factory calibration for this camera
+(`ultraskelly/calibration/zed/SN12395566.conf`, downloaded unmodified; see `SOURCE`)
+gives per resolution each eye's intrinsics and distortion, and for the pair a 63.0 mm
+baseline and a rotation (RX, CV, RZ) of 0.04°, 0.50° and −0.04°.
+`stereo_rectification.py` passes the rotation and translation to `cv2.stereoRectify`
+as written (zero-disparity, `alpha=0`), as Stereolabs' MIT-licensed zed-open-capture
+sample does. With the rotation transposed instead, matched features sat further from
+their rows (median |dy| 1.25 against 0.74 px at VGA, 3.0 against 1.15 px at HD720)
+and disparities changed by 12 px at HD720, so the convention matters for depth too.
+`python -m scripts.zed_row_alignment` checks a live pair:
+
+| Eyes | Matches | dy median, raw → rectified | \|dy\| median | 90th percentile |
+| --- | --- | --- | --- | --- |
+| VGA 672×376 | 72 | −5.66 → −0.31 px | 5.66 → 0.87 px | 2.28 px |
+| HD720 1280×720 | 142 | −11.48 → −0.84 px | 11.48 → 1.05 px | 3.78 px |
+
+Rectified, both eyes share a 339.8 px (VGA) or 683.3 px (HD720) focal length. The
+constant −0.84 px left at HD720 (−0.31 at VGA) is a tilt of about 0.07° that the
+factory file does not hold; a measured correction can remove it if depth needs it. The
+skull's eye sockets now hide most of each view (since the rebuild), so the matches lie
+in the small region both eyes see; repeat the check once the ZED is re-seated.
+
+Remapping is the expensive step. In OpenCV 5.0 on the Pi, one 672×376 colour image
+takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.6 and
+4.3 ms); a grey image 1.3 ms. Rectifying every pair at 30 fps would cost about 14% of
+a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
+off by default), and depth rectifies only the pairs it uses, at its own rate.
+
+**Depth, CPU baseline.** `StereoDepthNode` (`--depth` with `--zed` or `--zed-only`)
+takes the newest pair at most 5 times a second, rectifies the left eye in colour and
+the right in grey, and matches them with OpenCV's StereoSGBM in 3-way mode (64
+disparities, 5-pixel window, uniqueness 10, speckle filter). Depth is
+`focal_length × baseline / disparity`, published as uint16 millimetres beside the
+rectified left image (0 = unknown, nearer than 0.3 m or further than 8 m). Matches
+within 4 px of the 64-pixel search limit are dropped: where the true disparity lies
+beyond it, as for the skull a few centimetres in front of the eyes, the matcher
+settles at the limit. On a live pair that pile-up held 22% of the valid pixels, and it
+moved when the search range grew. The nearest depth kept at VGA is therefore 0.36 m.
+The dashboard shows each depth frame as `zed_rectified` and `zed_depth` (red near,
+blue far, black unknown); the depth message for the 3D view follows.
+
+Measured on the Pi at VGA, capture and depth without the server, 15 s each. The skull
+hides most of the view, so 18% of pixels had a depth.
+
+| OpenCV threads | Depth rate | Compute per frame | Age when published | CPU, of a core |
+| --- | --- | --- | --- | --- |
+| 4 (default) | 5 Hz | 47 ms | 79 ms | 91% |
+| 1 | 5 Hz | 67 ms | 88 ms | 39% |
+| 1 | as fast as possible: 15.1 Hz | 66 ms | 100 ms | 106% |
+| 4 | as fast as possible: 21.1 Hz | 47 ms | 85 ms | 331% |
+
+OpenCV's default thread pool doubles the CPU of the same work here (idle workers
+spin). `cv2.setNumThreads(1)` applies to the whole process, so it is a bot-wide
+choice, not made here. With the server streaming 30 raw pairs and 5 depth frames a
+second, a ZED-only run used 122% of a core.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
