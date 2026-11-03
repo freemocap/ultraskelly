@@ -36,7 +36,9 @@ from ultraskelly.core.bot.sensory.face_locator_node import FaceLocatorNode, Face
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
-from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
+from ultraskelly.ui.runtime_server import (
+    RuntimeServerNode, RuntimeServerParams, TrackingOverlay, encode_jpeg_with_opencv,
+)
 from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
@@ -221,6 +223,9 @@ class BotLauncher(BaseModel):
                     frame_topic=FrameTopic,
                     commands=self.command_recorder,
                     configuration=self.config.model_dump(mode="json"),
+                    # The stream's encoder and quality: a frame both keep is encoded once.
+                    encode_jpeg=encode_jpeg_with_opencv,
+                    stream_jpeg_quality=self.config.runtime_server.jpeg_quality,
                 )
             )
         self.nodes.append(
