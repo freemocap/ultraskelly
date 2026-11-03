@@ -448,6 +448,40 @@ were complete. Four dashboard motor tests sent during the run all ended "done" a
 The OAK lay facing a keyboard, so nobody was tracked: a tracking run with a person in view
 remains to be recorded once the head is back on.
 
+## Recovering from lost connections (2026-11-02)
+
+A lost board, camera or detector now ends the bot the same way: it stops every node,
+which brakes the motors it can still reach, and exits. The boot service brakes the
+motors again (`ExecStopPost`) and starts the bot after 2 s, then longer each time up to
+a minute; each start opens every board and the camera afresh, which is the reconnection.
+Brief faults stay inside the bot: the motor wrappers retry failed writes (above), and
+HailoRT's 1 s inference timeout already turns a hung Hailo-8 into a crash.
+
+Two gaps are closed. `StallMonitorNode` stops the bot when camera frames stop for 5 s or,
+with the Hailo detector, pose results for camera frames stop for 5 s (20 s allowed for the
+first of each); a camera that stayed connected but silent used to leave the bot running
+blind, holding its motors still. The watchdog pings now stop as soon as the bot starts
+shutting down, and STOPPING=1 is no longer sent, since it switched the watchdog off: a
+shutdown stuck on a thread, such as a hung inference, ends with every thread's traceback
+within 45 s.
+
+Opening the camera and the Hailo-8 before the motor boards was proposed, so a missing
+camera would fail before the head moves; it was not done. With the boards disconnected,
+the likelier failure today, the bot would boot the OAK and load the model before failing
+and leave them half open, while a missing camera only re-centers an already centered head.
+
+Evidence. `tests/test_bot_recovery.py` runs the real launcher, controllers and retrying
+wrappers on fake boards whose writes fail with EAGAIN, on the Pi: with one write in five
+failing for a second the bot kept running and later stopped with both motors braked; a
+servo board going dead mid-move ended the bot with the waist and jaw braked; a dead motor
+board ended it instead of hanging; a silent camera ended it with `StreamStalledError` and
+the motors braked. Unit tests cover the monitor's limits and the pings stopping. On the Pi
+with the real OAK and Hailo-8 and simulated motors, a 100-second run under a watchdog unit
+like the service started all six nodes, tripped nothing and stopped cleanly. Still to do:
+real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port and the I2C
+adapter in software with the waist at rest. A motor board that dies between a brake's two
+transfers can still leave a motor driven (above).
+
 ## ZED Mini stereo capture (2026-11-02)
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK

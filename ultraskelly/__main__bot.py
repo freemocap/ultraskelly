@@ -17,11 +17,11 @@ from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNodeParams
 logger = logging.getLogger(__name__)
 
 
-async def main(
+def launch_config(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
-) -> None:
-    """Launch with declarative config.
+) -> LaunchConfig:
+    """The robot's declarative launch configuration.
 
     Args:
         simulate_motors: Record motor commands instead of driving the motor boards.
@@ -77,7 +77,18 @@ async def main(
     config.stereo_depth = StereoDepthNodeParams(matcher=depth) if depth else None
     config.tracking = not zed_only
     config.runtime_server.port = port
-    launcher = BotLauncher.from_config(config)
+    return config
+
+
+async def main(
+    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
+) -> None:
+    """Launch with the configuration above; the options are `launch_config`'s."""
+    launcher = BotLauncher.from_config(launch_config(
+        simulate_motors=simulate_motors, show_window=show_window, record=record, microphone=microphone,
+        zed=zed, zed_only=zed_only, depth=depth, port=port,
+    ))
     await launcher.run()
 
 
