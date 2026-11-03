@@ -226,7 +226,7 @@ class ZedCameraNode(Node):
         with self.source_lock:
             while self.source is not None and not self.stop_event.is_set():
                 read = self.source.read()
-                if read is None:
+                if read is None or self.stop_event.is_set():
                     return None
                 yuyv, timestamp = read
                 frame_number = counter.advance(timestamp)
