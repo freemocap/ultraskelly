@@ -76,14 +76,14 @@ def body_angle_from_shoulders(*, keypoints: np.ndarray, keypoint_threshold: floa
     return float(angle)
 
 
-def select_target(
+def locate_target(
     *,
     keypoints: np.ndarray | None,
     scores: np.ndarray | None,
     target_keypoint: CocoKeypoint,
     keypoint_threshold: float,
-) -> tuple[int | None, int | None, float | None]:
-    """Target keypoint position and body angle of the highest-scoring person.
+) -> tuple[int | None, tuple[int | None, int | None, float | None]]:
+    """The person the head follows, the highest-scoring one, and their target.
 
     Args:
         keypoints: All people's keypoints, shape (num_people, 17, 3), or None.
@@ -92,16 +92,36 @@ def select_target(
         keypoint_threshold: Minimum confidence for the target keypoint.
 
     Returns:
+        (row, (x, y, angle)): the person's row in `keypoints`, their target keypoint in frame
+        pixels and their body angle in degrees, 0.0 when the shoulders are not visible.
+        (None, (None, None, None)) when no person or no confident target keypoint.
+    """
+    if keypoints is None or scores is None or len(scores) == 0:
+        return None, (None, None, None)
+
+    row = int(np.argmax(scores))
+    person = keypoints[row]
+    target = person[target_keypoint]
+    if target[2] < keypoint_threshold:
+        return None, (None, None, None)
+
+    angle = body_angle_from_shoulders(keypoints=person, keypoint_threshold=keypoint_threshold)
+    return row, (int(target[0]), int(target[1]), angle if angle is not None else 0.0)
+
+
+def select_target(
+    *,
+    keypoints: np.ndarray | None,
+    scores: np.ndarray | None,
+    target_keypoint: CocoKeypoint,
+    keypoint_threshold: float,
+) -> tuple[int | None, int | None, float | None]:
+    """Target keypoint position and body angle of the highest-scoring person (see `locate_target`).
+
+    Returns:
         (x, y, angle) in frame pixels and degrees; angle is 0.0 when the shoulders are
         not visible. All None when no person or no confident target keypoint.
     """
-    if keypoints is None or scores is None or len(scores) == 0:
-        return (None, None, None)
-
-    person = keypoints[int(np.argmax(scores))]
-    target = person[target_keypoint]
-    if target[2] < keypoint_threshold:
-        return (None, None, None)
-
-    angle = body_angle_from_shoulders(keypoints=person, keypoint_threshold=keypoint_threshold)
-    return (int(target[0]), int(target[1]), angle if angle is not None else 0.0)
+    return locate_target(
+        keypoints=keypoints, scores=scores, target_keypoint=target_keypoint, keypoint_threshold=keypoint_threshold
+    )[1]

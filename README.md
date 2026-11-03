@@ -38,8 +38,11 @@ uv run --locked python -m ultraskelly.replay --steps 80
 The default application command prints help. Replay feeds scripted targets into
 the real orientation and mouth coroutines with memory-only actuators and prints
 JSON lines of commanded state. It needs no camera, motors, browser, or API key.
-It uses wall-clock scheduling; it is a test harness, not yet a deterministic
-physics simulator. To save a run in PowerShell:
+`--serve` loops the targets and serves the live dashboard on http://127.0.0.1:8081
+instead; `--serve --people 3` replaces them with a synthetic camera showing three people,
+so the video, poses and target channel in [the stream guide](docs/stream.md) can be
+developed without the robot. It uses wall-clock scheduling; it is a test harness, not
+yet a deterministic physics simulator. To save a run in PowerShell:
 
 ```powershell
 uv run --locked python -m ultraskelly.replay --steps 400 | Set-Content -Encoding utf8 replay.jsonl
@@ -103,8 +106,8 @@ While the bot runs, port
 carries FreeMoCap's self-describing CBOR messages: `frame` messages with each OAK image
 and the poses found in it, and `robot_state` messages with motor commands, target, rates
 and node health. The browser decodes them with FreeMoCap's `@freemocap/client` and
-draws the overlay itself. `scripts/open-dashboard.sh` opens it full-screen on the Pi's
-monitor.
+draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
+`scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
 
 The dashboard's **Motor test** panel moves one actuator at a time: pan or tilt by 10°
 or to center, a short waist pulse either way, or a jaw opening pulse. Tests are separate
