@@ -97,3 +97,43 @@ def test_the_oak_frame_waits_for_its_faces_and_keeps_the_cameras_own_jpeg():
     assert encoded == []  # The Pi encoded nothing: the OAK had
     state = received["robot_state"][-1]
     assert state["oak"] == {"rates": {"face_detection": 30.0}}
+
+
+def test_frames_keep_flowing_with_their_own_faces_when_faces_lag_the_poses():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[], pose_camera="oak", faces_camera="oak")
+        pump = asyncio.create_task(server.pump())
+
+        async def faces_later(number):  # Each frame's faces come 50 ms after its pose, after the next pose
+            await asyncio.sleep(0.05)
+            box = (float(number), 110.0, 360.0, 220.0)
+            await bus.publish(FacesTopic, FacesMessage(
+                faces=[FaceObservation(box=box, score=0.9, landmarks=LANDMARKS)], image_size=(640, 480), frame_number=number))
+
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            for number in range(1, 13):
+                camera_frame = FrameMessage(frame=frame(number), frame_number=number, timestamp=float(number))
+                await bus.publish(FrameTopic, camera_frame)
+                await bus.publish(PoseDataTopic, PoseDataMessage(keypoints=np.zeros((1, 17, 3), np.float32),
+                                                                 scores=np.array([0.8]), frame=camera_frame))
+                asyncio.create_task(faces_later(number))
+                await asyncio.sleep(1 / 30)
+            received = await receive_stream(socket, lambda got: len(with_faces(got["frame"])) >= 6)
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return received["frame"]
+
+    frames = with_faces(asyncio.run(scenario()))
+
+    assert len(frames) >= 6  # Most of the 12 frames, though each waited for its faces past the next pose
+    for message in frames:
+        face_box = next(tracker for tracker in message["trackers"] if tracker["tracker_id"] == "face-0")["channels"][0]
+        assert values(face_box)[0, 0] == message["frame_number"]  # Each frame's own faces, never a neighbour's
+
+
+def with_faces(frames):
+    return [message for message in frames if any(tracker["tracker_id"] == "face-0" for tracker in message["trackers"])]

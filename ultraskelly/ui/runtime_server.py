@@ -264,7 +264,9 @@ class CameraFeed:
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
-    pending_since: float = 0.0  # When the pending frame arrived; it may wait briefly for its faces
+    # The faces camera's frames waiting for the OAK's faces in them, by frame number, with when they
+    # arrived; the newest ready one becomes `pending`.
+    waiting: dict[int, tuple[tuple, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -480,7 +482,7 @@ class RuntimeServerNode(Node):
         """Encode the newest pending frame message, repeating while newer ones arrive."""
         feed.encoding = True
         try:
-            while feed.pending is not None and self.clients > 0 and self._ready(feed):
+            while feed.pending is not None and self.clients > 0:
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
                 cameras = [
@@ -512,16 +514,28 @@ class RuntimeServerNode(Node):
         finally:
             feed.encoding = False
 
-    def _ready(self, feed: CameraFeed) -> bool:
-        """Whether the pending frame may be encoded: not while the OAK's faces in it are still
-        due, for at most FACES_WAIT_SECONDS. Faces that stopped coming are not waited for."""
-        camera_frame = feed.pending[0]
-        if feed.name != self.faces_camera or not isinstance(camera_frame, FrameMessage) or "faces" not in self.latest:
-            return True
-        now, number = time.monotonic(), camera_frame.frame_number
-        if number is None or number in self.faces or now - self.latest["faces"].at >= POSE_STALL_SECONDS:
-            return True
-        return max(self.faces, default=number) > number or now - feed.pending_since >= FACES_WAIT_SECONDS
+    def _hold(self, feed: CameraFeed, entry: tuple, now: float) -> None:
+        """Make a frame (with its poses) the feed's next to encode; the faces camera's frames first
+        wait for their faces."""
+        number = entry[0].frame_number if isinstance(entry[0], FrameMessage) else None
+        if feed.name != self.faces_camera or number is None:
+            feed.pending = entry
+            return
+        feed.waiting[number] = (entry, now)
+        while len(feed.waiting) > RECENT_FACES:
+            del feed.waiting[min(feed.waiting)]
+
+    def _release(self, feed: CameraFeed, now: float) -> None:
+        """The newest waiting frame whose faces are in, or that waited FACES_WAIT_SECONDS, or any
+        once faces stop coming, becomes pending; older waiting frames are dropped, newest-wins."""
+        faces_flowing = "faces" in self.latest and now - self.latest["faces"].at < POSE_STALL_SECONDS
+        for number in sorted(feed.waiting, reverse=True):
+            entry, since = feed.waiting[number]
+            if not faces_flowing or number in self.faces or now - since >= FACES_WAIT_SECONDS:
+                feed.pending = entry
+                for older in [waiting for waiting in feed.waiting if waiting <= number]:
+                    del feed.waiting[older]
+                return
 
     async def pump(self) -> None:
         """Drain subscriptions into the latest state; while anyone watches, encode the
@@ -542,7 +556,7 @@ class RuntimeServerNode(Node):
                     if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
                         posed = self.feeds[self.pose_camera]
                         posed.last_pose_at = now
-                        posed.pending, posed.pending_since = (message.frame, message), now
+                        self._hold(posed, (message.frame, message), now)
                     if name == "faces" and message.frame_number is not None:
                         self.faces[message.frame_number] = message
                         while len(self.faces) > RECENT_FACES:
@@ -557,8 +571,10 @@ class RuntimeServerNode(Node):
                     # A posed camera's frames come with their poses, unless the detector has stalled.
                     poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
                     if feed.name != self.pose_camera or not poses_flowing:
-                        feed.pending, feed.pending_since = (camera_frame, None), now
-                if feed.pending is not None and self.clients > 0 and not feed.encoding and self._ready(feed):
+                        self._hold(feed, (camera_frame, None), now)
+                if feed.waiting:
+                    self._release(feed, now)
+                if feed.pending is not None and self.clients > 0 and not feed.encoding:
                     asyncio.create_task(self._encode(feed))
             if self.clients > 0 and now - self.state_published_at >= 1 / self.params.state_hz:
                 self.state_published_at, self.state_sequence = now, self.state_sequence + 1
