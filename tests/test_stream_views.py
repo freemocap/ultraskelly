@@ -288,6 +288,16 @@ def test_other_text_changes_nothing():
     assert run(scenario) is None  # Still everything
 
 
+def test_the_stream_goes_uncompressed_even_when_a_browser_offers_deflate():
+    async def scenario(bus, server, client, encoder):
+        socket = await client.ws_connect("/stream", compress=15)  # Offers permessage-deflate, as browsers do
+        negotiated = socket.compress
+        await socket.close()
+        return negotiated
+
+    assert run(scenario) == 0
+
+
 def test_robot_state_is_published_only_while_someone_watches():
     async def scenario(bus, server, client, encoder):
         viewer = await connect(client, server)

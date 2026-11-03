@@ -497,7 +497,8 @@ class RuntimeServerNode(Node):
 
     async def _stream(self, request: web.Request) -> web.WebSocketResponse:
         """One viewer of the CBOR stream: robot state, and the newest frame of each view it shows."""
-        websocket = web.WebSocketResponse(heartbeat=10)
+        # No permessage-deflate: JPEG and zlib data do not shrink, so deflating them would only cost the Pi
+        websocket = web.WebSocketResponse(heartbeat=10, compress=False)
         await websocket.prepare(request)
         viewer = Viewer(StreamConnection(websocket.send_bytes, websocket.send_str))
         self.viewers.append(viewer)
