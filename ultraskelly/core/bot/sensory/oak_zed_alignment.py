@@ -36,7 +36,7 @@ def intrinsics_from_field_of_view(size: tuple[int, int], field_of_view: tuple[fl
     ])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)  # Arrays can't be compared or hashed as a whole
 class OakZedAlignment:
     """The OAK camera's intrinsics and its pose in the ZED's rectified left camera frame:
     a point at X in the OAK camera's frame is at rotation @ X + translation in the ZED's."""

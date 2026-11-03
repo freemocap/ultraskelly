@@ -248,8 +248,9 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
             ))
             feeds["depth_cameras"] = {"zed": DepthFrameTopic}
-            if self.config.tracking and self.config.detector_type == DetectorType.HAILO_POSE:
-                # The Hailo detector reports the frame each target came from, so its time can be matched.
+            if self.config.tracking:
+                # It uses only pose results that carry the OAK frame they came from (its size and time),
+                # so any detector of OAK images feeds it and the others are ignored.
                 self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
         return feeds
 

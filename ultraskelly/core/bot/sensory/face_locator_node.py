@@ -116,6 +116,7 @@ class FaceLocatorNode(Node):
     poses: SkipValidation[TopicSubscriptionQueue] = Field(exclude=True)
     depths: SkipValidation[TopicSubscriptionQueue] = Field(exclude=True)
     latest_depth: SkipValidation[DepthFrameMessage | None] = Field(default=None, exclude=True)
+    size_warned: bool = Field(default=False, exclude=True)
     calls: int = Field(default=0, exclude=True)
     located: int = Field(default=0, exclude=True)
     seconds_locating: float = Field(default=0.0, exclude=True)
@@ -133,13 +134,21 @@ class FaceLocatorNode(Node):
         )
 
     def locate(self, pose: PoseDataMessage) -> FaceLocationMessage:
-        """The face for one pose result, from the newest depth frame close enough in time."""
+        """The face for one pose result, from the newest depth frame close enough in time. A result
+        without its frame's time, or from an image of another size than the alignment's, has none."""
         target, depth = pose.target, self.latest_depth
         pose_time = pose.frame.timestamp if pose.frame is not None else None
         empty = FaceLocationMessage(pose_timestamp=pose_time, alignment=self.alignment_source)
         if target is None or target.x is None or target.y is None or depth is None:
             return empty
-        if pose_time is not None and depth.timestamp is not None and abs(pose_time - depth.timestamp) > self.params.max_depth_age:
+        if pose_time is None or depth.timestamp is None or abs(pose_time - depth.timestamp) > self.params.max_depth_age:
+            return empty
+        size = (pose.frame.frame.shape[1], pose.frame.frame.shape[0])
+        if size != self.alignment.oak_size:
+            if not self.size_warned:
+                logger.warning(f"Pose frames are {size[0]}x{size[1]} but the OAK-ZED alignment is for "
+                               f"{self.alignment.oak_size[0]}x{self.alignment.oak_size[1]}: no face positions")
+                self.size_warned = True
             return empty
         origin, direction = self.alignment.ray((target.x, target.y))
         point = locate_along_ray(origin, direction, depth.depth, depth.rectification)

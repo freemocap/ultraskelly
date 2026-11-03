@@ -87,7 +87,7 @@ values are the commands sent, not measured positions.
 | `face` | with `--zed --depth`: where the tracked face is in 3D. `position_head` [x forward, y left, z up] and `position_camera` [x right, y down, z forward] in metres, `distance` from the point between the eye sockets, the OAK `pixel` it came from, which `alignment` placed it (`nominal` until measured) and `age`. Positions and distance are null when no face was found |
 | `cameras` | per camera ID (`oak`; with the ZED also `zed_left`, `zed_right`, and with depth `zed_rectified`, `zed_depth`): `fps`, `age` of the newest frame, `width`, `height` |
 | `overlays` | per camera: the `aim` pixel the head steers the target to, and the `jaw_zone` half-width |
-| `rates` | message rates in Hz: `servo_state`, `target`, `pose` |
+| `rates` | message rates in Hz: `servo_state`, `target`, `pose`, and `face` with the face locator |
 | `nodes` | each node's `name` and `state` (starting, running, stopped, crashed), with `error` when crashed |
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
 
