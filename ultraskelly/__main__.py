@@ -61,6 +61,11 @@ def main() -> None:
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    import cv2
+
+    # One OpenCV thread for the whole bot: the pool's idle workers spin between calls, which on
+    # the Pi cost the bot with ZED depth 174% of a core instead of 112%, and pose its 30 fps.
+    cv2.setNumThreads(1)
     from ultraskelly.__main__bot import launch_config
     from ultraskelly.bot_launcher import BotLauncher
 
