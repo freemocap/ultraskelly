@@ -1,0 +1,11 @@
+[Unit]
+Description=Log why the Pi last stopped (reset status and previous shutdown)
+# The previous boot's journal must be readable from the card.
+After=systemd-journal-flush.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ultraskelly-boot-report
+
+[Install]
+WantedBy=multi-user.target

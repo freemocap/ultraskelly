@@ -4,6 +4,7 @@ import logging
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
+from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
 from ultraskelly.core.bot.motor.simulated_actuators import (
@@ -70,6 +71,10 @@ class LaunchConfig(NodeParams):
         default_factory=ActuatorLimits,
         description="Hard limits every servo angle and motor throttle is clamped to, simulated or real",
     )
+    motor_tests: MotorTestLimits = Field(
+        default_factory=MotorTestLimits,
+        description="What the dashboard's motor tests may do, within the hard limits",
+    )
     recording: RunRecorderParams | None = Field(
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
@@ -93,6 +98,7 @@ class BotLauncher(BaseModel):
     tasks: list[asyncio.Task] = Field(default_factory=list, exclude=True)
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
+    motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -107,15 +113,14 @@ class BotLauncher(BaseModel):
         self.command_recorder = CommandRecorder()
         if self.config.simulate_motors:
             logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
-            self.nodes.extend(
-                create_simulated_motor_nodes(
-                    pubsub=self.pubsub,
-                    orientation_params=self.config.orientation,
-                    mouth_params=self.config.mouth,
-                    recorder=self.command_recorder,
-                    limits=self.config.limits,
-                )
+            orientation, mouth = create_simulated_motor_nodes(
+                pubsub=self.pubsub,
+                orientation_params=self.config.orientation,
+                mouth_params=self.config.mouth,
+                recorder=self.command_recorder,
+                limits=self.config.limits,
             )
+            self.nodes.extend([orientation, mouth])
         else:
             orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation)
             mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
@@ -125,6 +130,7 @@ class BotLauncher(BaseModel):
             if self.config.mouth.startup_test:
                 mouth.run_startup_test()  # After wrapping, so the limits apply
             self.nodes.extend([orientation, mouth])
+        self.motor_tester = MotorTester(orientation=orientation, mouth=mouth, limits=self.config.motor_tests)
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
@@ -156,7 +162,7 @@ class BotLauncher(BaseModel):
 
         stereo_cameras = self._create_stereo_nodes()
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
-        orientation = self.config.orientation
+        aim = self.config.orientation
         self.nodes.append(
             RuntimeServerNode.create(
                 pubsub=self.pubsub,
@@ -167,12 +173,11 @@ class BotLauncher(BaseModel):
                 motors_simulated=self.config.simulate_motors,
                 node_status=self.node_status,
                 overlays={
-                    camera_name: TrackingOverlay(
-                        aim=(orientation.target_x, orientation.target_y), jaw_zone=orientation.head_deadzone
-                    )
+                    camera_name: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
                 },
                 # The Hailo detector reports which OAK frame each pose came from.
                 pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
+                motor_tests=self.motor_tester,
             )
         )
         if self.config.recording is not None:

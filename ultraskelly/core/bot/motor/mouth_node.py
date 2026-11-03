@@ -48,6 +48,7 @@ class MouthNode(Node):
     current_throttle: float = Field(default=0.0)
     last_lock: bool = False
     lock_received_at: float | None = None
+    manual: bool = Field(default=False, description="True while a motor test drives the actuators; the jaw controller commands nothing")
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: MouthNodeParams) -> "MouthNode":
@@ -122,6 +123,8 @@ class MouthNode(Node):
             msg: ServoStateMessage = await self.head_servo_subscription.get()
             self.last_lock = msg.is_locked_x and msg.is_locked_y
             self.lock_received_at = self.clock()
+        if self.manual:
+            return
         is_locked = (self.last_lock and self.lock_received_at is not None
                      and self.clock() - self.lock_received_at <= self.params.lock_timeout)
         self._update_mouth_state(is_locked=is_locked)

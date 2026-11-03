@@ -288,6 +288,166 @@ package restores the unpatched source, so run the script again then. After the
 fix: 18,000 soak inferences in 10 minutes and a bot run with the dashboard
 watching produced no warnings.
 
+## Lost Wi-Fi and sudden power losses (2026-11-02)
+
+The Wi-Fi radio never switched off: NetworkManager found it enabled in every boot,
+and rfkill never blocked it. The Pi lost its saved network instead. Until 13:15 it
+joined `HouseHouse-5G` (5745 MHz) through the profile Raspberry Pi Imager set up
+with cloud-init and netplan (`/etc/netplan/90-NM-eaa52c7e-….yaml`). At 13:32:18–19,
+while the robot's USB devices were being rearranged by hand, NetworkManager rewrote
+that file and a second profile during a boot whose journal holds one second. Power
+was lost before the data reached the card, and both files are empty. Later boots had
+no Wi-Fi network to join until `HouseHouse` (2.4 GHz, channel 11) was added from the
+desktop at 14:56. `HouseHouse-5G` is still on the air (channel 44, −52 dBm at the
+robot). The same mechanism emptied git objects after the 10:12 reset.
+
+Of the ten boots since 10:11, only the 10:50 power-off ended with a shutdown (the
+journal's last line is `Journal stopped`); the rest ended mid-run. The current boot's
+bootloader reset status (`/proc/device-tree/chosen/bootloader/rsts`) is `0x1000`, a
+power-on reset: power was lost or cut. A reboot, kernel panic or watchdog reset sets
+bit 5 (`0x1020`). Raspberry Pi does not document these values; see the
+[forum thread](https://forums.raspberrypi.com/viewtopic.php?p=2300447) and
+[rpi-eeprom #758](https://github.com/raspberrypi/rpi-eeprom/pull/758). No boot logged
+undervoltage or USB over-current. The losses came from hands-on work on the powered
+robot. Bursts of I2C "lost arbitration" errors on the servo and motor bus came before
+them, the last one second before the 15:46 loss: the jumper-wired PCA9685 servo board
+at `0x40` had been knocked loose while USB devices were swapped, and probes of the bus
+failed; no motor was commanded. Boot times in `journalctl --list-boots` are rough:
+after a power loss the clock restarts from the last saved time until NTP corrects it.
+
+USB power: the 5 A supply lets the four USB ports draw 1.6 A together (the firmware
+sets `usb_max_current_enable=1`; `config.txt` does not). Declared currents: ZED Mini
+512 + 100 mA, OAK-1 500 mA before it boots, the Nordic receiver 100 mA, a Genesys USB
+2 hub 100 mA and the Yeti X behind it 100 mA, 1.41 A in all. Actual draw was not
+measured; the OAK can exceed its declaration while booting and inferring. Wi-Fi
+power save was on (the driver default).
+
+The Pi setup script below now syncs the journal every 10 s instead of every 5 minutes,
+so the last seconds before a loss survive (they did at 15:46); logs at each boot the
+reset status and whether the previous boot shut down
+(`journalctl -u ultraskelly-boot-report`); flags emptied network profiles and git
+objects; and turns Wi-Fi power save off. Shut the Pi down before re-plugging its power
+or USB devices.
+
+## Boot services and the Pi setup script (2026-11-02)
+
+`scripts/install-services.sh` installs `ultraskelly-bot` (a system service) and
+`ultraskelly-dashboard` (the desktop user's service) for the checkout it runs from;
+both stay disabled until the owners finish testing on the robot. The bot runs through
+`scripts/run-bot.sh`, which takes the shared robot lock without waiting: while a test
+holds it, the bot exits with status 75 naming the holder, and systemd tries again.
+After any exit systemd waits 2 s, then longer each time up to a minute, with no start
+limit. The bot reports READY once its nodes are built and pings a 30 s watchdog from
+its event loop. When the pings stop, systemd sends SIGUSR1, which prints every
+thread's Python traceback before the process dies; not SIGABRT, because depthai
+installs its own handlers for SIGABRT and SIGSEGV that print only native frames.
+Extra bot options come from `/etc/default/ultraskelly-bot`; while the motor boards are
+disconnected it holds `ULTRASKELLY_BOT_OPTIONS=--simulate-motors`.
+
+Measured on the Pi with `--simulate-motors` (the motor boards were disconnected),
+single runs:
+
+| Test | Result |
+| --- | --- |
+| SIGSEGV to the bot | restarted after 2 s; ready 7 s after the kill |
+| SIGSTOP to the bot | watchdog fired after 18 s (pings every 15 s), tracebacks of all threads logged; ready 25 s after the freeze |
+| SIGSEGV to Chromium | dashboard reopened after 5 s; it reconnected to each restarted bot on its own |
+| Test holding the robot lock | bot refused 5 times (2, 4, 8, 15 s apart), naming the holder; started once it was free |
+| Owner's `flock -n` while the bot runs | refused |
+| `systemctl stop` | clean shutdown, exit 0 |
+| Reboot | bot ready 16 s after boot; dashboard full screen with the live stream |
+
+The motors were not driven in these runs. A motor board keeps its last output until
+told otherwise, and a crash or kill skips the bot's own stop commands, so the service
+now brakes the DC motors after every exit: `ExecStopPost` runs
+`scripts/stop-motors-after-bot.sh`, which runs `scripts/stop_motors.py` with a 10 s
+limit, unless the bot exited with status 75, never having started because another
+program held the robot lock. Checked with transient services on the Pi: the step ran
+after a SIGSEGV, a clean stop and a watchdog kill, was skipped after status 75, and a
+hung stand-in was cut off after 10 s. With the motor board unplugged, `stop_motors`
+gave up after ten attempts in 0.9 s, so a restart waits about a second longer. Not yet
+seen braking a running motor on the robot.
+
+`scripts/setup-pi.sh --check` reports 20 settings and 8 observations of the hardware,
+power, network and repository, changing nothing; without `--check` it puts missing
+settings in place. The system files it installs live under `scripts/pi-system/` at
+their paths under `/`. On the robot's Pi it held the seven Hailo packages (an apt
+upgrade would replace the patched driver), turned Wi-Fi power save off, added the
+watchdog drop-in and the commented OAK rule, and removed the two empty netplan files.
+With five settings removed by hand, the check reported them missing and the script put
+all five back. After the reboot every setting was in place (27 OK); the one warning,
+once the services had stopped, was the disconnected I2C boards. Not tested: a freshly
+imaged Pi, where the script also installs packages, uv and the virtual environment.
+
+## Motion: waist drive, motor writes and motor tests (2026-11-02)
+
+**Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most
+0.5 s, then braked it (`throttle = 0` shorts the motor; `None` would let it coast) for a
+0.4 s cooldown, repeating while the head was turned, and idled it whenever the head lost
+lock unless the head was over 45 degrees off. A first sound-and-camera round with an older
+microphone (`scripts/waist_sound_test.py`) heard broadband clicks at every start and stop
+and a PWM whine near 1.6 kHz with harmonics. The camera saw the torso swing back at
+12-25 deg/s after each brake, a wobble of about 2 Hz. The motor board's PCA9685 already
+runs at its highest PWM frequency, so the whine cannot be moved above hearing.
+
+**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses. The waist starts
+when the head's pan is over 15 degrees from neutral, regardless of lock, and keeps turning
+toward the gaze until the head is within 5 degrees. Each move starts at 0.45, ramps up at
+1.5 per second to 0.7 plus 0.008 per degree beyond 15 (at most 0.8; 0.7 was the old
+controller's floor for static friction and stays until measured), ramps down at 2 per
+second, releases the motor at 0.4 to coast, and brakes it 0.3 s later. Reversing passes
+through that stop. A move lasting 6 s ramps down and rests 2 s, the remaining limit on
+continuous drive. Losing the target ramps the waist down; stopping the bot still brakes at
+once. These levels are provisional: the simulator (a linear plant) shows 9-17 moves of 1-6 s
+per minute of a sweeping target instead of half-second bursts, but no robot measurement
+exists yet. Round 2 of the sound test with the Yeti X (ALSA card 3, mixer 0-21 dB, run at
+12) waits for the robot's rebuild, as does a recorded tracking run comparing old and new.
+The sound test now centers and holds the head, refuses to run while the OAK sees too
+little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with the
+lens covered), bounds its return move by the measured angle, measures where the waist
+breaks loose and stalls, and has a `drive` profile that replays the bot's own drive.
+`scripts/analyze_run.py` summarizes a recorded run: what was kept, the waist's moves and
+stops, and the sound while it moves.
+
+**Motor board writes.** While the servo board's loose jumper disturbed the I2C bus, motor
+board transfers failed with EAGAIN after lost arbitration. adafruit_motor writes a DC
+motor's two bridge inputs in separate transfers, and a brake writes the first input fully
+on before the second, so a brake cut short there drives the motor at full power. The
+recording wrappers now retry a failed write (3 attempts, stops 10). They also send an
+unchanged throttle again only every 0.5 s: the 100 Hz controllers had been rewriting both
+motors' unchanged values, about 400 transfers a second on a 100 kHz bus, roughly a fifth of
+the event loop's time. A bus that dies for good between a brake's two transfers remains
+uncovered; writing both channels in one transfer (motor 1 uses channels 9 and 10, motor 2
+uses 11 and 12) would close it. If the bot exits without its cleanup (killed, or crashed
+in native code), the motor board keeps its last command: `scripts/stop_motors.py` brakes
+all four motors and suits a service's `ExecStopPost`.
+
+**Motor tests.** The dashboard can move one actuator at a time through its own command
+contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it
+has finished or been stopped; one that is malformed, outside the test limits or arrives
+while another runs is refused at once with the reason, never queued, merged or silently
+clamped. Test limits: servos within 30 degrees of center, waist up to 0.7 for 0.5 s and at
+most 1.0 throttle-seconds net one way (there is no waist angle sensor), jaw up to 1.0 for
+0.3 s; the hard actuator limits still clamp every command. Tracking holds its commands
+during a test, the other DC motor is braked, and tracking resumes from where the test left
+the head. POSTs must carry JSON, so another site's page cannot send them without a CORS
+preflight, which the server does not answer. Verified with unit and endpoint tests and in
+the browser against `python -m ultraskelly.replay --serve`; not yet run on the robot's
+motors.
+
+**Run recording check.** With the motor boards disconnected for the rebuild, a 67-second
+run of `--hardware --simulate-motors --no-window --record --microphone "Yeti X"` (commit
+e26b349) stopped cleanly on SIGTERM and kept 1953 frames at 30.0 fps. None were dropped,
+no frame numbers were missing, and the longest gap was one frame. Frames reached the
+recorder 35 ms after capture (median; 43 ms at most). Every frame decoded with OpenCV on the
+Pi and again on the Windows PC. The Yeti X audio (48 kHz mono) starts 18 ms after the run
+and lasts 65.1 s: the stop signal reaches `arecord` too, so the last 1.7 s of shutdown are
+silent. `run.json`, poses and targets for every frame, servo state, and the command log
+were complete. Four dashboard motor tests sent during the run all ended "done" and appear in
+`commands.csv` at their times; a fifth, over the waist limit, was refused with HTTP 400.
+The OAK lay facing a keyboard, so nobody was tracked: a tracking run with a person in view
+remains to be recorded once the head is back on.
+
 ## ZED Mini stereo capture (2026-11-02)
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK

@@ -56,7 +56,7 @@ class Simulation:
         self.settings = settings
         self.head.params.head_gain = settings.head_gain
         self.head.params.head_deadzone = settings.head_deadzone
-        self.head.params.waist_gain = settings.waist_gain
+        self.head.params.waist.gain = settings.waist_gain
 
     def target(self):
         t = self.tick * self.dt
@@ -105,18 +105,22 @@ class Simulation:
             await self.mouth.step()
             self.pan = approach(self.pan, self.head.pan_angle, self.settings.servo_speed * self.dt)
             self.tilt = approach(self.tilt, self.head.tilt_angle, self.settings.servo_speed * self.dt)
-            self.waist = max(-100, min(100, self.waist - self.head.waist_motor.throttle * self.settings.waist_speed * self.dt))
+            self.waist = max(-100, min(100, self.waist - self.waist_drive() * self.settings.waist_speed * self.dt))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
             self.tick += 1
             if self.tick % 5 == 0:
                 self.history.append(self.sample())
 
+    def waist_drive(self):
+        # A released (coasting) waist motor has no drive; the plant has no inertia to carry it on.
+        return self.head.waist_motor.throttle or 0.0
+
     def sample(self):
         return {"time": round(self.tick * self.dt, 3), "pan": self.pan,
                 "pan_command": self.head.pan_angle, "tilt": self.tilt,
                 "tilt_command": self.head.tilt_angle, "waist": self.waist, "jaw": self.jaw,
-                "waist_throttle": self.head.waist_motor.throttle,
+                "waist_throttle": self.waist_drive(),
                 "mouth_throttle": self.mouth.mouth_motor.throttle,
                 "mouth_state": self.mouth.mouth_state.value,
                 "jaw_energized": self.mouth.mouth_motor.throttle < 0}

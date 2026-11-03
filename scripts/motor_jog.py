@@ -16,6 +16,7 @@ import time
 
 from ultraskelly.core.bot.motor.mouth_node import MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.simulated_actuators import stop_board_motors
 
 SERVO_STEPS = (90.0, 80.0, 100.0, 90.0)  # Small sweep around center
 WAIST_SECONDS = 0.3
@@ -61,14 +62,13 @@ def main() -> None:
                 jog_servo(servo_kit, "tilt", orientation.tilt_channel)
             elif actuator == "waist":
                 name = f"waist (motor M{orientation.waist_motor_channel})"
-                pulse(waist, name, +orientation.waist_min_throttle, WAIST_SECONDS)
-                pulse(waist, name, -orientation.waist_min_throttle, WAIST_SECONDS)
+                pulse(waist, name, +orientation.waist.max_throttle, WAIST_SECONDS)
+                pulse(waist, name, -orientation.waist.max_throttle, WAIST_SECONDS)
             elif actuator == "mouth":
                 # The same pulse the bot uses to open the jaw; a spring closes it.
                 pulse(jaw, f"jaw (motor M{mouth.mouth_motor_channel})", -1.0, mouth.opening_duration)
     finally:
-        for motor in motors.values():
-            motor.throttle = 0.0
+        stop_board_motors({f"motor{number}": motor for number, motor in motors.items()})
         print("All DC motors stopped", flush=True)
 
 

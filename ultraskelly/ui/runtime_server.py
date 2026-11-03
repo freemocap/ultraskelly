@@ -7,6 +7,7 @@ very image (a stereo camera's two images travel together in one message);
 with @freemocap/client and draws the poses and guides itself. The stream is read-only
 and newest-wins: a slow browser receives fewer, newer messages and never blocks the
 bot's event loop. Motor values are the commands sent, not measured positions.
+Dashboard motor tests are separate commands with their own replies; see motor_test_routes.
 """
 import asyncio
 import logging
@@ -33,6 +34,7 @@ from freemocap_stream import (
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.motor.motor_test import MotorTester
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
@@ -46,6 +48,7 @@ from ultraskelly.core.pubsub.bot_topics import (
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,7 @@ ASSETS: dict[str, tuple[Path, str]] = {
     "/": (DASHBOARD / "index.html", "text/html"),
     "/dashboard.js": (DASHBOARD / "dashboard.js", "text/javascript"),
     "/dashboard.css": (DASHBOARD / "dashboard.css", "text/css"),
+    "/motor-test.js": (DASHBOARD / "motor-test.js", "text/javascript"),
     "/style.css": (SHARED / "style.css", "text/css"),
     "/skeleton.js": (SHARED / "skeleton.js", "text/javascript"),
     **{
@@ -201,6 +205,7 @@ class RuntimeServerNode(Node):
     clients: int = Field(default=0, exclude=True)
     state_sequence: int = Field(default=0, exclude=True)
     state_published_at: float = Field(default=0.0, exclude=True)
+    motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
 
     @classmethod
     def create(
@@ -215,12 +220,14 @@ class RuntimeServerNode(Node):
         overlays: dict[str, TrackingOverlay] | None = None,
         pose_camera: str | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
+        motor_tests: MotorTester | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
-        `pose_camera`'s frames travel with the poses detected in them. A stereo camera's two
+        `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
+        the dashboard can run motor tests through /api/motor-test. A stereo camera's two
         images travel together in one frame message, as cameras `<name>_left` and `<name>_right`.
         """
         node = cls(
@@ -231,6 +238,7 @@ class RuntimeServerNode(Node):
             node_status=node_status,
             encode_jpeg=encode_jpeg,
             pose_camera=pose_camera,
+            motor_tests=motor_tests,
         )
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
@@ -255,6 +263,8 @@ class RuntimeServerNode(Node):
         for path in ASSETS:
             app.router.add_get(path, self._asset)
         app.router.add_get("/stream", self._stream)
+        if self.motor_tests is not None:
+            add_motor_test_routes(app, self.motor_tests)
         return app
 
     def robot_state(self) -> dict:
@@ -289,6 +299,7 @@ class RuntimeServerNode(Node):
             },
             "rates": {name: round(hz, 1) for name, hz in self.rates.items()},
             "nodes": self.node_status(),
+            "motor_test": None if self.motor_tests is None else self.motor_tests.state(),
         }
         if servo := self.latest.get("servo_state"):
             message: ServoStateMessage = servo.message
@@ -401,10 +412,15 @@ class RuntimeServerNode(Node):
         await runner.setup()
         site = web.TCPSite(runner, self.params.host, self.params.port)
         await site.start()
-        logger.info(f"Runtime server on port {self.params.port}, host {self.params.host or 'all interfaces'} (read-only)")
+        logger.info(
+            f"Runtime server on port {self.params.port}, host {self.params.host or 'all interfaces'} "
+            f"({'with motor tests' if self.motor_tests is not None and self.motor_tests.limits.enabled else 'read-only'})"
+        )
         try:
             await self.pump()
         finally:
             self.stop_event.set()
+            if self.motor_tests is not None:
+                await self.motor_tests.stop()
             await runner.cleanup()
             logger.info("RuntimeServerNode stopped")

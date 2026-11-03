@@ -1,50 +1,67 @@
 """Drive the waist through short throttle profiles while recording its sound and motion (MOVES REAL MOTORS).
 
-Run on the Pi with the bot stopped (this needs the OAK and the motor board), a USB
-microphone near the waist, and the robot ready for motion:
+Run on the Pi under the robot lock, with the bot stopped (this needs the OAK and both
+motor boards), a USB microphone near the waist, and the robot ready for motion:
 
-    .venv/bin/python -m scripts.waist_sound_test                    # every profile
-    .venv/bin/python -m scripts.waist_sound_test current steady     # just these, in order
+    flock -n /run/lock/ultraskelly-robot.lock .venv/bin/python -m scripts.waist_sound_test --gain 12
+    ... -m scripts.waist_sound_test current steady                      # just these, in order
+    ... -m scripts.waist_sound_test "ramp:start=0.45,stop=0.35"         # a profile with changed fields
 
-Each profile turns the waist one way, rests, then turns it back the same way. The
-microphone records the sound; the OAK measures how far the torso turned from the
-horizontal image shift while the head holds still. Afterwards the waist turns back by
-the angle the camera measured, so it ends roughly where it started. A table prints at
-the end; the WAV, the camera video and every measurement are saved under
+The head is centered and held, so the camera turns only with the torso. Each profile
+turns the waist one way, rests, then turns it back the same way. The microphone records
+the sound; the OAK measures how far the torso turned from the horizontal image shift, so
+the run refuses to start while the OAK cannot see enough detail. Afterwards the waist
+turns back by the angle the camera measured, so it ends roughly where it started; that
+return stops if the camera stops seeing and lasts no longer than the angle needs. A table
+prints at the end; the WAV, the camera video and every measurement are saved under
 ~/ultraskelly-recordings/. Levels are relative (an uncalibrated microphone at a fixed
 gain), so compare rows, not absolute values. Medians over time keep intermittent sounds
-such as speech from dominating them. DC motors are always stopped on exit, including
-on Ctrl+C.
+such as speech from dominating them. DC motors are always stopped on exit, including on
+Ctrl+C.
 """
 import argparse
+import bisect
 import csv
 import json
 import math
 import threading
 import time
 import wave
-from dataclasses import asdict, dataclass
+from collections import deque
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
-from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, RecordingMotor
+from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
+from ultraskelly.core.bot.motor.simulated_actuators import (
+    ActuatorCommand,
+    CommandRecorder,
+    RecordingMotor,
+    RecordingServoKit,
+    stop_board_motors,
+)
 from ultraskelly.core.bot.recording.microphone import RATE as AUDIO_RATE, Microphone, find_microphone
 
-MIC_GAIN = 256  # Of 496 steps on the first microphone (16 dB): a fixed gain with headroom
 CONTROL_PERIOD = 0.01  # The orientation controller's loop period
+HEAD_CENTER = 90.0  # Degrees; where the bot starts and leaves both head servos
+HEAD_SETTLE = 1.0  # Seconds for the head to reach center before the camera is checked
 IDLE_SECONDS = 2.0
 REST_SECONDS = 1.2
+MAX_MOVE_SECONDS = 3.0  # Keeps every move short
 SOUND_TAIL = 0.4  # Sound after the drive ends (the stop) still belongs to the move
 MOTION_TAIL = 0.8  # So does the torso's swing after it
+MOVING_DPS = 5.0  # Camera turn rate that counts as the waist moving
 RETURN_THROTTLE = 0.7
 RETURN_TOLERANCE = 3.0  # Degrees
-RETURN_SECONDS = 4.0
+RETURN_SECONDS = 4.0  # Longest return
+RETURN_MIN_DPS = 8.0  # Slower than the waist turns at RETURN_THROTTLE, so it bounds a return by its angle
 FRAME_SIZE = (640, 480)
+SMALL_SIZE = (160, 120)  # Frames are compared at this size
+MIN_SHARPNESS = 100.0  # Laplacian variance of a small frame: the room reads over 1000, a covered lens under 10
 HFOV_DEGREES = 69.0  # OAK-1 colour camera over the full 4:3 sensor
 FOCAL_PX = FRAME_SIZE[0] / 2 / math.tan(math.radians(HFOV_DEGREES / 2))
 PCA9685_CLOCK = 25e6  # Nominal; the internal oscillator often runs a few percent fast
@@ -61,13 +78,21 @@ class Profile:
     seconds: float = 1.0
     kick: float = 0.0  # Throttle for the first kick_seconds, to break static friction
     kick_seconds: float = 0.0
-    ramp_up: float = 0.0  # Seconds to ramp from 0 to cruise
-    ramp_down: float = 0.0  # Seconds to ramp from cruise to 0 at the end
+    start: float = 0.0  # Level the ramp up begins at
+    ramp_up: float = 0.0  # Seconds to ramp from start to cruise
+    stop: float = 0.0  # Level the ramp down ends at, before the motor is braked or released
+    ramp_down: float = 0.0  # Seconds to ramp from cruise to stop at the end
     pulse_on: float = 0.0  # Drive for pulse_on seconds, brake for pulse_off seconds, repeat
     pulse_off: float = 0.0
     coast: bool = False  # Stop by releasing the motor instead of braking it
     slow_decay: bool = False  # Brake instead of coast between PWM pulses
     pwm_hz: float = 1600.0
+
+    def __post_init__(self) -> None:
+        if not 0 < self.seconds <= MAX_MOVE_SECONDS:
+            raise ValueError(f"A move lasts more than 0 and at most {MAX_MOVE_SECONDS} seconds")
+        if not 24 <= self.pwm_hz <= 1600:
+            raise ValueError("The motor board's PWM runs between 24 and about 1600 Hz")
 
     def throttle(self, t: float) -> float | None:
         """Throttle magnitude t seconds into the move; None releases the motor."""
@@ -78,11 +103,26 @@ class Profile:
         if t < self.kick_seconds:
             return self.kick
         level = self.cruise
-        if self.ramp_up:
-            level = min(level, self.cruise * t / self.ramp_up)
-        if self.ramp_down:
-            level = min(level, self.cruise * (self.seconds - t) / self.ramp_down)
+        if self.ramp_up and t < self.ramp_up:
+            level = self.start + (self.cruise - self.start) * t / self.ramp_up
+        if self.ramp_down and self.seconds - t < self.ramp_down:
+            level = min(level, self.stop + (self.cruise - self.stop) * (self.seconds - t) / self.ramp_down)
         return level
+
+
+def drive_profile(params: WaistDriveParams, angle: float = 30.0, seconds: float = 1.5) -> Profile:
+    """One move of the bot's waist drive with the head held `angle` degrees off center, open loop.
+
+    The bot brakes a released waist after its coast; here it stays released through the rest.
+    """
+    cruise = min(params.max_throttle, params.min_throttle + params.gain * max(0.0, angle - params.start_angle))
+    start = min(params.start_throttle, cruise)
+    return Profile(
+        f"the bot's drive with the head {angle:.0f} deg off: {start:.2f} ramping to {cruise:.2f}, "
+        f"down to {params.release_throttle:.2f}, released",
+        cruise=cruise, seconds=seconds, start=start, ramp_up=(cruise - start) / params.ramp_up,
+        stop=params.release_throttle, ramp_down=(cruise - params.release_throttle) / params.ramp_down, coast=True,
+    )
 
 
 SLOW = dict(seconds=1.2, kick=0.75, kick_seconds=0.12, ramp_down=0.2, coast=True)
@@ -102,7 +142,26 @@ PROFILES = {
     "slow-55-slowdecay": Profile("slow-55 with slow decay", cruise=0.55, slow_decay=True, **SLOW),
     "slow-55-pwm500": Profile("slow-55 at 500 Hz PWM", cruise=0.55, pwm_hz=500.0, **SLOW),
     "slow-55-pwm200": Profile("slow-55 at 200 Hz PWM", cruise=0.55, pwm_hz=200.0, **SLOW),
+    "drive": drive_profile(WaistDriveParams()),
 }
+
+
+def parse_profile(text: str) -> Profile:
+    """A named profile, optionally with fields changed: `slow-55:cruise=0.5,coast=false`."""
+    name, _, changes = text.partition(":")
+    if name not in PROFILES:
+        raise ValueError(f"unknown profile {name!r}; choose from {', '.join(PROFILES)}")
+    profile = PROFILES[name]
+    if not changes:
+        return profile
+    types = {field.name: field.type for field in fields(Profile) if field.name != "description"}
+    values = {}
+    for change in changes.split(","):
+        key, _, value = (part.strip() for part in change.partition("="))
+        if key not in types:
+            raise ValueError(f"unknown profile field {key!r}; choose from {', '.join(types)}")
+        values[key] = value.lower() in ("1", "true", "yes") if types[key] in (bool, "bool") else float(value)
+    return replace(profile, description=f"{profile.description}; {changes}", **values)
 
 
 def pwm_output_hz(requested: float) -> float:
@@ -115,6 +174,7 @@ class CameraMotion:
     """Saves the OAK's frames to a video and measures the horizontal image shift between them."""
 
     def __init__(self, video_path: Path, flip: bool) -> None:
+        import cv2
         import depthai as dai
 
         self.flip = flip
@@ -125,6 +185,8 @@ class CameraMotion:
         )
         self.writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter.fourcc(*"MJPG"), 30, FRAME_SIZE)
         self.shifts: list[tuple[float, float, float, float]] = []  # (frame time, dx px, dy px, peak strength)
+        self.sharpnesses: deque[float] = deque(maxlen=10)  # Detail in the latest frames
+        self.last_frame_at = -math.inf  # time.monotonic() when the latest frame arrived
         self.started = threading.Event()
         self.stopping = threading.Event()
         self.pipeline.start()
@@ -132,9 +194,10 @@ class CameraMotion:
         self.thread.start()
 
     def _run(self) -> None:
-        small_size = (160, 120)
-        scale = FRAME_SIZE[0] / small_size[0]
-        window = cv2.createHanningWindow(small_size, cv2.CV_32F)
+        import cv2
+
+        scale = FRAME_SIZE[0] / SMALL_SIZE[0]
+        window = cv2.createHanningWindow(SMALL_SIZE, cv2.CV_32F)
         previous = None
         while not self.stopping.is_set():
             message = self.queue.tryGet()
@@ -146,12 +209,22 @@ class CameraMotion:
                 frame = np.ascontiguousarray(frame[::-1, ::-1])
             self.writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            small = cv2.resize(gray, small_size, interpolation=cv2.INTER_AREA).astype(np.float32)
+            small = cv2.resize(gray, SMALL_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
+            self.sharpnesses.append(float(cv2.Laplacian(small, cv2.CV_32F).var()))
             if previous is not None:
                 (dx, dy), strength = cv2.phaseCorrelate(previous, small, window)
                 self.shifts.append((message.getTimestamp().total_seconds(), dx * scale, dy * scale, strength))
             previous = small
+            self.last_frame_at = time.monotonic()
             self.started.set()
+
+    def sharpness(self) -> float:
+        """Median detail of the latest frames; 0 before any arrive."""
+        return float(np.median(list(self.sharpnesses))) if self.sharpnesses else 0.0
+
+    def can_see(self) -> bool:
+        """Whether frames keep arriving with enough detail for their shifts to measure the turn."""
+        return time.monotonic() - self.last_frame_at < 0.5 and self.sharpness() >= MIN_SHARPNESS
 
     def turned_since(self, start: float) -> float:
         """Degrees the camera has turned since `start`, from the shifts measured so far."""
@@ -180,14 +253,20 @@ def return_waist(waist: RecordingMotor, camera: CameraMotion, since: float, offs
     """Turn the waist back by the angle measured since `since`, plus `offset` from earlier runs.
 
     A positive throttle turns the camera's view positive, so the return drives against the sign.
+    It stops when the camera stops seeing and lasts no longer than the angle needs at a slow speed,
+    so a bad measurement cannot drive the torso far.
     """
     error = camera.turned_since(since) + offset
     if abs(error) < RETURN_TOLERANCE:
         return
+    if not camera.can_see():
+        print(f"Not returning the waist {-error:+.0f} degrees: the camera cannot measure it", flush=True)
+        return
     print(f"Returning the waist {-error:+.0f} degrees", flush=True)
+    limit = min(RETURN_SECONDS, 0.3 + abs(error) / RETURN_MIN_DPS)
     start = time.monotonic()
     waist.throttle = -math.copysign(RETURN_THROTTLE, error)
-    while time.monotonic() - start < RETURN_SECONDS:
+    while time.monotonic() - start < limit and camera.can_see():
         remaining = camera.turned_since(since) + offset
         if remaining * error <= 0 or abs(remaining) < RETURN_TOLERANCE:
             break
@@ -271,34 +350,81 @@ def motion_metrics(shifts: list, t0: float, drive_end: float, t1: float) -> dict
     }
 
 
+def onset_metrics(shifts: list, commands: list[ActuatorCommand], t0: float, drive_end: float) -> dict:
+    """Waist throttle when the camera first and last turned during a drive: where it breaks loose and stalls."""
+    turns = np.array([(t, math.degrees(math.atan(dx / FOCAL_PX)) * 30) for t, dx, _, _ in shifts if t0 <= t <= drive_end])
+    if len(turns) < 3:
+        return {}
+    rates = np.convolve(turns[:, 1], np.ones(3) / 3, mode="same")  # Over 0.1 s, below the torso's wobble
+    moving = np.flatnonzero(np.abs(rates) >= MOVING_DPS)
+    times = [command.at for command in commands]
+
+    def throttle_at(t: float) -> float | None:
+        index = bisect.bisect_right(times, t) - 1
+        value = commands[index].value if index >= 0 else None
+        return None if value is None else round(abs(value), 3)
+
+    if not len(moving):
+        return {"moving_from": None, "moving_until": None}
+    return {"moving_from": throttle_at(turns[moving[0], 0]), "moving_until": throttle_at(turns[moving[-1], 0])}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Drive the waist through throttle profiles while recording sound and motion (moves real motors).")
-    parser.add_argument("profiles", nargs="*", help=f"Profiles to run, in order (default: all): {', '.join(PROFILES)}")
-    parser.add_argument("--mic", default="USB PnP Audio Device", help="Part of the microphone's ALSA card name")
-    parser.add_argument("--gain", type=int, default=None, help="Set the microphone's 'Mic' capture control to this many steps")
+    parser.add_argument(
+        "profiles", nargs="*",
+        help=f"Profiles to run, in order (default: all): {', '.join(PROFILES)}. Change fields with NAME:FIELD=VALUE,...",
+    )
+    parser.add_argument("--mic", default="Yeti X", help="Part of the microphone's ALSA card name")
+    parser.add_argument("--gain", type=int, default=None, help="Set the microphone's 'Mic' capture control (Yeti X: 0-21 dB)")
     parser.add_argument("--offset", type=float, default=0.0, help="Degrees the waist was already turned by earlier runs, to undo")
     parser.add_argument("--no-flip", action="store_true", help="The OAK is mounted upright (the bot flips it by default)")
     args = parser.parse_args()
-    selected = args.profiles or list(PROFILES)
-    unknown = [name for name in selected if name not in PROFILES]
-    if unknown:
-        parser.error(f"unknown profiles {unknown}; choose from {list(PROFILES)}")
+    try:
+        selected = {text: parse_profile(text) for text in args.profiles or PROFILES}
+    except ValueError as error:
+        parser.error(str(error))
 
     try:
         card = find_microphone(args.mic)
     except ValueError as error:
         raise SystemExit(str(error))
-    folder = Path.home() / "ultraskelly-recordings" / f"waist-sound-{datetime.now():%Y%m%d-%H%M%S}"
-    folder.mkdir(parents=True)
     orientation, limits, recorder = OrientationNodeParams(), ActuatorLimits(), CommandRecorder()
 
     from adafruit_motor import motor as dc_motor
     from adafruit_motorkit import MotorKit
+    from adafruit_servokit import ServoKit
 
+    try:
+        servo_kit = ServoKit(channels=16)
+    except Exception as error:  # A missing board raises ValueError; a disturbed I2C bus can raise TypeError or OSError
+        raise SystemExit(
+            f"No usable head servo board ({type(error).__name__}: {error}); it must hold the head still "
+            "while the camera measures the waist. No motor was driven."
+        )
+    head = RecordingServoKit(
+        kit=servo_kit,
+        recorder=recorder,
+        names={orientation.pan_channel: "pan", orientation.tilt_channel: "tilt"},
+        limits=limits,
+    )
+    for channel in (orientation.pan_channel, orientation.tilt_channel):
+        head.servo[channel].angle = HEAD_CENTER
+    folder = Path.home() / "ultraskelly-recordings" / f"waist-sound-{datetime.now():%Y%m%d-%H%M%S}"
+    folder.mkdir(parents=True)
     camera = CameraMotion(folder / "camera.avi", flip=not args.no_flip)
-    if not camera.started.wait(timeout=20):
+    try:
+        if not camera.started.wait(timeout=20):
+            raise SystemExit("No frames from the OAK; is the bot still running?")
+        time.sleep(HEAD_SETTLE)
+        if not camera.can_see():
+            raise SystemExit(
+                f"The OAK sees too little detail to measure the waist (sharpness {camera.sharpness():.0f}, "
+                f"needs {MIN_SHARPNESS:.0f}); clear its view. No motor was driven."
+            )
+    except BaseException:
         camera.stop()
-        raise SystemExit("No frames from the OAK; is the bot still running?")
+        raise
     kit = MotorKit(address=0x60, pwm_frequency=1600)
     motors = {number: getattr(kit, f"motor{number}") for number in (1, 2, 3, 4)}
     raw_waist = motors[orientation.waist_motor_channel]
@@ -310,8 +436,7 @@ def main() -> None:
         began = time.monotonic()
         time.sleep(IDLE_SECONDS)
         segments.append(dict(profile="idle", direction=0, start=began, drive_end=time.monotonic(), end=time.monotonic()))
-        for name in selected:
-            profile = PROFILES[name]
+        for name, profile in selected.items():
             kit._pca.frequency = profile.pwm_hz
             raw_waist.decay_mode = dc_motor.SLOW_DECAY if profile.slow_decay else dc_motor.FAST_DECAY
             for direction in (+1, -1):
@@ -323,8 +448,7 @@ def main() -> None:
         raw_waist.decay_mode = dc_motor.FAST_DECAY
         return_waist(waist, camera, began, args.offset)
     finally:
-        for motor in motors.values():
-            motor.throttle = 0.0
+        stop_board_motors({f"motor{number}": motor for number, motor in motors.items()})
         raw_waist.decay_mode = dc_motor.FAST_DECAY
         kit._pca.frequency = 1600
         print("All DC motors stopped", flush=True)
@@ -335,37 +459,43 @@ def main() -> None:
     with open(folder / "motion.csv", "w", newline="") as output:
         csv.writer(output).writerows([("time", "dx_px", "dy_px", "strength"), *camera.shifts])
     with open(folder / "commands.csv", "w", newline="") as output:
-        csv.writer(output).writerows([("time", "actuator", "throttle"), *((c.at, c.actuator, c.value) for c in recorder.history)])
+        csv.writer(output).writerows([("time", "actuator", "value"), *((c.at, c.actuator, c.value) for c in recorder.history)])
     results = {
         "audio_start": audio_start,
         "mic_card": card,
         "mic": args.mic,
         "mic_gain_steps": args.gain,
-        "profiles": {name: asdict(PROFILES[name]) for name in selected},
+        "profiles": {name: asdict(profile) for name, profile in selected.items()},
         "segments": segments,
     }
     (folder / "results.json").write_text(json.dumps(results, indent=2))
 
     with wave.open(str(folder / "audio.wav")) as recording:
         samples = np.frombuffer(recording.readframes(recording.getnframes()), dtype="<i2") / 32768.0
+    waist_commands = [command for command in recorder.history if command.actuator == "waist"]
     for segment in segments:
-        profile = PROFILES.get(segment["profile"])
+        profile = selected.get(segment["profile"])
         sound_end = segment["end"] if profile is None else segment["drive_end"] + SOUND_TAIL
         motion_end = segment["end"] if profile is None else segment["drive_end"] + MOTION_TAIL
         segment.update(sound_metrics(samples, audio_start, segment["start"], sound_end, profile.pwm_hz if profile else 1600.0))
         segment.update(motion_metrics(camera.shifts, segment["start"], segment["drive_end"], motion_end))
+        if profile is not None:
+            segment.update(onset_metrics(camera.shifts, waist_commands, segment["start"], segment["drive_end"]))
     (folder / "results.json").write_text(json.dumps(results, indent=2))
 
-    print(f"\n{'profile':<19}{'dir':>4}{'turned':>8}{'deg/s':>7}{'steady':>7}{'peak':>6}{'swing':>7}"
+    width = max(19, *(len(s["profile"]) + 1 for s in segments))
+    print(f"\n{'profile':<{width}}{'dir':>4}{'turned':>8}{'deg/s':>7}{'steady':>7}{'peak':>6}{'swing':>7}{'from':>6}{'until':>6}"
           f"{'level':>7}{'whine':>7}{'rest':>7}{'click':>7}{'pwm Hz':>8}")
     for s in segments:
         def show(key: str, width: int, digits: int = 1) -> str:
             value = s.get(key)
             return f"{'-':>{width}}" if value is None else f"{value:>{width}.{digits}f}"
-        print(f"{s['profile']:<19}{s['direction']:>+4d}{show('turned_deg', 8)}{show('speed_dps', 7)}{show('steady_dps', 7)}"
-              f"{show('peak_dps', 6, 0)}{show('swing_dps', 7)}{show('level_db', 7)}{show('whine_db', 7)}{show('rest_db', 7)}"
-              f"{show('click_db', 7)}{show('whine_hz', 8, 0)}{'  CLIPPED' if s.get('clipped') else ''}")
+        print(f"{s['profile']:<{width}}{s['direction']:>+4d}{show('turned_deg', 8)}{show('speed_dps', 7)}{show('steady_dps', 7)}"
+              f"{show('peak_dps', 6, 0)}{show('swing_dps', 7)}{show('moving_from', 6, 2)}{show('moving_until', 6, 2)}"
+              f"{show('level_db', 7)}{show('whine_db', 7)}{show('rest_db', 7)}{show('click_db', 7)}{show('whine_hz', 8, 0)}"
+              f"{'  CLIPPED' if s.get('clipped') else ''}")
     print("\nSpeeds are camera degrees per second; swing is the reverse speed when the torso bounces back.")
+    print("From and until are the waist throttles when the camera started and stopped turning (breaking loose, stalling).")
     print(f"Levels are median dB re full scale, A-weighted; click is the loudest 11 ms above 4 kHz over the median. Saved to {folder}")
 
 

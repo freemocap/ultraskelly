@@ -61,6 +61,7 @@ async def replay(steps: int, interval: float):
 
 async def serve(port: int, interval: float) -> None:
     """Loop the scripted targets through the controllers and serve the dashboard on 127.0.0.1."""
+    from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
     from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams
 
     recorder = CommandRecorder()
@@ -80,10 +81,11 @@ async def serve(port: int, interval: float) -> None:
         recorder=recorder,
         motors_simulated=True,
         node_status=node_status,
+        motor_tests=MotorTester(orientation=orientation, mouth=mouth, limits=MotorTestLimits()),
     )
     for node in (orientation, mouth, server):
         tasks[type(node).__name__] = asyncio.create_task(node.run())
-    print(f"Replay dashboard: http://127.0.0.1:{port} (scripted targets, no hardware). Ctrl+C to stop.", flush=True)
+    print(f"Replay dashboard: http://127.0.0.1:{port} (scripted targets, simulated motor tests, no hardware). Ctrl+C to stop.", flush=True)
     try:
         step = 0
         while True:

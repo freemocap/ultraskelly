@@ -1,0 +1,45 @@
+# The robot as a boot service: cameras, pose tracking, motors and the dashboard
+# server on port 8080. scripts/install-services.sh fills in @USER@ and @REPO@ and
+# installs this as /etc/systemd/system/ultraskelly-bot.service.
+#
+# Starting it moves the motors (the head centers). It runs scripts/run-bot.sh, which
+# takes the shared robot lock first, so it never runs beside a test that uses the
+# OAK, the Hailo-8 or the motor boards; while such a test holds the lock it retries.
+[Unit]
+Description=UltraSkelly robot (cameras, pose tracking, motors, dashboard server)
+Documentation=file://@REPO@/README.md
+After=hailort.service
+# Keep trying however often it fails; RestartSteps below spaces the tries out.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+User=@USER@
+WorkingDirectory=@REPO@
+# More bot options come from /etc/default/ultraskelly-bot when it exists, e.g.
+#   ULTRASKELLY_BOT_OPTIONS=--simulate-motors
+# while the motor boards are disconnected, or --record to save every run.
+EnvironmentFile=-/etc/default/ultraskelly-bot
+ExecStart=@REPO@/scripts/run-bot.sh $ULTRASKELLY_BOT_OPTIONS
+# After every exit, including crashes and watchdog kills that skip the bot's own stop
+# commands, brake the DC motors (scripts/stop_motors.py), within 10 s.
+ExecStopPost=-@REPO@/scripts/stop-motors-after-bot.sh
+Environment=PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+# Start again after any exit, crash or watchdog kill: after 2 s at first, then
+# longer each time, up to a minute.
+Restart=always
+RestartSec=2s
+RestartSteps=5
+RestartMaxDelaySec=1min
+# Building the nodes boots the OAK and loads the Hailo model. After that the event
+# loop must ping systemd at least every 30 s (ultraskelly/systemd_notify.py), or the
+# bot is killed with SIGUSR1, which first logs every thread's Python traceback.
+TimeoutStartSec=2min
+WatchdogSec=30s
+WatchdogSignal=SIGUSR1
+# SIGTERM goes to the bot alone, which stops its nodes and helpers in order.
+KillMode=mixed
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target
