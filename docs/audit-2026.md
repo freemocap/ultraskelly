@@ -1015,6 +1015,88 @@ Holding `/run/lock/ultraskelly-robot.lock` keeps the bot service from starting
 (`run-bot.sh` exits 75 and systemd retries), even for a measurement that uses no hardware;
 this one kept the dashboard without the bot for about four minutes.
 
+## The OAK's own chip (2026-11-03)
+
+Until now the OAK-1's Myriad X (RVC2) ran nothing: it sent 640×480 RGB frames to the Pi,
+which turned them over with NumPy and encoded them as JPEG, and the Hailo-8 ran every model.
+At the owner's direction the camera's chip now does its share. The owner's priorities: the
+face and head pose first, the skeleton next, then everything else that fits, and nothing
+computed on two chips.
+
+**Measured first.** `scripts/oak_models_bench.py` runs Luxonis Model Zoo models for RVC2 on
+the robot's OAK with the camera at 30 fps, alone and together; second-stage models get fixed
+crops, as if one face and one hand were in every frame. 10 s per row; the OAK's two CPUs and
+chip temperature from its SystemLogger (43-51 °C throughout).
+
+| Alone | fps | | Together (camera 30 fps) | fps |
+| --- | --- | --- | --- | --- |
+| YuNet face detection 320×240 | 30.0 | | YOLOv8n pose 2×5 + YuNet 1×3 + head pose 1×1 | 24.0 / 23.8 / 24.1 |
+| Head pose, gaze, face landmarks | 30.0 each | | Same with depthai's default resources | 25.8 / 0 / 0 |
+| Palm detection 128, hand landmarks | 30.0 each | | YuNet, head pose, gaze, face landmarks, tuned | 30.0 / 29.9 / 30.1 / 30.0 |
+| YOLOv8n pose 512×288, depthai defaults | 18.1 | | Same with hands at 5 fps | 27.5 / 25.4 / 21.2 / 26.0 |
+| YOLOv8n pose, best (2 threads × 5 SHAVEs) | 26.6 | | Everything at 15 fps | 11.1-14.8 |
+| YOLO26n pose 512×288 / 512×384 | 25.5 / 13.0 | | | |
+
+Luxonis' own single-model figures add up to 1.7 times the chip for every model at 30 fps. The
+pose models are nano ones, and even alone YOLOv8n reaches only 26.6 fps; beside the face models
+it held 24.0, under the 25 fps the owner set for moving it. **The skeleton stays on the
+Hailo-8** (YOLOv8s, 30 fps). The full table is in the W7 notes; a comparison of the two pose
+models on the same frames waits for a person in front of the robot (`scripts/compare_pose_models.py`).
+
+**What runs where.** Hailo-8: YOLOv8s pose, and StereoNet when asked. OAK, with
+`OakCameraNodeParams.models` (on by default; `--no-oak-models` turns it off):
+
+| On the OAK | Rate (one face, no hand in view) |
+| --- | --- |
+| 180° rotation in the ISP, the JPEG in the hardware encoder, each frame paired with its JPEG on the chip | 30 fps |
+| YuNet face detection, every frame | 30 fps |
+| Head pose and gaze, up to 2 faces, every second frame | 15 a second |
+| MediaPipe face landmarks (468), largest face, every fourth frame | 7.5 a second |
+| MediaPipe palm detection on the whole frame, every sixth frame; hand landmarks for up to 2 palms | 5 a second |
+
+With all of it the OAK's real-time CPU (LeonRT) runs at 75% and frames reach the Pi at 30 fps,
+44 ms after capture. The Pi decodes YuNet's boxes and the palms (NumPy, `yunet.py`,
+`mediapipe_hands.py`) and sends each frame's crops back; a Script node on the OAK cuts them
+out of that same frame (`oak_script.py`) and chains head pose into gaze on the chip. What the
+chip finds in a frame is joined by frame number (`oak_results.py`) and travels in that frame's
+stream message ([stream guide](stream.md), "Faces" and "Hands"); the server holds an OAK frame
+up to 0.1 s for it. Models come from the zoo once (`python -m scripts.fetch_oak_models`) into
+`~/ultraskelly-models/oak-zoo/` and then load without the internet.
+
+**Pi CPU the OAK and the Hailo changes took off.** Per 30 fps frame on the Pi: the NumPy flip
+3.26 ms (9.8% of a core) and the JPEG 2.97 ms (8.9%) are gone. The Hailo's outputs now come as
+the chip's 8-bit values with only the cells the decoder reads made real, bit for bit the FLOAT32
+values: HailoRT's host work per inference fell from 5.84 to 2.59 ms (9.7% of a core). Its
+letterbox padding is filled once. The OAK node waits on its outputs instead of polling every
+2 ms. In one batch with the dashboard watching, the bot with all the OAK's models used 1.04
+cores against main's 1.01 without them.
+
+**Found on the way.**
+- depthai's default threads and SHAVEs let one network starve the others (0 fps); each network
+  now has measured resources (`RESOURCES`).
+- Six camera outputs never delivered a frame; five did.
+- Frames held in queues come from the camera's pool, and a camera out of pool frames stops every
+  output: with nobody in view the Script stopped reading frames and the whole OAK froze. Each
+  output now has a pool of 14 frames, more than the queues and the Script's own 4 can hold.
+- The OAK's ImageManip cut normalized rotated rectangles elsewhere than documented. Cut in
+  pixels, every crop now matches OpenCV's on the same frame (mean difference 2.6-2.8 grey levels,
+  against 16 for a box 20 px off). A crop with a new configuration costs the OAK's real-time CPU
+  far more than a fixed one, which is what sets the rates above.
+- A frame published in the same moment as another can be lost on a latest-value topic, so the
+  server takes each frame's results from the OAK node by frame number.
+- "Device crashed" at bot shutdown: 6 of 6 restarts of this branch and 4 of 4 of main stopped
+  cleanly. The crash dumps from this morning's two hold the output of a probe of mine that had
+  crashed the OAK minutes before; depthai reports a crash at the next session's close.
+
+**The target.** The head still steers by the Hailo's nose keypoint. YuNet's nose arrives about
+15 ms sooner (its output reaches the Pi 39-47 ms after capture, the Hailo's pose about 60), but
+YuNet finds only faces turned toward the camera and gives no body angle. It could take over when
+a face fills the frame and no body is found; that and its accuracy wait for people in view.
+
+**Not yet checked:** with a person in front of the robot, the pose models on the same frames,
+the signs of head pose and gaze, handedness on this unmirrored camera, hand landmarks on a real
+hand, and the chip's load with two faces.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

@@ -57,8 +57,13 @@ The repository requests Python 3.11 through `.python-version`. If you already ha
 The robot runs on a Raspberry Pi 5 with Raspberry Pi OS Trixie (desktop). By default it
 tracks people with a Luxonis OAK USB camera and YOLOv8 pose on a Hailo-8 AI HAT+, and
 drives a servo board at I²C `0x40` and a DC motor HAT at `0x60`; see
-[the hardware notes](docs/hardware.md). The original IMX500 AI camera remains available
-as `DetectorType.POSE` in `ultraskelly/__main__bot.py`.
+[the hardware notes](docs/hardware.md). The OAK's own chip turns and encodes its frames and
+runs face and hand models from Luxonis' Model Zoo: YuNet face detection on every frame, head
+pose, gaze and MediaPipe face landmarks on the faces it finds, and MediaPipe hands five times
+a second (`--no-oak-models` turns them off; what runs where, and why, is in the audit). Fetch
+the models once with `.venv/bin/python -m scripts.fetch_oak_models`; the bot then loads them
+without the internet. The original IMX500 AI camera remains available as
+`DetectorType.POSE` in `ultraskelly/__main__bot.py`.
 
 ### Set up a Pi
 
@@ -104,8 +109,8 @@ camera in an OpenCV window, which needs a graphical session; `--no-window` is ac
 and does nothing, since the window is off by default. While the bot runs, port
 8080 serves the live dashboard to the network. One read-only WebSocket, `/stream`,
 carries FreeMoCap's self-describing CBOR messages: `frame` messages with each OAK image
-and the poses found in it, and `robot_state` messages with motor commands, target, rates
-and node health. The browser decodes them with FreeMoCap's `@freemocap/client` and
+and the poses, faces and hands found in it, and `robot_state` messages with motor commands,
+target, rates, node health and the OAK chip's load. The browser decodes them with FreeMoCap's `@freemocap/client` and
 draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
 `scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
 [The dashboard layout](docs/dashboard.md) describes its panels and sizing.
