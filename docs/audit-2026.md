@@ -479,8 +479,7 @@ the motors braked. Unit tests cover the monitor's limits and the pings stopping.
 with the real OAK and Hailo-8 and simulated motors, a 100-second run under a watchdog unit
 like the service started all six nodes, tripped nothing and stopped cleanly. Still to do:
 real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port and the I2C
-adapter in software with the waist at rest. A motor board that dies between a brake's two
-transfers can still leave a motor driven (above).
+adapter in software with the waist at rest.
 
 ## Validation and limits
 
