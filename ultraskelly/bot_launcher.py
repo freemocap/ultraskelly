@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
+from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
 from ultraskelly.core.bot.motor.simulated_actuators import (
@@ -31,9 +32,12 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
 )
+from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
+from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
-from ultraskelly.core.pubsub.bot_topics import FrameTopic
+from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic, StereoFrameTopic
+from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
 )
@@ -74,9 +78,25 @@ class LaunchConfig(NodeParams):
         default_factory=MotorTestLimits,
         description="What the dashboard's motor tests may do, within the hard limits",
     )
+    motor_pwm_hz: float = Field(
+        default=1600.0, ge=24.0, le=1600.0,
+        description="PWM frequency of the DC motor board, one clock for the waist and jaw; 1600 asks for its highest, about 1.5 kHz",
+    )
     recording: RunRecorderParams | None = Field(
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
+    )
+    zed_camera: ZedCameraNodeParams | None = Field(
+        default=None,
+        description="Also capture the ZED Mini stereo camera and stream its two eyes; None runs without it",
+    )
+    stereo_depth: StereoDepthNodeParams | None = Field(
+        default=None,
+        description="With zed_camera, also compute depth from its pair; None computes none",
+    )
+    tracking: bool = Field(
+        default=True,
+        description="Run the tracking camera, detector and motors; False runs only the ZED and the dashboard",
     )
     stall_monitor: StallMonitorParams = Field(
         default_factory=StallMonitorParams,
@@ -94,6 +114,8 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    # Brakes the DC motors from its own thread if the control loop stalls; None until nodes are created.
+    motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(default=None, exclude=True)
     shutting_down: bool = Field(default=False, exclude=True)
 
     def healthy(self) -> bool:
@@ -103,6 +125,9 @@ class BotLauncher(BaseModel):
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
         self.nodes.clear()
+        if not self.config.tracking:
+            self._create_zed_only_nodes()
+            return
 
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
@@ -119,8 +144,9 @@ class BotLauncher(BaseModel):
             )
             self.nodes.extend([orientation, mouth])
         else:
-            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation)
-            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
+            pwm = self.config.motor_pwm_hz
+            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation, pwm_frequency=pwm)
+            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth, pwm_frequency=pwm)
             record_hardware_commands(
                 orientation=orientation, mouth=mouth, recorder=self.command_recorder, limits=self.config.limits,
             )
@@ -128,6 +154,8 @@ class BotLauncher(BaseModel):
                 mouth.run_startup_test()  # After wrapping, so the limits apply
             self.nodes.extend([orientation, mouth])
         self.motor_tester = MotorTester(orientation=orientation, mouth=mouth, limits=self.config.motor_tests)
+        self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
+        orientation.motor_watchdog = self.motor_watchdog
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
@@ -157,6 +185,7 @@ class BotLauncher(BaseModel):
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
+        stereo_feeds = self._create_stereo_nodes()
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
         aim = self.config.orientation
         self.nodes.append(
@@ -164,6 +193,7 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub,
                 params=self.config.runtime_server,
                 cameras={camera_name: FrameTopic},
+                **stereo_feeds,
                 recorder=self.command_recorder,
                 motors_simulated=self.config.simulate_motors,
                 node_status=self.node_status,
@@ -196,6 +226,39 @@ class BotLauncher(BaseModel):
         )
 
         logger.info(f"Created {len(self.nodes)} nodes")
+
+    def _create_stereo_nodes(self) -> dict[str, dict[str, type[PubSubTopicABC]]]:
+        """The ZED Mini's nodes, when configured: capture, and depth if asked for.
+        Returns the dashboard's stereo and depth camera feeds."""
+        zed = self.config.zed_camera
+        if zed is None:
+            return {}
+        self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=zed))
+        feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
+        if self.config.stereo_depth is not None:
+            width, height = ZED_MODES[zed.resolution][0]
+            self.nodes.append(StereoDepthNode.create(
+                pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
+            ))
+            feeds["depth_cameras"] = {"zed": DepthFrameTopic}
+        return feeds
+
+    def _create_zed_only_nodes(self) -> None:
+        """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed."""
+        self.command_recorder = None
+        stereo_feeds = self._create_stereo_nodes()
+        self.nodes.append(
+            RuntimeServerNode.create(
+                pubsub=self.pubsub,
+                params=self.config.runtime_server,
+                cameras={},
+                **stereo_feeds,
+                recorder=None,
+                motors_simulated=True,
+                node_status=self.node_status,
+            )
+        )
+        logger.info(f"Created {len(self.nodes)} nodes without tracking or motors")
 
     def node_status(self) -> list[dict]:
         """Each node's name and state: starting, running, stopped, or crashed with its error."""
@@ -238,6 +301,8 @@ class BotLauncher(BaseModel):
 
         # Wait for tasks to finish cancelling
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.motor_watchdog is not None:
+            self.motor_watchdog.stop()
         
         # Clear task list
         self.tasks.clear()
@@ -257,7 +322,9 @@ class BotLauncher(BaseModel):
     async def _start_nodes(self) -> None:
         """Start all nodes as async tasks."""
         logger.info("Starting nodes...")
-        
+        if self.motor_watchdog is not None:
+            self.motor_watchdog.start()  # Armed by the control loop's first tick
+
         for node in self.nodes:
             task = asyncio.create_task(node.run())
             self.tasks.append(task)

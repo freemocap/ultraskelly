@@ -14,11 +14,13 @@ from ultraskelly.core.pubsub.bot_topics import (
     PoseDataTopic,
     ServoStateMessage,
     ServoStateTopic,
+    StereoFrameMessage,
+    StereoFrameTopic,
     TargetLocationMessage,
     TargetLocationTopic,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
+from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay, encode_camera_frame
 
 
 def make_server(bus, *, encoded, **options):
@@ -174,6 +176,48 @@ def test_stream_sends_each_frame_with_its_own_poses_and_the_robot_state():
     assert pong == "pong"
 
 
+def read_payload_images(payload: bytes) -> list[tuple[str, int, int, int, bytes]]:
+    """Each camera's ID, index, width, height and JPEG, read straight from SkellyCam's layout."""
+    count = struct.unpack_from("<i", payload, 16)[0]
+    images, offset = [], 24
+    for _ in range(count):
+        camera_id = payload[offset + 16:offset + 32].rstrip(b"\0").decode()
+        index, width, height, _, length = struct.unpack_from("<iiiii", payload, offset + 32)
+        images.append((camera_id, index, width, height, payload[offset + 56:offset + 56 + length]))
+        offset += 56 + length
+    return images
+
+
+def test_a_stereo_pair_travels_as_one_frame_with_both_cameras():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[], stereo_cameras={"zed": StereoFrameTopic})
+        pump = asyncio.create_task(server.pump())
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            left, right = np.full((376, 672, 3), 3, np.uint8), np.full((376, 672, 3), 4, np.uint8)
+            await bus.publish(StereoFrameTopic, StereoFrameMessage(left=left, right=right, frame_number=8, timestamp=2.5))
+            received = await receive_stream(socket, lambda got: got["frame"] and any(
+                state["cameras"]["zed_left"]["width"] for state in got["robot_state"]))
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return received
+
+    received = asyncio.run(scenario())
+
+    pair = received["frame"][0]
+    assert (pair["frame_number"], pair["timestamp"], pair["trackers"]) == (8, 2.5, [])
+    assert [(camera["id"], camera["index"], camera["image_size"]) for camera in pair["cameras"]] == [
+        ("zed_left", 1, [672, 376]), ("zed_right", 2, [672, 376])]  # After the OAK's index 0
+    assert read_payload_images(pair["image"]) == [
+        ("zed_left", 1, 672, 376, b"JPEG3"), ("zed_right", 2, 672, 376, b"JPEG4")]
+    cameras = received["robot_state"][-1]["cameras"]
+    assert set(cameras) == {"oak", "zed_left", "zed_right"}
+    assert (cameras["zed_left"]["width"], cameras["zed_right"]["height"]) == (672, 376)
+
+
 def test_stream_keeps_video_flowing_without_poses():
     async def scenario():
         bus = PubSubTopicManager.create()
@@ -193,3 +237,93 @@ def test_stream_keeps_video_flowing_without_poses():
 
     assert bare["trackers"] == [] and bare["frame_number"] == 1
     assert read_image_payload(bare["image"])[1:] == ("oak", b"JPEG9")
+
+
+def people(*noses):
+    """Keypoints of one person per nose (x, y, confidence), every other keypoint zero."""
+    keypoints = np.zeros((len(noses), 17, 3), np.float32)
+    for row, nose in enumerate(noses):
+        keypoints[row, 0] = nose
+    return keypoints
+
+
+def encode_people(keypoints, **pose):
+    """One frame message carrying these people, decoded the way a viewer receives it."""
+    return cbor2.loads(encode_camera_frame(
+        [("oak", 0, frame(1))], frame_number=3, timestamp=1.0, poses=PoseDataMessage(keypoints=keypoints, **pose),
+        encode_jpeg=lambda image, quality: b"JPEG", jpeg_quality=80,
+    ))
+
+
+def channel_values(channel):
+    return np.frombuffer(channel["data"], "<f4").reshape(-1, len(channel["columns"]))
+
+
+def test_people_get_declared_ids_and_the_followed_person_carries_the_target():
+    target = TargetLocationMessage(x=330, y=200, angle=85.0)
+    decoded = encode_people(people((10, 20, 0.9), (330, 200, 0.9), (500, 60, 0.8)), target=target, target_person=1)
+
+    trackers = decoded["trackers"]
+    assert [tracker["tracker_id"] for tracker in trackers] == ["person-0", "target", "person-2"]
+    assert {tracker["detector_type"] for tracker in trackers} == {"yolov8_pose"}
+    assert [len(tracker["channels"]) for tracker in trackers] == [1, 2, 1]
+    channel = trackers[1]["channels"][1]
+    assert (channel["kind"], channel["columns"], channel["names"], channel["camera_id"], channel["image_size"]) == (
+        "ultraskelly.target", ["x", "y", "body_angle_deg"], ["target"], "oak", [640, 480])
+    assert channel_values(channel).tolist() == [[330.0, 200.0, 85.0]]
+
+
+def test_ids_follow_the_people_when_their_order_changes():
+    first, second = (10, 20, 0.9), (330, 200, 0.9)
+    target = TargetLocationMessage(x=330, y=200, angle=0.0)
+    before = encode_people(people(first, second), target=target, target_person=1)
+    after = encode_people(people(second, first), target=target, target_person=0)
+
+    def nose_of(decoded, tracker_id):
+        tracker = next(tracker for tracker in decoded["trackers"] if tracker["tracker_id"] == tracker_id)
+        return channel_values(tracker["channels"][0])[0].tolist()
+
+    assert nose_of(before, "target") == nose_of(after, "target") == pytest.approx([330, 200, 0.9])
+    assert [tracker["tracker_id"] for tracker in after["trackers"]] == ["target", "person-1"]
+
+
+def test_without_a_followed_person_nobody_is_the_target():
+    decoded = encode_people(people((10, 20, 0.9)), target=TargetLocationMessage(), target_person=None)
+
+    assert [tracker["tracker_id"] for tracker in decoded["trackers"]] == ["person-0"]
+    assert [channel["kind"] for channel in decoded["trackers"][0]["channels"]] == ["OVERLAY_2D"]
+
+
+def test_a_target_without_a_body_angle_sends_nan():
+    decoded = encode_people(people((330, 200, 0.9)), target=TargetLocationMessage(x=330, y=200), target_person=0)
+
+    values = channel_values(decoded["trackers"][0]["channels"][1])[0]
+    assert values[:2].tolist() == [330, 200] and np.isnan(values[2])
+
+
+def test_stream_marks_the_followed_person_in_the_frame_they_were_found_in():
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        server = make_server(bus, encoded=[], pose_camera="oak")
+        pump = asyncio.create_task(server.pump())
+        async with TestClient(TestServer(server.build_app())) as client:
+            socket = await connect_stream(client, server)
+            camera_frame = FrameMessage(frame=frame(9), frame_number=77, timestamp=3.5)
+            await bus.publish(FrameTopic, camera_frame)
+            target = TargetLocationMessage(x=100, y=50, angle=90.0)
+            await bus.publish(PoseDataTopic, PoseDataMessage(
+                keypoints=people((330, 200, 0.9), (100, 50, 0.9)), scores=np.array([0.6, 0.8]),
+                frame=camera_frame, target=target, target_person=1))
+            received = await receive_stream(socket, lambda got: any(message["trackers"] for message in got["frame"]))
+            await socket.close()
+        server.stop()
+        await pump
+        bus.close()
+        return received
+
+    received = asyncio.run(scenario())
+
+    posed = next(message for message in received["frame"] if message["trackers"])
+    assert posed["frame_number"] == 77
+    assert [tracker["tracker_id"] for tracker in posed["trackers"]] == ["person-0", "target"]
+    assert channel_values(posed["trackers"][1]["channels"][1]).tolist() == [[100.0, 50.0, 90.0]]

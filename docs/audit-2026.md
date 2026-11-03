@@ -390,24 +390,71 @@ and a PWM whine near 1.6 kHz with harmonics. The camera saw the torso swing back
 12-25 deg/s after each brake, a wobble of about 2 Hz. The motor board's PCA9685 already
 runs at its highest PWM frequency, so the whine cannot be moved above hearing.
 
-**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses. The waist starts
-when the head's pan is over 15 degrees from neutral, regardless of lock, and keeps turning
-toward the gaze until the head is within 5 degrees. Each move starts at 0.45, ramps up at
-1.5 per second to 0.7 plus 0.008 per degree beyond 15 (at most 0.8; 0.7 was the old
-controller's floor for static friction and stays until measured), ramps down at 2 per
-second, releases the motor at 0.4 to coast, and brakes it 0.3 s later. Reversing passes
-through that stop. A move lasting 6 s ramps down and rests 2 s, the remaining limit on
-continuous drive. Losing the target ramps the waist down; stopping the bot still brakes at
-once. These levels are provisional: the simulator (a linear plant) shows 9-17 moves of 1-6 s
-per minute of a sweeping target instead of half-second bursts, but no robot measurement
-exists yet. Round 2 of the sound test with the Yeti X (ALSA card 3, mixer 0-21 dB, run at
-12) waits for the robot's rebuild, as does a recorded tracking run comparing old and new.
-The sound test now centers and holds the head, refuses to run while the OAK sees too
-little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with the
-lens covered), bounds its return move by the measured angle, measures where the waist
-breaks loose and stalls, and has a `drive` profile that replays the bot's own drive.
-`scripts/analyze_run.py` summarizes a recorded run: what was kept, the waist's moves and
-stops, and the sound while it moves.
+**Continuous ramped drive.** `motor/waist_drive.py` replaces the pulses with one continuous
+move per recentering. With the microphone shelved (the Yeti X left the Pi; round 2 is
+deferred, not cancelled), its shape follows published guidance and round 1's data:
+
+- *Slow decay.* The waist motor brakes between PWM pulses (adafruit_motor `SLOW_DECAY`).
+  That is the TB6612FNG's own PWM mode, alternating drive and short brake
+  ([datasheet](https://toshiba.semicon-storage.com/info/TB6612FNG_datasheet_en_20141001.pdf));
+  adafruit_motor defaults to fast decay, which leaves both inputs low (high impedance)
+  between pulses ([API](https://docs.circuitpython.org/projects/motor/en/latest/api.html)).
+  Slow decay recirculates the current through the low-side switches with less ripple
+  ([TI SLVA321](https://www.ti.com/lit/pdf/slva321)). Adafruit's measurements on a geared
+  hobby motor found it lowers the slowest speed the motor can turn at from 3000 to 1200 RPM
+  and makes speed follow throttle almost linearly
+  ([guide](https://learn.adafruit.com/improve-brushed-dc-motor-performance)). That
+  matches the waist's behavior: nothing below about 0.7 in fast decay, then a lurch.
+- *PWM frequency stays at the PCA9685's top* (prescale 3, about 1.5 kHz). The chip
+  offers 24-1526 Hz, the same for every output
+  ([datasheet](https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf)), so the usual
+  advice to switch above 20 kHz to avoid audible ripple
+  ([Portescap](https://www.portescap.com/-/media/project/automation-specialty/portescap/portescap/pdf/whitepapers/wp_controlling_brushed_dc_motors_using_pwm.pdf))
+  would need the bridge's PWM pin driven by the Pi's own hardware PWM, a rewiring.
+  Adafruit's guide recommends 50-100 Hz for low-speed torque but warns of chatter, and
+  ripple grows as the frequency falls. A lower frequency is the first thing to try once
+  the microphone is back: `LaunchConfig.motor_pwm_hz` sets it for both motor factories,
+  which must agree because the board has one PWM clock (the jaw's factory used to reset
+  it). A 2025 scratch test (`scratch/motor_pwm_test.py`) listed 5-25 kHz, beyond the
+  chip, and kept only 1600 Hz; it ran the jaw at full drive, where nothing switches, so it
+  says nothing about the whine.
+- *S-curve ramps.* Jerk-limited profiles spread each change of acceleration over time and
+  inject less vibration, and so less noise, than linear ramps with corners
+  ([PMD](https://info.pmdcorp.com/hubfs/Resources/Articles%20and%20Papers/s-curve-motion-profiles-are-vital-PMDCORP.pdf),
+  [Zaber](https://www.zaber.com/articles/jerk-control)). The drive's rate is limited to
+  1.5 per second rising and 2 falling, and its change to 10 per second squared, so torque
+  never steps and no ramp has a corner.
+- *Gentle start, lower running drive, bounded breakaway.* Static friction exceeds running
+  friction, and pushing harder until the error clears makes a mechanism with friction
+  hunt in a limit cycle ([friction and backlash](http://wescottdesign.com/articles/Friction/friction.pdf)).
+  A move starts at 0.15 and eases up to a running drive of 0.5 at 15 degrees, plus 0.008
+  per degree, at most 0.7. Only while the head shows no progress (2 degrees within 0.5 s
+  at the running drive) does extra drive build, 0.3 per second toward 0.8, the hard limit.
+  It drains at the same rate once the head comes back, a leaky integrator, so a waist that
+  breaks loose does not lurch.
+- *Ramp down, coast, then brake.* Round 1 saw the torso swing back at 12-25 deg/s after
+  each brake at speed. With slow decay a falling drive slows the motor with it; the
+  motor is released at 0.2 to coast and braked 0.3 s later, once still.
+- *Deadband with hysteresis.* The same paper's cure for hunting is a deadband at least as
+  wide as the jump the motor makes when it restarts. The waist starts past 15 degrees and
+  stops within 5, and a stopping move never resumes, so it rests between the two.
+
+A move lasting 6 s still ramps down and rests 2 s, the remaining limit on continuous
+drive. Losing the target ramps the waist down; stopping the bot still brakes at once. In
+the simulator (now with optional friction), a minute of sweeping target gives 8-13
+continuous moves of 1.3-6.4 s, none ending in a brake at speed. With friction slowing the
+simulated waist it could not keep up with the sweep and hit the 6 s limit twice a minute.
+With breakaway set above the running drive, the waist still starts and recenters the head
+on a still target. Within a move the drive changes by at most 0.02 per 10 ms tick, and its
+slope by at most 0.002. None of these
+levels has run on the robot: they wait for the motors and, for loudness, the microphone.
+Round 1's speed (18-23 deg/s at 0.75 in fast decay) is the only measured anchor. Round 2's
+tools remain: the sound test centers and holds the head, refuses to run while the OAK sees
+too little detail (Laplacian variance of a 160x120 frame: over 1300 in the room, 9 with
+the lens covered), bounds its return move by the measured angle, measures where the waist
+breaks loose and stalls, and its `drive` profile replays the bot's own drive for one
+recentering. `scripts/analyze_run.py` summarizes a recorded run: what was kept, the
+waist's moves and stops, and the sound while it moves.
 
 **Motor board writes.** While the servo board's loose jumper disturbed the I2C bus, motor
 board transfers failed with EAGAIN after lost arbitration. adafruit_motor writes a DC
@@ -416,11 +463,32 @@ on before the second, so a brake cut short there drives the motor at full power.
 recording wrappers now retry a failed write (3 attempts, stops 10). They also send an
 unchanged throttle again only every 0.5 s: the 100 Hz controllers had been rewriting both
 motors' unchanged values, about 400 transfers a second on a 100 kHz bus, roughly a fifth of
-the event loop's time. A bus that dies for good between a brake's two transfers remains
-uncovered; writing both channels in one transfer (motor 1 uses channels 9 and 10, motor 2
-uses 11 and 12) would close it. If the bot exits without its cleanup (killed, or crashed
-in native code), the motor board keeps its last command: `scripts/stop_motors.py` brakes
-all four motors and suits a service's `ExecStopPost`.
+the event loop's time. `motor/bridge_motor.py` now sets both of a motor's bridge inputs in
+one transfer. The PCA9685 changes its outputs when a transfer ends, however many PWM
+registers it carried (MODE2's OCH bit, 0 by default; NXP data sheet Rev. 4, Table 6), and
+each motor's inputs are neighbouring channels (motor 1 uses 9 and 10, motor 2 uses 11 and
+12), so the two inputs switch together and a failed transfer changes neither. On the Pi,
+against adafruit_pca9685 3.4.20 and adafruit_motor 3.4.18 over a recording bus, it left
+the same register values as the libraries' own DCMotor for every throttle in both decay
+modes, in one transfer where theirs took two. The bot's motor factories, the stop script
+and the bench scripts all drive the motors this way. If the bot exits without its
+cleanup (killed, or crashed in native code), the motor board keeps its last command:
+`scripts/stop_motors.py` brakes all four motors, and the bot service runs it after every
+exit unless another program holds the robot lock.
+
+**Motor watchdog.** The controllers and their cleanup run on the bot's event loop, so a
+loop that stalls mid-move would leave the waist turning. `motor/motor_watchdog.py` runs on
+its own thread. The orientation controller's first tick arms it, so the slow camera and
+Hailo startup does not count. When no tick comes for 0.5 s it brakes both DC motors once,
+through the same wrappers, so the brake is retried and recorded. When ticks resume, the
+waist drive, having seen no update for over 0.5 s, starts its next move from rest rather
+than jumping back to its old drive. It is the fastest of three layers. The stall monitor
+stops the bot when camera frames or pose results stop for 5 s. systemd kills a bot whose
+event loop stops pinging it for 30 s and then brakes the motors through the stop script.
+A stall in code that holds Python's global interpreter lock also stops the watchdog's
+thread; those reach the systemd watchdog. Tested on Windows with a blocked event loop,
+braked from the thread 0.15-0.4 s after the last tick, with a 0.2 s timeout; not yet run
+with the motor boards.
 
 **Motor tests.** The dashboard can move one actuator at a time through its own command
 contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it
@@ -481,6 +549,153 @@ like the service started all six nodes, tripped nothing and stopped cleanly. Sti
 real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port and the I2C
 adapter in software with the waist at rest. A motor board that dies between a brake's two
 transfers can still leave a motor driven (above).
+
+## ZED Mini stereo capture (2026-11-02)
+
+The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK
+needs CUDA. `ZedCameraNode` finds its V4L2 capture node by the name the camera
+reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread, converts
+each eye to RGB and publishes both on `StereoFrameTopic`. Frame times are the kernel
+buffer timestamps, which uvcvideo takes on CLOCK_MONOTONIC: the clock of
+`time.monotonic()` and of the OAK's depthai timestamps. They mark the arrival of a
+frame's first USB packet, one transfer time (19 ms at VGA, 30 ms at HD720) before the
+frame can be read. Frame numbers count camera frame periods, so a dropped frame skips
+a number. The runtime server sends both eyes in one FreeMoCap frame message, as
+cameras `zed_left` and `zed_right`. `--zed` adds the camera to the bot; `--zed-only`
+runs only the ZED and the dashboard, so it needs no robot lock.
+
+Each mode measured for 4 s on the Pi with OpenCV 5.0: reading plus converting both eyes.
+
+| Mode, both eyes | Rate | CPU, of a core | YUYV to RGB |
+| --- | --- | --- | --- |
+| VGA 1344×376 @ 30 | 30.0 fps | 12% | 0.45 ms |
+| VGA @ 100 | 99.8 fps | 38% | 0.43 ms |
+| HD720 2560×720 @ 30 | 30.0 fps | 31% | 1.96 ms |
+| HD720 @ 60 | 60.0 fps | 66% | 1.93 ms |
+| HD1080 3840×1080 @ 30 | 29.9 fps | 70% | 4.6 ms |
+| HD2K 4416×1242 @ 15 | 15.1 fps | 45% | 6.2 ms |
+
+Frame spacing stayed within 0.2 ms of the period in every mode. The node defaults to
+VGA at 30 fps; depth quality may justify HD720.
+
+- **Orientation and view.** The image is upright, unlike the OAK's. The skull's nose
+  bridge is a fixed, out-of-focus occluder on the inner side of each eye: about the
+  right 30% of the left image, wider at the bottom, and the left 20% of the right
+  image. Only the centre of the view is seen by both eyes; depth must mask the rest.
+- **Damaged frames.** uvcvideo runs with `nodrop=1`, so frames with transfer errors
+  reach applications, and OpenCV does not report V4L2's error flag. In the first test
+  one frame of 1,061 had a band of zeroed rows across both eyes, while the OAK was
+  booting. None of 960 probe frames afterwards, nor any of 17,580 frames the node
+  captured in later runs, had one. The node drops frames whose sampled rows are mostly
+  zero bytes and counts them. If torn frames appear instead (stale data, not zeros),
+  `options uvcvideo nodrop=0` in `/etc/modprobe.d/` makes the driver drop them.
+  Damaged frames also appeared when the reader fell behind: rectifying HD720 pairs in
+  the capture thread (136% of a core) lost 8 of 173 frames. Keep the capture loop light.
+
+With the bot (`--hardware --simulate-motors --no-window --zed`, OAK and pose at
+30 fps), a client on another computer over Wi-Fi received OAK frames and ZED pairs at
+29.1/s each (22 and 42 KiB per message) while a browser on that computer also
+watched. The bot process used 107% of a core, against about 70% without the ZED
+above, and the whole Pi 28% of four cores with no Chromium on the Pi. No throttling;
+52 °C. A ZED-only run streamed 7,141 frames in 4 minutes, none lost.
+
+**Rectification.** Stereolabs' factory calibration for this camera
+(`ultraskelly/calibration/zed/SN12395566.conf`, downloaded unmodified; see `SOURCE`)
+gives per resolution each eye's intrinsics and distortion, and for the pair a 63.0 mm
+baseline and a rotation (RX, CV, RZ) of 0.04°, 0.50° and −0.04°.
+`stereo_rectification.py` passes the rotation and translation to `cv2.stereoRectify`
+as written (zero-disparity, `alpha=0`), as Stereolabs' MIT-licensed zed-open-capture
+sample does. With the rotation transposed instead, matched features sat further from
+their rows (median |dy| 1.25 against 0.74 px at VGA, 3.0 against 1.15 px at HD720)
+and disparities changed by 12 px at HD720, so the convention matters for depth too.
+`python -m scripts.zed_row_alignment` checks a live pair:
+
+| Eyes | Matches | dy median, raw → rectified | \|dy\| median | 90th percentile |
+| --- | --- | --- | --- | --- |
+| VGA 672×376 | 72 | −5.66 → −0.31 px | 5.66 → 0.87 px | 2.28 px |
+| HD720 1280×720 | 142 | −11.48 → −0.84 px | 11.48 → 1.05 px | 3.78 px |
+
+Rectified, both eyes share a 339.8 px (VGA) or 683.3 px (HD720) focal length. The
+constant −0.84 px left at HD720 (−0.31 at VGA) is a tilt of about 0.07° that the
+factory file does not hold; a measured correction can remove it if depth needs it. The
+skull's eye sockets now hide most of each view (since the rebuild), so the matches lie
+in the small region both eyes see; repeat the check once the ZED is re-seated.
+
+Remapping is the expensive step. In OpenCV 5.0 on the Pi, one 672×376 colour image
+takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.6 and
+4.3 ms); a grey image 1.3 ms. Rectifying every pair at 30 fps would cost about 14% of
+a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
+off by default), and depth rectifies only the pairs it uses, at its own rate.
+
+**Depth, CPU baseline.** `StereoDepthNode` (`--depth` with `--zed` or `--zed-only`)
+takes the newest pair at most 5 times a second, rectifies the left eye in colour and
+the right in grey, and matches them with OpenCV's StereoSGBM in 3-way mode (64
+disparities, 5-pixel window, uniqueness 10, speckle filter). Depth is
+`focal_length × baseline / disparity`, published as uint16 millimetres beside the
+rectified left image (0 = unknown, nearer than 0.3 m or further than 8 m). Matches
+within 4 px of the 64-pixel search limit are dropped: where the true disparity lies
+beyond it, as for the skull a few centimetres in front of the eyes, the matcher
+settles at the limit. On a live pair that pile-up held 22% of the valid pixels, and it
+moved when the search range grew. The nearest depth kept at VGA is therefore 0.36 m.
+The dashboard shows each depth frame as `zed_rectified` and `zed_depth` (red near,
+blue far, black unknown); the depth message for the 3D view follows.
+
+Measured on the Pi at VGA, capture and depth without the server, 15 s each. The skull
+hides most of the view, so 18% of pixels had a depth.
+
+| OpenCV threads | Depth rate | Compute per frame | Age when published | CPU, of a core |
+| --- | --- | --- | --- | --- |
+| 4 (default) | 5 Hz | 47 ms | 79 ms | 91% |
+| 1 | 5 Hz | 67 ms | 88 ms | 39% |
+| 1 | as fast as possible: 15.1 Hz | 66 ms | 100 ms | 106% |
+| 4 | as fast as possible: 21.1 Hz | 47 ms | 85 ms | 331% |
+
+OpenCV's default thread pool doubles the CPU of the same work here (idle workers
+spin). `cv2.setNumThreads(1)` applies to the whole process, so it is a bot-wide
+choice, not made here. With the server streaming 30 raw pairs and 5 depth frames a
+second, a ZED-only run used 122% of a core.
+
+## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
+
+FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
+robot ([handoff](https://github.com/freemocap/freemocap/blob/f729e8aeaba495839d7372c2f20c18c96618f4f6/current-work-plans/03-transport/ultraskelly-consumer-handoff.md)).
+UltraSkelly moved to that batch, `f729e8ae` on `sfn26-ultraskelly`: `uv.lock` and the
+vendored bundle changed and no code did. Using what the batch added:
+
+- Each pose message carries the target published from the same detections and the row of
+  the person it belongs to. In each frame the followed person is declared as tracker
+  `target`, the others as `person-<row>`, and `target` also carries a custom numeric
+  channel, `ultraskelly.target`, so a viewer draws the target with the image it was
+  found in. The 20 Hz `robot_state.target` drawn over video came from another moment.
+  [The stream guide](stream.md) describes every field; the dashboard adopts the channel in
+  its rebuild.
+- `python -m ultraskelly.replay --serve --people N` feeds the real producer from a
+  synthetic camera: N people at 30 fps whose rows are shuffled every frame.
+- `scripts/stream_acceptance.py` runs FreeMoCap's consumer checks in headless Chromium.
+
+Evidence, on the Pi in Chromium 156 (headless, the page served over plain HTTP from a LAN
+address, so not a secure context): against the synthetic camera all eight checks passed,
+including identities kept through row reordering (303 of 303 frames), the custom channel's
+descriptor and values, retries stopping after a disconnect during a connection failure,
+and a reconnect drawing its first frame without earlier messages. Against the bot, with
+the OAK and the Hailo-8 and simulated motors, the five checks that do not need people in
+view passed: 30.1 frames/s decoded and drawn and 19.1 `robot_state`/s. Per frame on the OAK's
+29 KB frames:
+
+| Protocol | ms | Image path | ms |
+| --- | --- | --- | --- |
+| CBOR decode and validation | 0.065 | Payload read | 0.005 |
+| Frame resolution | 0.001 | JPEG decode (median) | 2.9 |
+| Channel views | 0.001 | Draw (median) | 0.4 |
+
+As before, message handling is negligible and JPEG decoding is the client's cost.
+FreeMoCap's [consumer report](https://github.com/freemocap/freemocap/blob/be58d412155902a0e6542d33c519c9212e7d94e1/current-work-plans/03-transport/ultraskelly-consumer-report.md)
+has both runs, the method and the wishes that came out of them. Not yet checked: people
+in front of the robot's camera, and a GPU-drawn window (headless Chromium had no GPU
+context; the dashboard's WebGL view needed `--use-angle=swiftshader
+--enable-unsafe-swiftshader` there). Any Chromium started in the Pi's desktop session
+needs `--password-store=basic` and a throwaway profile, or it asks for the keyring
+password on the robot's screen.
 
 ## Validation and limits
 

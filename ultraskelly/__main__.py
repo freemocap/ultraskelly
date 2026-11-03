@@ -23,7 +23,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--no-window", action="store_true",
-        help="With --hardware: skip the OpenCV camera window (the dashboard on port 8080 still runs).",
+        help="With --hardware: skip the OpenCV camera window (the dashboard still runs).",
     )
     parser.add_argument(
         "--record", action="store_true",
@@ -33,12 +33,30 @@ def main() -> None:
         "--microphone", metavar="NAME",
         help="With --record: also record audio from the sound card whose name contains NAME (see arecord -l).",
     )
+    parser.add_argument(
+        "--zed", action="store_true",
+        help="With --hardware: also capture the ZED Mini stereo camera and stream its left and right images.",
+    )
+    parser.add_argument(
+        "--zed-only", action="store_true",
+        help="Run only the ZED Mini and the dashboard: no OAK, Hailo or motors, so the robot can be in use.",
+    )
+    parser.add_argument(
+        "--depth", nargs="?", const="sgbm", choices=["sgbm", "stereonet"],
+        help="With --zed or --zed-only: also compute depth from the ZED's pair, at most 5 Hz: with OpenCV on "
+             "the CPU (sgbm, the default) or StereoNet on the Hailo-8 (stereonet, needs the robot lock).",
+    )
+    parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
-    if (args.simulate_motors or args.no_window or args.record) and not args.hardware:
-        parser.error("--simulate-motors, --no-window and --record are used together with --hardware")
+    if args.depth and not (args.zed or args.zed_only):
+        parser.error("--depth is used together with --zed or --zed-only")
+    if (args.simulate_motors or args.no_window or args.record or args.zed) and not args.hardware:
+        parser.error("--simulate-motors, --no-window, --record and --zed are used together with --hardware")
     if args.microphone and not args.record:
         parser.error("--microphone is used together with --record")
-    if not args.hardware:
+    if args.zed_only and args.hardware:
+        parser.error("--zed-only runs without --hardware")
+    if not args.hardware and not args.zed_only:
         parser.print_help()
         return
 
@@ -53,6 +71,7 @@ def main() -> None:
         launcher = BotLauncher.from_config(launch_config(
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
+            zed=args.zed, zed_only=args.zed_only, depth=args.depth, port=args.port,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

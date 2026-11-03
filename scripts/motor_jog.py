@@ -14,6 +14,7 @@ bot uses. DC motors are always stopped on exit, including on Ctrl+C.
 import argparse
 import time
 
+from ultraskelly.core.bot.motor.bridge_motor import BridgeMotor
 from ultraskelly.core.bot.motor.mouth_node import MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import stop_board_motors
@@ -52,7 +53,7 @@ def main() -> None:
 
     servo_kit = ServoKit(channels=16)
     motor_kit = MotorKit(address=0x60, pwm_frequency=1600)
-    motors = {number: getattr(motor_kit, f"motor{number}") for number in (1, 2, 3, 4)}
+    motors = {number: BridgeMotor.from_motorkit(motor_kit, number) for number in (1, 2, 3, 4)}  # As the bot drives them
     waist, jaw = motors[orientation.waist_motor_channel], motors[mouth.mouth_motor_channel]
     try:
         for actuator in selected:

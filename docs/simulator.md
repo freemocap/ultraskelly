@@ -97,7 +97,11 @@ head transforms, and face-mounted camera origin as the viewer frustum. It does n
 
 Servos follow commands at a configured maximum angular speed (default 180°/s).
 Waist velocity is `-throttle * waist_speed` (default 45°/s at full throttle), with
-illustrative ±100° stops; a released (coasting) waist motor counts as zero drive. Negative mouth throttle opens the jaw toward 28° and
+illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
+Optional friction (`waist_breakaway`, `waist_stall`; both 0 by default, and set only
+through the configure request, not the tuning form) makes a still waist wait for the
+breakaway drive and a turning one stop below the stall drive, with speed scaled
+between the stall drive and full drive. Negative mouth throttle opens the jaw toward 28° and
 zero allows spring return, limited to 90°/s. Geometry is a schematic armature with
 fixed arms and legs. These assumptions are intentionally simple and uncalibrated:
 no inertia, torque, backlash, stalls, collisions, power limits, or I2C delays.
@@ -112,12 +116,17 @@ The waist has one yaw axis and participates in the shared tracking controller
 through `WaistDrive` (`motor/waist_drive.py`). When the head's pan is more than
 15 degrees from neutral, the waist turns toward its gaze in one continuous move;
 camera feedback brings the head back toward neutral, and the move continues until
-the head is within 5 degrees. A move starts at 0.45 drive, below where the waist
-is assumed to break loose, ramps up at 1.5 per second to a drive that grows with the
-head's angle (0.7 at 15 degrees, up to 0.8), ramps down at 2 per second, releases the
-motor to coast at 0.4, and brakes it 0.3 s later. Reversing passes through that stop.
-A move lasting 6 s ramps down and rests 2 s. Target loss ramps the waist to a stop.
-These levels are starting values until the waist sound test measures the real waist.
+the head is within 5 degrees; a stopping move never resumes, so the waist rests
+between the two angles instead of hunting. A move starts at 0.15 drive and follows
+S-curves (rate up to 1.5 per second rising and 2 falling, its change limited to 10
+per second squared) toward a running drive of 0.5 at 15 degrees, up to 0.7. While
+the head shows no progress (2 degrees within 0.5 s at the running drive), the drive
+rises 0.3 per second toward 0.8 to break the waist loose, and eases off as soon as
+the head comes back. A stopping move ramps down, releases the motor to coast at 0.2,
+and brakes it 0.3 s later. Reversing passes through that stop. A move lasting 6 s
+ramps down and rests 2 s. Target loss ramps the waist to a stop. On the robot the
+waist motor brakes between PWM pulses (slow decay). These levels follow published
+guidance and round 1's measurements (see the audit), not yet a run on the robot.
 The state display shows idle, turning, stopping or resting.
 The Pi launcher's 120-second restart workaround was removed on 2026-11-02;
 the simulator does not run that launcher.

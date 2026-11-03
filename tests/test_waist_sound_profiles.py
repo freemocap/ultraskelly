@@ -54,12 +54,11 @@ def test_onset_reports_where_the_waist_breaks_loose_and_stalls():
     assert onset_metrics(shifts[:2], commands, 0.0, 3.0) == {}
 
 
-def test_drive_profile_matches_the_bots_waist_drive():
+def test_drive_profile_replays_the_bots_waist_drive():
     params, profile = WaistDriveParams(), PROFILES["drive"]
     drive = WaistDrive(params)
-    bot = [drive.update(now=tick * 0.01, pan_offset=-30.0) for tick in range(100)]  # Head 30 degrees off, held
-    bench = [profile.throttle(tick * 0.01) for tick in range(100)]
-    assert bench == pytest.approx(bot, abs=1e-9)  # The same start and ramp up to the same cruise
-    end = profile.seconds
-    assert profile.throttle(end - 0.01) == pytest.approx(params.release_throttle + params.ramp_down * 0.01)
-    assert profile.throttle(end) is None
+    bot = [drive.update(now=tick * 0.01, pan_offset=-max(0.0, 30.0 - 20.0 * (tick * 0.01))) for tick in range(len(profile.steps))]
+    bench = [profile.throttle(tick * 0.01) for tick in range(len(profile.steps))]
+    assert bench == bot and profile.slow_decay == params.slow_decay
+    assert bench[0] == params.start_throttle and None in bench and bench[-1] == 0.0  # Starts low, coasts, then brakes
+    assert profile.throttle(profile.seconds + 1) == 0.0 and profile.seconds < 3.0

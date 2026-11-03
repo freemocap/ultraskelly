@@ -151,18 +151,32 @@ const stream = new TransportService({url: `${location.protocol === 'https:' ? 'w
 let latestState = null, lastSnapshotAt = 0, snapshotsThisSecond = 0;
 stream.subscribeToKind('robot_state', state => {
   latestState = state; lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
+  // The tracking tile shows the camera the head steers by: the OAK, or replay's synthetic camera.
+  const tracking = Object.keys(state.overlays ?? {})[0] ?? 'oak';
+  if (tracking !== tiles.trackingId) { tiles.trackingId = tracking; $('tracking-name').textContent = cameraName(tracking); }
   scene?.update(state);
   tiles.showTargetWithoutVideo(state);
   showCommands(state); showTarget(state); showHealth(state); showTests(state);
   motorTest.update(state);
 });
-let frameOverlays = {frameNumber: -1, overlays: []};
-stream.subscribeToOverlay(overlay => {  // Delivered just before the image of the same frame
-  if (overlay.frameNumber !== frameOverlays.frameNumber) frameOverlays = {frameNumber: overlay.frameNumber, overlays: []};
-  frameOverlays.overlays.push(overlay);
+// The SDK delivers each frame message's channels, then its overlays, then its image, so what arrives
+// between a channels call and the image belongs to that image. Values are copied out of the decoder's
+// storage, which a later frame may reuse.
+const noFrame = {frameNumber: -1, overlays: [], target: null};
+let frame = noFrame;
+stream.subscribeToChannels(views => {
+  frame = views ? {frameNumber: views.frameNumber, overlays: [], target: null} : noFrame;
+  for (const view of views?.channels ?? []) {
+    if (view.descriptor.kind !== 'ultraskelly.target' || view.rowCount < 1) continue;
+    const column = name => view.data[view.descriptor.columns.indexOf(name)];
+    frame.target = {cameraId: view.descriptor.camera_id, x: column('x'), y: column('y'), bodyAngle: column('body_angle_deg')};
+  }
+});
+stream.subscribeToOverlay(overlay => {
+  if (overlay.frameNumber === frame.frameNumber) frame.overlays.push(overlay);
 });
 stream.subscribeToImages((buffer, frameNumber) => {
-  tiles.handle(buffer, frameOverlays.frameNumber === frameNumber ? frameOverlays.overlays : []);
+  tiles.handle(buffer, frame.frameNumber === frameNumber ? frame : noFrame);
 });
 stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol error', problem); error(`Stream error: ${problem?.message ?? problem}`); });
 stream.on('open', () => error(''));
@@ -179,6 +193,6 @@ setInterval(() => {
   $('snapshot-age').textContent = lastSnapshotAt ? `last ${ago(age)}` : '—';
   $('snapshot-age').classList.toggle('stale', stale);
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
-  $('oak-rate').textContent = rateText(drawn.oak, cameras.oak);
+  $('oak-rate').textContent = rateText(drawn.oak, cameras[tiles.trackingId]);
   $('zed-rate').textContent = rateText(drawn.zed_left, cameras.zed_left);
 }, 1000);

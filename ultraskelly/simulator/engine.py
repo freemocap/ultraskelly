@@ -21,6 +21,10 @@ class Settings(BaseModel):
     waist_gain: float = Field(default=0.008, gt=0, le=0.05)
     servo_speed: float = Field(default=180, ge=1, le=720)
     waist_speed: float = Field(default=45, ge=0, le=180)
+    # Optional friction: a still waist needs this much drive to break loose, and a turning
+    # waist stops below waist_stall. Both 0 keep the plain linear model.
+    waist_breakaway: float = Field(default=0.0, ge=0, le=1)
+    waist_stall: float = Field(default=0.0, ge=0, lt=1)
 
 
 def approach(value, target, amount):
@@ -43,6 +47,7 @@ class Simulation:
         self.tick = 0
         self.pan = self.tilt = 90.0
         self.waist = self.jaw = 0.0
+        self.waist_moving = False
         self.last_camera = {"x": None, "y": None, "visible": False, "time": None}
         self.history = deque(maxlen=600)
         self.head.clock = self.mouth.clock = lambda: self.tick * self.dt
@@ -105,7 +110,7 @@ class Simulation:
             await self.mouth.step()
             self.pan = approach(self.pan, self.head.pan_angle, self.settings.servo_speed * self.dt)
             self.tilt = approach(self.tilt, self.head.tilt_angle, self.settings.servo_speed * self.dt)
-            self.waist = max(-100, min(100, self.waist - self.waist_drive() * self.settings.waist_speed * self.dt))
+            self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
             self.tick += 1
@@ -115,6 +120,14 @@ class Simulation:
     def waist_drive(self):
         # A released (coasting) waist motor has no drive; the plant has no inertia to carry it on.
         return self.head.waist_motor.throttle or 0.0
+
+    def waist_velocity(self):
+        """Degrees per second for positive drive (negative drive increases yaw), with optional friction."""
+        drive, s = self.waist_drive(), self.settings
+        self.waist_moving = abs(drive) > s.waist_stall if self.waist_moving else abs(drive) >= max(s.waist_breakaway, 1e-9)
+        if not self.waist_moving:
+            return 0.0
+        return math.copysign((abs(drive) - s.waist_stall) / (1 - s.waist_stall), drive) * s.waist_speed
 
     def sample(self):
         return {"time": round(self.tick * self.dt, 3), "pan": self.pan,
