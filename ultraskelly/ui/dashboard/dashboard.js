@@ -24,9 +24,10 @@ for (const button of viewButtons) button.onclick = () => {
   scene?.setView(button.dataset.view);
 };
 for (const button of document.querySelectorAll('.layers button')) button.onclick = () => {
-  const on = button.getAttribute('aria-pressed') !== 'true';
+  const on = button.getAttribute('aria-pressed') !== 'true', layer = button.dataset.layer;
   button.setAttribute('aria-pressed', String(on));
-  scene?.depth.setVisible({[button.dataset.layer]: on});
+  if (layer === 'gaze') scene?.gaze.setVisible(on);
+  else scene?.depth.setVisible({[layer]: on});
 };
 
 // Camera tiles; any tile enlarges over the 3D scene, which stops rendering while covered.
@@ -185,9 +186,16 @@ stream.subscribeToChannels(views => {
   for (const view of views?.channels ?? []) {
     if (view.descriptor.kind !== 'ultraskelly.target' || view.rowCount < 1) continue;
     const column = name => view.data[view.descriptor.columns.indexOf(name)];
-    frame.target = {cameraId: view.descriptor.camera_id, x: column('x'), y: column('y'), bodyAngle: column('body_angle_deg')};
+    const [width, height] = view.descriptor.image_size ?? [640, 480];
+    frame.target = {cameraId: view.descriptor.camera_id, x: column('x'), y: column('y'), bodyAngle: column('body_angle_deg'), width, height};
   }
+  // Each tracking-camera frame moves the gaze ray to its target (or hides it: the head follows nobody).
+  if (views?.cameras?.some(camera => camera.id === tiles.trackingId)) showGaze(frame.target);
 });
+function showGaze(target) {
+  const distance = scene?.gaze.update(target, depth.latest);
+  $('target-face').textContent = distance == null ? '' : `face ${distance.toFixed(2)} m (est.)`;
+}
 stream.subscribeToOverlay(overlay => {
   if (overlay.frameNumber === frame.frameNumber) frame.overlays.push(overlay);
 });

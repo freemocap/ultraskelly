@@ -28,12 +28,12 @@ camera rate on the Pi 5.
 - **3D scene:** the schematic skeleton driven by the commanded head pan and tilt, the
   waist drive arrow and the jaw. These are commands, not measured positions, and the
   scene says so. View buttons: orbit, behind the head, side, top. The ZED's point cloud
-  and mesh ride on the head, each with a layer toggle (see Depth); the gaze ray to the
-  face point comes next.
+  and mesh and the OAK's gaze ride on the head, each with a layer toggle (see Depth and
+  Gaze).
 - **Tracking camera (OAK):** the video with the poses found in each frame, the aim
   crosshair, jaw zone and target ring, drawn in the browser. The row under it shows the
-  target state, pixel, body angle, head lock and target age, and the face distance once
-  depth exists. Without video, as in `replay --serve`, the tile shows the target on a grid.
+  target state, pixel, body angle, whether it is inside the jaw zone, its age, and the
+  estimated face distance when the gaze ray meets the depth. Without video, as in `replay --serve`, the tile shows the target on a grid.
 - **Eyes and depth (ZED Mini):** the left and right eyes (`zed_left`, `zed_right`), then
   the depth heat map with a metre scale and the raw depth, both aligned to the left eye.
 - **Readout strip:** motor commands (pan and tilt in degrees, waist and jaw drive from
@@ -94,3 +94,14 @@ and draws. Newest wins: while the worker is busy, only the newest frame waits.
   room is an estimate. **Cloud** shows every depth pixel and **Mesh** joins every second one,
   dropping triangles at unknown pixels and at depth jumps over 6%. The ZED's view cone reaches
   1.5 m. Depth that stops arriving disappears after 3 s.
+
+## Gaze
+
+The OAK's view cone starts at a best-guess lens position in the skull's nose hole, 4 cm below
+the eye sockets, with a 69° field of view across the image. Each tracking-camera frame turns
+the gaze ray from the lens through that frame's `ultraskelly.target` pixel; the head following
+nobody hides it. The ray marches along the ZED's newest depth in 1 cm steps and ends where it
+crosses the first surface the ZED sees on it, which is drawn as the orange face point, its
+distance from between the eyes shown in the target row as an estimate. Without depth on the
+ray it stays a dashed 3 m direction. Both cameras' poses are best guesses until the camera
+bracket gives them, and the waist angle is not measured.

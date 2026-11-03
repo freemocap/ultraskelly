@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 import { buildSkeleton } from '/skeleton.js';
 import { createDepthLayer } from '/depth3d.js';
+import { createGazeLayer } from '/gaze.js';
 
 const deg = THREE.MathUtils.degToRad;
 const JAW_OPEN_DEGREES = 28;   // Same jaw travel as the simulator's model
@@ -46,8 +47,9 @@ export function createScene(viewport) {
   const skeleton = buildSkeleton(scene);
   skeleton.root.scale.setScalar(SKELETON_SCALE);
   // The robot reports a target pixel, not a world position, so the simulator's 3D target is hidden;
-  // its 120-degree camera cone is too: the depth layer draws the ZED's own.
-  for (const part of [skeleton.target, skeleton.targetLine, skeleton.jawZone, skeleton.frustum]) part.visible = false;
+  // its 120-degree camera cone and fixed gaze arrow are too: the depth and gaze layers draw the ZED's and
+  // the OAK's own.
+  for (const part of [skeleton.target, skeleton.targetLine, skeleton.jawZone, skeleton.frustum, skeleton.gaze]) part.visible = false;
   // Commanded waist drive: a solid arrow in front of the pelvis, pointing where its front is being turned.
   const driveMaterial = new THREE.MeshStandardMaterial({color: 0xffb269, emissive: 0xd76a23, emissiveIntensity: .6});
   const waistArrow = new THREE.Group();
@@ -58,6 +60,7 @@ export function createScene(viewport) {
   waistArrow.add(shaft, tip); waistArrow.position.set(0, .05, .3); waistArrow.visible = false;
   skeleton.waist.add(waistArrow);
   const depth = createDepthLayer({head: skeleton.tilt, origin: EYES, scale: SKELETON_SCALE, invalidate});
+  const gaze = createGazeLayer({group: depth.group, invalidate});
 
   let view = 'orbit', paused = false, jawShown = 0, jawGoal = 0, last = performance.now();
   const eye = new THREE.Vector3(), look = new THREE.Vector3();
@@ -111,6 +114,6 @@ export function createScene(viewport) {
     invalidate();
   }
 
-  return {scene, camera, renderer, skeleton, waistArrow, depth, update, setView, invalidate,
+  return {scene, camera, renderer, skeleton, waistArrow, depth, gaze, update, setView, invalidate,
           setPaused: value => { paused = value; if (!value) invalidate(); }};
 }
