@@ -636,8 +636,9 @@ within 4 px of the 64-pixel search limit are dropped: where the true disparity l
 beyond it, as for the skull a few centimetres in front of the eyes, the matcher
 settles at the limit. On a live pair that pile-up held 22% of the valid pixels, and it
 moved when the search range grew. The nearest depth kept at VGA is therefore 0.36 m.
-The dashboard shows each depth frame as `zed_rectified` and `zed_depth` (red near,
-blue far, black unknown); the depth message for the 3D view follows.
+The dashboard showed each depth frame as `zed_rectified` and `zed_depth` (red near,
+blue far, black unknown) until it drew depth from the depth message that follows; since
+2026-11-03 those preview frames are sent only with `--depth-previews`.
 
 Measured on the Pi at VGA, capture and depth without the server, 15 s each. The skull
 hides most of the view, so 18% of pixels had a depth.
@@ -758,6 +759,37 @@ and fits the OAK's pose to the ZED depth under them with `solvePnPRansac`, writi
 pose to 1 cm and 0.3° with a tenth of the matches wrong. Tonight it found no feature both
 cameras see, because the skull blocks the ZED's view, so the alignment and a check against
 a tape-measured face distance wait for the re-seated lenses.
+
+**The ZED Mini's IMU (2026-11-03).** With `--zed`, `ZedImuNode` reads the accelerometer and
+gyroscope on the camera's own USB HID interface (2b03:f681) through Linux hidraw: no ZED
+SDK and no library, only reads and one ioctl. The report layout, the command that starts
+the stream (feature report 0x32) and the scale factors are Stereolabs' zed-open-capture's
+(`include/sensorcapture_def.hpp`). Each 64-byte report holds one sample; the interface has
+no report IDs, and its stream-status report cannot be read back (the request stalls). The
+stream ran 60 s without the keep-alive ping zed-open-capture sends once a second, and one
+ping timed out after 5 s, so the node sends none and restarts the stream after a second of
+quiet instead. The udev rule `80-zed-mini-imu.rules` (installed by `scripts/setup-pi.sh`)
+gives the bot's user `/dev/zed-mini-imu`.
+
+The IMU's own clock counts 800 samples a second, but against `time.monotonic()` it ran
+0.78% slow: 793.8 samples arrive a second, none lost in a minute. The node maps that clock
+onto the Pi's with a line through the reads that arrived soonest, refitted every 0.25 s over
+30 s, so the samples share the frames' clock. The first second's samples wait for the
+first fit. With the arrival delays measured on the Pi (median 0.6 ms, 99% within 2.8 ms
+after the soonest), a simulation put every sample within 0.4 ms of when it was taken.
+Values are raw and in the IMU's own axes. At rest the accelerometer read
+(-6.78, 7.25, -1.20) m/s², 10.0 m/s² in all, 2% more than gravity; the gyroscope read
+(-0.72, 0.60, 1.34) °/s. Placing those axes in the head frame needs a measured motion, a pan
+and a tilt with the gyroscope recording, so they are labelled `sensor` until then. Nothing
+steers by the IMU: it is not fed to `OrientationNode` or any controller.
+
+A reader thread inside the busy bot lost 9% of the samples (about 4,200 a minute). The
+kernel keeps only 64 reports, 80 ms, and with the Pi at 90% of its cores the bot's other
+threads often held the reader off for longer. A separate process loses none, even under
+the same load, so the node runs `zed_imu_reader.py`, standard library only, which pipes each
+read's reports and time to the node, and starts it again if it stops. In the full bot with
+`--record`, `imu.csv` held all 35,795 samples of a 45 s run, none missed. The dashboard gets
+them as `imu` messages, about 15 batches a second (docs/stream.md).
 
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 

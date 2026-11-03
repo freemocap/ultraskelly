@@ -35,7 +35,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--zed", action="store_true",
-        help="With --hardware: also capture the ZED Mini stereo camera and stream its left and right images.",
+        help="With --hardware: also capture the ZED Mini stereo camera and stream its left and right images "
+             "and its IMU.",
     )
     parser.add_argument(
         "--zed-only", action="store_true",
@@ -43,13 +44,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--depth", nargs="?", const="sgbm", choices=["sgbm", "stereonet"],
-        help="With --zed or --zed-only: also compute depth from the ZED's pair, at most 5 Hz: with OpenCV on "
-             "the CPU (sgbm, the default) or StereoNet on the Hailo-8 (stereonet, needs the robot lock).",
+        help="With --zed or --zed-only: also compute depth from the ZED's pair: with OpenCV on the CPU, at most "
+             "10 Hz (sgbm, the default), or StereoNet on the Hailo-8, 1 Hz (stereonet, needs the robot lock).",
+    )
+    parser.add_argument(
+        "--depth-previews", action="store_true",
+        help="With --depth: also stream the depth as colour images (cameras zed_rectified and zed_depth); "
+             "the depth_frame messages carry the same, so the dashboard needs none.",
     )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
+    if args.depth_previews and not args.depth:
+        parser.error("--depth-previews is used together with --depth")
     if (args.simulate_motors or args.no_window or args.record or args.zed) and not args.hardware:
         parser.error("--simulate-motors, --no-window, --record and --zed are used together with --hardware")
     if args.microphone and not args.record:
@@ -76,7 +84,8 @@ def main() -> None:
         launcher = BotLauncher.from_config(launch_config(
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
-            zed=args.zed, zed_only=args.zed_only, depth=args.depth, port=args.port,
+            zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
+            port=args.port,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

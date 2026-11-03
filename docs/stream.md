@@ -8,7 +8,7 @@ CBOR messages, encoded on the Pi with `freemocap-stream` and decoded in the brow
 
 - **No handshake.** Every message decodes on its own. A viewer that connects or reconnects
   mid-stream draws the next frame without earlier messages.
-- **Newest wins.** `robot_state`, each camera and the depth have their own latest-value slot, so a slow
+- **Newest wins.** `robot_state`, each camera, the depth and the IMU have their own latest-value slot, so a slow
   viewer receives fewer, newer messages and the bot never waits for it. Nothing is
   encoded while no viewer is connected.
 - **Heartbeat.** A text `ping` gets a text `pong`; the client SDK sends it.
@@ -37,10 +37,11 @@ trackers. They are the raw eyes, 672×376 each, as the camera sees them. Their f
 number counts camera frame periods, so a frame lost in USB transfer skips a number, and
 the timestamp is when the frame's first USB packet arrived (the kernel's buffer time).
 
-With `--depth`, each depth frame also travels as a frame message with cameras
-`zed_rectified`, the rectified left eye, and `zed_depth`, the same view's depth drawn in
-colour (red at 0.3 m to blue at 5 m and beyond, black unknown), up to 10 per second, for
-the video panels. The depth itself is the `depth_frame` message below.
+With `--depth`, the depth travels as the `depth_frame` message below, which also carries
+the rectified left eye. Only with `--depth-previews` does each depth frame travel again as a
+frame message, with cameras `zed_rectified`, the rectified left eye, and `zed_depth`, the
+same view's depth drawn in colour (red at 0.3 m to blue at 5 m and beyond, black unknown),
+up to 10 per second, for viewers that draw only frames; the dashboard needs neither.
 
 ### People
 
@@ -85,9 +86,9 @@ values are the commands sent, not measured positions.
 | `servo_state` | the head controller's `pan`, `tilt`, `roll`, `locked_x`, `locked_y`, `age` |
 | `target` | the controllers' latest target `x`, `y`, `angle`, `age`; not paired with any image |
 | `face` | with `--zed --depth`: where the tracked face is in 3D. `position_head` [x forward, y left, z up] and `position_camera` [x right, y down, z forward] in metres, `distance` from the point between the eye sockets, the OAK `pixel` it came from, which `alignment` placed it (`nominal` until measured) and `age`. Positions and distance are null when no face was found |
-| `cameras` | per camera ID (`oak`; with the ZED also `zed_left`, `zed_right`, and with depth `zed_rectified`, `zed_depth`): `fps`, `age` of the newest frame, `width`, `height` |
+| `cameras` | per camera ID (`oak`; with the ZED also `zed_left`, `zed_right`; with depth `zed_rectified`, the depth frames, and with `--depth-previews` also `zed_depth`): `fps`, `age` of the newest frame, `width`, `height` |
 | `overlays` | per camera: the `aim` pixel the head steers the target to, and the `jaw_zone` half-width |
-| `rates` | message rates in Hz: `servo_state`, `target`, `pose`, and `face` with the face locator |
+| `rates` | message rates in Hz: `servo_state`, `target`, `pose`, `face` with the face locator, and `imu` (batches) with the ZED |
 | `nodes` | each node's `name` and `state` (starting, running, stopped, crashed), with `error` when crashed |
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
 
@@ -103,13 +104,45 @@ measured). [The depth message's own page](depth-stream.md) gives every field, ho
 pixels into points, and a browser decoding example; `scripts/depth_frame_samples.py`
 writes sample messages to build against.
 
+## `imu` messages
+
+UltraSkelly's application kind for the ZED Mini's accelerometer and gyroscope, version 0,
+with `--zed`: about 15 batches a second, each with every sample since the last, 794 samples a
+second in all. They are for display and recording (`imu.csv` with `--record`); nothing
+steers by them.
+
+| Field | Contents |
+| --- | --- |
+| `source` | `zed_mini` |
+| `start_time` | the batch's first sample, in seconds on the Pi's `time.monotonic()` clock, the frames' clock |
+| `count` | samples in the batch |
+| `first_sample` | the first sample's number since the bot started: when it is not the previous batch's `first_sample` + `count`, batches were missed (newest wins) |
+| `samples` | a channel block, kind `ultraskelly.imu`: a row per sample, little-endian float32 columns `time` (seconds after `start_time`), `ax`, `ay`, `az` (m/s², gravity included), `gx`, `gy`, `gz` (degrees per second), row-major in `data` |
+| `axes` | `sensor: ...`: the IMU's own axes, not the head frame |
+| `units` | `time` s, `acceleration` m/s^2, `angular_velocity` deg/s, `temperature` degC |
+| `sample_rate` | samples per second by the Pi's clock, as measured; null for the bot's first second |
+| `lost` | samples the IMU took that never reached the bot, so far |
+| `temperature` | the IMU's own, in °C |
+
+The envelope `timestamp` is the batch's last sample. The values are raw, with no bias or
+scale calibration: at rest the gyroscope read about (-0.66, 0.63, 1.42) °/s, and the
+accelerometer 10.0 m/s², 2% more than gravity. The axes are the IMU chip's, and their place
+in the head frame is not measured yet; at rest gravity gives only the vertical, which read
+(-6.78, 7.28, -1.19) m/s² with the ZED in its present seat. Times are the IMU's own,
+mapped onto the Pi's clock from the reports that arrived soonest; with the arrival delays
+measured on the Pi, a simulation put each sample within 0.4 ms of when it was taken. The
+IMU counts 800 samples a second by its own clock, which ran 0.77% slow, so 793.9 a second
+arrive by the Pi's.
+
 ## Reading it in a browser
 
 The dashboard imports the vendored bundle (`/vendor/freemocap-client.js`):
 
-- Register `robot_state` (and `depth_frame`, to draw depth) as application kinds when you
-  construct `TransportService`; registrations are fixed at construction. Byte strings
-  arrive as `Uint8Array`; inflate `depth_frame`'s depth with `DecompressionStream('deflate')`.
+- Register `robot_state` (and `depth_frame`, to draw depth, and `imu`, to plot the IMU) as
+  application kinds when you construct `TransportService`; registrations are fixed at
+  construction. Byte strings arrive as `Uint8Array`; inflate `depth_frame`'s depth with
+  `DecompressionStream('deflate')`, and copy `imu`'s `samples.data` before reading it as a
+  `Float32Array` (`new Float32Array(data.slice().buffer)`), since a view may start anywhere.
 - Keep one newest-wins decode slot per image source, keyed by the camera IDs in the payload
   (`readImagePayload` first, decode after): with the OAK and the ZED both streaming, a single
   slot lets one camera's frames displace the other's.

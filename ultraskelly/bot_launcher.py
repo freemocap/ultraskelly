@@ -35,6 +35,7 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
 from ultraskelly.core.bot.sensory.face_locator_node import FaceLocatorNode, FaceLocatorParams
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
+from ultraskelly.core.bot.sensory.zed_imu_node import ZedImuNode, ZedImuNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
 from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic, StereoFrameTopic
@@ -94,6 +95,10 @@ class LaunchConfig(NodeParams):
     stereo_depth: StereoDepthNodeParams | None = Field(
         default=None,
         description="With zed_camera, also compute depth from its pair; None computes none",
+    )
+    zed_imu: ZedImuNodeParams | None = Field(
+        default=None,
+        description="With zed_camera, also stream its IMU for display and recording (never control); None reads none",
     )
     face_locator: FaceLocatorParams = Field(
         default_factory=FaceLocatorParams,
@@ -241,6 +246,11 @@ class BotLauncher(BaseModel):
         if zed is None:
             return {}
         self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=zed))
+        if self.config.zed_imu is not None:
+            try:
+                self.nodes.append(ZedImuNode.create(pubsub=self.pubsub, params=self.config.zed_imu))
+            except OSError as error:  # Display and recording only: the robot runs on without it
+                logger.error(f"Running without the ZED's IMU: {error}")
         feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
         if self.config.stereo_depth is not None:
             width, height = ZED_MODES[zed.resolution][0]
