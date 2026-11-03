@@ -6,6 +6,7 @@ import { MotorTestPanel } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
+import { TimeSeries } from '/timeseries.js';
 
 const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
@@ -85,27 +86,40 @@ function showTests(state) {
   } else showTestStatus('Ready');
 }
 
-// Readouts.
+// Readouts. Motor values are commands; the time series keeps the last 30 s of them, of the controllers'
+// input and of the face distance, on the Pi's clock.
+const series = new TimeSeries($('series'));
 function showCommands(state) {
-  for (const row of document.querySelectorAll('.motors tr[data-motor]')) {
-    const name = row.dataset.motor, command = state.motors?.commands?.[name], value = command?.value ?? null;
-    const servo = name === 'pan' || name === 'tilt';
-    row.querySelector('.value').textContent = fixed(value, servo ? 1 : 2, servo ? '°' : '');
-    row.querySelector('.age').textContent = ago(command?.age);
-    const meter = row.querySelector('.meter i');
-    meter.style.setProperty('--shown', value == null ? 'none' : 'block');
-    if (value == null) continue;
-    if (servo) {  // Servo angle across 0 to 180 degrees; the tick marks the 90 degree center
-      const at = Math.max(0, Math.min(100, value / 180 * 100));
-      meter.style.setProperty('--left', `calc(${at}% - 1.5px)`); meter.style.setProperty('--width', '3px');
-    } else {      // Throttle from the center tick toward -1 or +1
-      const at = 50 + Math.max(-1, Math.min(1, value)) * 50;
-      meter.style.setProperty('--left', `${Math.min(50, at)}%`); meter.style.setProperty('--width', `${Math.abs(at - 50)}%`);
-    }
-  }
+  const command = name => state.motors?.commands?.[name]?.value ?? null, t = state.time;
+  series.push('head', t, [command('pan'), command('tilt')]);
+  series.push('drive', t, [command('waist'), command('mouth')]);
+  const aim = state.overlays?.[tiles.trackingId]?.aim;
+  series.push('target', t, hasTarget(state) && aim ? [state.target.x - aim[0], state.target.y - aim[1]] : [NaN, NaN]);
+  const face = state.face;
+  series.push('face', t, [face?.distance != null && face.age < FACE_FRESH ? face.distance : NaN]);
   const mode = $('motor-mode');
   mode.textContent = state.motors?.simulated ? 'Simulated motors' : 'Real motors';
   mode.classList.toggle('real', !state.motors?.simulated);
+}
+
+// The tracked face in 3D, as the Pi's face locator places it (robot_state.face): the OAK's target pixel
+// found in the ZED's depth. The dashboard draws it; it does not compute it again.
+const FACE_FRESH = 0.5;  // Seconds; an older face is no longer drawn
+let gazeTarget = null, facePoint = null;
+const metres = value => `${value >= 0 ? '' : '−'}${Math.abs(value).toFixed(2)} m`;
+function showFace(state) {
+  const face = state.face, fresh = face?.position_head && face.age < FACE_FRESH;
+  facePoint = fresh ? face.position_head : null;
+  scene?.gaze.update(gazeTarget, facePoint);
+  const nominal = face?.alignment === 'nominal' ? ' (nominal)' : '';
+  $('target-face').textContent = fresh ? `face ${face.distance.toFixed(2)} m${nominal}` : '';
+  $('face-distance').textContent = fresh ? `${face.distance.toFixed(2)} m` : '—';
+  $('face-distance').classList.toggle('none', !fresh);
+  $('face-alignment').textContent = face?.alignment ?? '';
+  const [x, y, z] = facePoint ?? [];
+  $('face-position').textContent = fresh ? `${metres(x)} fwd · ${metres(y)} left · ${metres(z)} up`
+    : !face ? 'No face locator in this run' : 'No face located';
+  $('face-foot').textContent = fresh && face.pixel ? `from OAK pixel ${face.pixel.map(Math.round).join(', ')} · ${ago(face.age)} old` : '';
 }
 
 function showTarget(state) {
@@ -132,10 +146,10 @@ function showHealth(state) {
   const labels = {servo_state: 'Servo', target: 'Target', pose: 'Pose'};
   const rows = Object.entries(state.rates ?? {}).map(([name, hz]) => [labels[name] || name, `${hz.toFixed(1)} Hz`]);
   for (const [name, camera] of Object.entries(state.cameras ?? {})) {
-    // A camera shows its rate; once its newest frame is over a second old, it shows that age instead.
-    const stale = !camera.width || camera.age > 1;
-    const detail = camera.width ? `${camera.width}×${camera.height}, ${camera.fps.toFixed(1)} fps, newest frame ${ago(camera.age)} old` : 'no frames yet';
-    rows.push([cameraName(name), !camera.width ? 'no frames' : stale ? `${ago(camera.age)} old` : `${camera.fps.toFixed(1)} fps`, stale, detail]);
+    // Camera rates show in the camera sections; here a camera appears only once its frames stop.
+    if (camera.width && camera.age <= 1) continue;
+    const detail = camera.width ? `${camera.width}×${camera.height}, newest frame ${ago(camera.age)} old` : 'no frames yet';
+    rows.push([cameraName(name), camera.width ? `${ago(camera.age)} old` : 'no frames', true, detail]);
   }
   definitionList($('rates'), rows);
   $('nodes').replaceChildren(...(state.nodes ?? []).map(node => {
@@ -173,7 +187,7 @@ stream.subscribeToKind('robot_state', state => {
   if (tracking !== tiles.trackingId) { tiles.trackingId = tracking; $('tracking-name').textContent = cameraName(tracking); }
   scene?.update(state);
   tiles.showTargetWithoutVideo(state);
-  showCommands(state); showTarget(state); showHealth(state); showTests(state);
+  showCommands(state); showTarget(state); showFace(state); showHealth(state); showTests(state);
   motorTest.update(state);
 });
 // The SDK delivers each frame message's channels, then its overlays, then its image, so what arrives
@@ -190,12 +204,11 @@ stream.subscribeToChannels(views => {
     frame.target = {cameraId: view.descriptor.camera_id, x: column('x'), y: column('y'), bodyAngle: column('body_angle_deg'), width, height};
   }
   // Each tracking-camera frame moves the gaze ray to its target (or hides it: the head follows nobody).
-  if (views?.cameras?.some(camera => camera.id === tiles.trackingId)) showGaze(frame.target);
+  if (views?.cameras?.some(camera => camera.id === tiles.trackingId)) {
+    gazeTarget = frame.target;
+    scene?.gaze.update(gazeTarget, facePoint);
+  }
 });
-function showGaze(target) {
-  const distance = scene?.gaze.update(target, depth.latest);
-  $('target-face').textContent = distance == null ? '' : `face ${distance.toFixed(2)} m (est.)`;
-}
 stream.subscribeToOverlay(overlay => {
   if (overlay.frameNumber === frame.frameNumber) frame.overlays.push(overlay);
 });
@@ -206,7 +219,7 @@ stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol err
 stream.on('open', () => error(''));
 stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
 stream.connect();
-window.ultraskelly = {scene, tiles, depth, stream, motorTest, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {scene, tiles, depth, series, stream, motorTest, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness and frame rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
@@ -214,8 +227,7 @@ setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
   if (lastSnapshotAt) $('connection').textContent = stale ? '○ No data' : '● Live';
   $('state-rate').textContent = `${snapshotsThisSecond}/s`; snapshotsThisSecond = 0;
-  $('snapshot-age').textContent = lastSnapshotAt ? `last ${ago(age)}` : '—';
-  $('snapshot-age').classList.toggle('stale', stale);
+  $('connection').title = lastSnapshotAt ? `Newest robot_state ${ago(age)} ago` : '';
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
   $('oak-rate').textContent = rateText(drawn.oak, cameras[tiles.trackingId]);
   const depthShown = depth.tick();

@@ -1,7 +1,8 @@
-// The gaze in the 3D scene: the OAK's view cone from the skull's nose hole, and a ray from the OAK through
-// the followed person's target pixel. Where the ray meets the ZED's depth it ends at an estimated face
-// point. Both cameras' poses in the head frame are best guesses until the camera bracket gives them, and
-// the waist angle is not measured, so where the ray points in the room is an estimate.
+// The gaze in the 3D scene: the OAK's view cone from the skull's nose hole, and a ray from the OAK toward
+// the followed person. The face point is the Pi's (robot_state.face, from its face locator: the OAK's
+// target pixel found in the ZED's depth); without one the ray is a dashed direction through the target
+// pixel. Camera poses are nominal until the camera bracket gives them, and the waist angle is not
+// measured, so where the ray points in the room is an estimate.
 import * as THREE from 'three';
 
 // The OAK in the head frame H (metres; +x forward, +y the skull's left, +z up): its lens in the nose hole,
@@ -11,11 +12,7 @@ const OAK_LENS = new THREE.Vector3(0.03, 0, -0.04);
 const OAK_ROTATION = new THREE.Matrix3().set(0, 0, 1, -1, 0, 0, 0, -1, 0);  // Camera axes into H
 const OAK_HFOV_DEG = 69;
 const CONE_DEPTH = 1.5;   // Metres the drawn view cone reaches
-const RAY_LENGTH = 3;     // Metres of ray drawn when no depth gives its end
-const MARCH_STEP = 0.01;  // Metres between depth lookups along the ray
-const NEAREST = 0.3, FURTHEST = 8;  // Metres along the ray that are searched
-const IN_FRONT = 0.03, BEHIND = 0.15;  // The ray meets a surface when within these of its depth
-const ZED_NOMINAL = {rotation: [[0, 0, 1], [-1, 0, 0], [0, -1, 0]], translation_m: [0, 0.0315, 0]};
+const RAY_LENGTH = 3;     // Metres of dashed ray drawn when no face point is known
 
 function intrinsics(width, height) {
   const fx = width / 2 / Math.tan(THREE.MathUtils.degToRad(OAK_HFOV_DEG / 2));
@@ -34,8 +31,8 @@ export function createGazeLayer({group, invalidate}) {
                               new THREE.MeshStandardMaterial({color: 0xffb269, emissive: 0xd76a23, emissiveIntensity: .7}));
   ray.visible = face.visible = false;
   root.add(cone, ray, face);
-  let camera = null, lastKey = null, lastDepth = null, distance = null;
-  const direction = new THREE.Vector3(), end = new THREE.Vector3(), point = new THREE.Vector3();
+  let camera = null, lastKey = null;
+  const end = new THREE.Vector3();
 
   function placeCone(width, height) {
     camera = intrinsics(width, height);
@@ -46,46 +43,29 @@ export function createGazeLayer({group, invalidate}) {
   }
   placeCone(640, 480);
 
-  // Metres along the ray from the OAK lens to the first surface the ZED sees on it, or null. The ray meets
-  // a surface where it crosses that pixel's depth; a point just in front of it counts when the ray grazes.
-  function meetDepth(depth) {
-    const pose = depth.cameraToHead ?? ZED_NOMINAL, R = pose.rotation, t = pose.translation_m, c = depth.camera;
-    let approaching = null;
-    for (let s = NEAREST; s <= FURTHEST; s += MARCH_STEP) {
-      point.copy(direction).multiplyScalar(s).add(OAK_LENS);
-      const q0 = point.x - t[0], q1 = point.y - t[1], q2 = point.z - t[2];  // Into the ZED's frame: R^T (p - t)
-      const x = R[0][0] * q0 + R[1][0] * q1 + R[2][0] * q2, y = R[0][1] * q0 + R[1][1] * q1 + R[2][1] * q2;
-      const z = R[0][2] * q0 + R[1][2] * q1 + R[2][2] * q2;
-      if (z < NEAREST) continue;
-      const u = Math.round((c.fx * x / z + c.cx) / depth.step), v = Math.round((c.fy * y / z + c.cy) / depth.step);
-      if (u < 0 || v < 0 || u >= depth.width || v >= depth.height) continue;
-      const d = depth.mm[v * depth.width + u] / 1000;
-      if (!d || z > d + BEHIND) { approaching = null; continue; }  // Unknown, or hidden behind something nearer
-      if (z >= d) return s;
-      if (z >= d - IN_FRONT) approaching ??= s;
+  // target: {x, y, width, height}, the target pixel in the OAK image, or null (the head follows nobody);
+  // facePoint: [x, y, z] in H from robot_state.face, or null.
+  function update(target, facePoint) {
+    const key = `${target ? `${target.x} ${target.y} ${target.width} ${target.height}` : '-'} ${facePoint ?? '-'}`;
+    if (key === lastKey) return;  // Nothing new to draw
+    lastKey = key;
+    if (facePoint) {
+      end.fromArray(facePoint);
+      ray.material = solid;
+    } else if (target) {
+      if (!camera || camera.width !== target.width || camera.height !== target.height) placeCone(target.width, target.height);
+      end.set((target.x - camera.cx) / camera.fx, (target.y - camera.cy) / camera.fy, 1)
+        .applyMatrix3(OAK_ROTATION).normalize().multiplyScalar(RAY_LENGTH).add(OAK_LENS);
+      ray.material = dashed;
     }
-    return approaching;
-  }
-
-  // target: {x, y, width, height}, the target pixel in the OAK image, or null; depth: the newest decoded
-  // depth (depth.js), or null. Returns the face point's distance from between the eyes, in metres, or null.
-  function update(target, depth) {
-    const key = target ? `${target.x} ${target.y} ${target.width} ${target.height}` : 'none';
-    if (key === lastKey && depth === lastDepth) return distance;  // Nothing new to draw
-    lastKey = key; lastDepth = depth;
-    if (!target) { ray.visible = face.visible = false; invalidate(); return distance = null; }
-    if (!camera || camera.width !== target.width || camera.height !== target.height) placeCone(target.width, target.height);
-    direction.set((target.x - camera.cx) / camera.fx, (target.y - camera.cy) / camera.fy, 1).applyMatrix3(OAK_ROTATION).normalize();
-    const reach = depth?.mm ? meetDepth(depth) : null;
-    end.copy(direction).multiplyScalar(reach ?? RAY_LENGTH).add(OAK_LENS);
-    ray.geometry.setFromPoints([OAK_LENS, end]);
-    ray.material = reach == null ? dashed : solid;
-    if (reach == null) ray.computeLineDistances();
-    ray.visible = true;
-    face.visible = reach != null;
-    face.position.copy(end);
+    ray.visible = Boolean(facePoint || target);
+    face.visible = Boolean(facePoint);
+    if (ray.visible) {
+      ray.geometry.setFromPoints([OAK_LENS, end]);
+      if (!facePoint) ray.computeLineDistances();
+      face.position.copy(end);
+    }
     invalidate();
-    return distance = reach == null ? null : end.length();
   }
 
   return {root, update, setVisible(on) { root.visible = on; invalidate(); }};

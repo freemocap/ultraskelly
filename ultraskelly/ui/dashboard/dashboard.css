@@ -3,7 +3,7 @@ body.dashboard{
   --header-h:44px;
   /* The OAK video (4:3) and two rows of 16:9 tiles fit the window height; 656 px at 1920 wide draws the OAK 1:1. */
   --sensor-w:clamp(300px,min(34.1667vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),900px);
-  --strip-h:clamp(120px,18vh,200px);
+  --strip-h:clamp(140px,22vh,240px);
   grid-template-rows:var(--header-h) minmax(0,1fr);font-size:13px;
 }
 @media (max-height:699px){body.dashboard{--header-h:36px}}
@@ -58,42 +58,43 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .tile.live .empty{display:none}
 .dashboard .tile.stale canvas{opacity:.35}
 .dashboard .target-row{height:24px;display:flex;align-items:center;gap:10px;font:12px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden}
+.dashboard .target-row>*{flex:none}  /* Keep each item whole; the row clips its least important ones at the end */
+.dashboard #target-face{color:var(--orange)}
 .dashboard .badge{font:600 11px system-ui,sans-serif;padding:2px 8px;border-radius:9px;background:#243138;color:var(--muted)}
 .dashboard .badge.tracking{background:#1c3a31;color:var(--accent)}
+.dashboard .face-card{aspect-ratio:16/9;margin:0;padding:6% 7%;background:#0b1318;outline:1px solid #2c3a40;border:0;border-radius:2px;
+  container-type:inline-size;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
+.dashboard .face-head{display:flex;justify-content:space-between;gap:6px;font-size:max(11px,4.6cqw);color:#e4e7df}
+.dashboard #face-alignment{color:var(--muted);font:max(10px,4cqw) ui-monospace,monospace}
+.dashboard .face-distance{font:600 max(16px,12cqw) ui-monospace,monospace;color:var(--orange);line-height:1}
+.dashboard .face-distance.none{color:var(--muted)}
+.dashboard .face-position,.dashboard .face-foot{font:max(10px,4.3cqw) ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard .depth-legend{height:22px;display:flex;align-items:center;gap:6px;font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap}
 .dashboard .depth-legend i{flex:0 1 150px;height:7px;border-radius:4px;background:#243138}
 .dashboard #depth-info{margin-left:auto;font-family:system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis}
 
 /* Readout strip. */
-.dashboard .strip{grid-area:strip;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;min-height:0}
+.dashboard .strip{grid-area:strip;display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1fr);gap:8px;min-height:0}
+.dashboard .series{gap:4px}
+.dashboard .series h2 span{font-weight:400;color:var(--muted);margin-left:3px}
+.dashboard #series{flex:1;min-height:0;width:100%;display:block}
 .dashboard .card{padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-height:0;overflow:hidden}
 .dashboard .card-title{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
 .dashboard .card-title h2{margin:0;font-size:13px;white-space:nowrap}
 .dashboard .card-title span{font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dashboard .motors table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;line-height:1.25}
-.dashboard .motors th,.dashboard .motors td{padding:clamp(1px,calc(.45vh - 1.2px),5px) 0;border-bottom:1px solid var(--line)}
-.dashboard .motors tr:last-child>*{border-bottom:0}
-.dashboard .motors th{text-align:left;font-weight:400;font-size:12px;color:#b9c5c8;width:30%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dashboard .motors td.value{width:22%;text-align:right;font-family:ui-monospace,monospace;color:var(--accent)}
-.dashboard .motors td.meter{padding-left:10px;padding-right:10px}
-.dashboard .motors td.age{width:18%;text-align:right;font:11px ui-monospace,monospace;color:var(--muted)}
-.dashboard .meter i{display:block;position:relative;height:6px;border-radius:3px;background:#243138}
-.dashboard .meter i::before{content:"";position:absolute;left:50%;top:-2px;width:1px;height:10px;background:#4a5d66}
-.dashboard .meter i::after{content:"";position:absolute;top:-2px;height:10px;border-radius:2px;background:var(--accent);left:var(--left,50%);width:var(--width,0);display:var(--shown,none)}
-.dashboard .meter.signed i::after{top:0;height:6px;background:var(--orange)}
 .dashboard .tests-status{margin:0;font:12px ui-monospace,monospace;color:var(--muted);line-height:1.35;overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .dashboard .tests-status.done{color:var(--accent)}.dashboard .tests-status.refused{color:var(--orange)}
 .dashboard .tests-buttons{display:flex;gap:6px;margin-top:auto}
 .dashboard .tests-buttons button{padding:5px 12px}
 .dashboard button.stop,.motor-test-stop{border-color:#d68e82}
-.dashboard #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px;overflow:auto;min-height:0}
+.dashboard #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:3px;overflow-x:hidden;overflow-y:auto;min-height:0;flex:1;align-content:start}
 .dashboard .node{display:flex;justify-content:space-between;gap:6px;padding:3px 7px;border:1px solid var(--line);border-radius:4px;font:11px ui-monospace,monospace;background:#10171b}
 .dashboard .node b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dashboard .node span{text-transform:uppercase;font-size:10px}
 .dashboard .node.running span{color:var(--accent)}.dashboard .node.starting span{color:var(--orange)}.dashboard .node.stopped span{color:var(--muted)}
 .dashboard .node.crashed{border-color:#d68e82}.dashboard .node.crashed span{color:#ff8f7f}
-.dashboard #rates{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);gap:3px 8px;font-size:12px;margin:0;overflow:auto;min-height:0}
+.dashboard #rates{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);gap:2px 8px;font-size:11px;margin:0;flex:none}
 .dashboard #rates dt{color:var(--muted);white-space:nowrap}
 .dashboard #rates dd{margin:0;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard dd.stale,.dashboard span.stale{color:var(--orange)}
@@ -126,7 +127,7 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
   .dashboard .sensors{overflow:visible;order:2}
   .dashboard .strip{display:contents}
   .dashboard .card{overflow:visible}
-  .dashboard .motors{order:3}.dashboard .tests{order:4}.dashboard .drawer{order:5}.dashboard .nodes{order:6}.dashboard .rates{order:7}
+  .dashboard .series{order:3;height:300px}.dashboard .tests{order:4}.dashboard .drawer{order:5}.dashboard .nodes{order:6}
   .dashboard .drawer{width:auto;max-height:none;margin:0;box-shadow:none;align-self:stretch}
   .dashboard .stage-foot .hint{display:none}
   .dashboard .status .pill{display:inline}  /* Real or simulated motors stays visible; the message rate gives way */
