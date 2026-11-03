@@ -48,6 +48,7 @@ from ultraskelly.core.pubsub.bot_topics import (
     TargetLocationTopic,
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
+from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
@@ -220,6 +221,8 @@ class RuntimeServerNode(Node):
     state_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)
     clients: int = Field(default=0, exclude=True)
     state_sequence: int = Field(default=0, exclude=True)
+    depth_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # depth_frame messages
+    depth_sequence: int = Field(default=0, exclude=True)
     state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
 
@@ -350,7 +353,7 @@ class RuntimeServerNode(Node):
         connection = StreamConnection(websocket.send_bytes, websocket.send_str)
         self.clients += 1
         sending = asyncio.create_task(
-            connection.follow(self.state_stream, *(feed.stream for feed in self.feeds.values()))
+            connection.follow(self.state_stream, self.depth_stream, *(feed.stream for feed in self.feeds.values()))
         )
         try:
             async for message in websocket:
@@ -365,6 +368,13 @@ class RuntimeServerNode(Node):
             sending.cancel()
             await asyncio.gather(sending, return_exceptions=True)
         return websocket
+
+    def _encode_depth_frame(self, frame: DepthFrameMessage, sequence: int) -> bytes:
+        """The `depth_frame` message for a depth frame (docs/depth-stream.md). Runs in a worker thread."""
+        return encode_depth_frame(
+            frame, sequence=sequence, color_jpeg=self.encode_jpeg(frame.color, self.params.jpeg_quality),
+            camera_to_head=nominal_camera_to_head(frame.rectification),
+        )
 
     async def _encode(self, feed: CameraFeed) -> None:
         """Encode the newest pending frame message, repeating while newer ones arrive."""
@@ -384,6 +394,11 @@ class RuntimeServerNode(Node):
                     poses=poses, encode_jpeg=self.encode_jpeg, jpeg_quality=self.params.jpeg_quality,
                 )
                 feed.stream.publish(message)
+                if isinstance(camera_frame, DepthFrameMessage):  # Also the depth itself, for 3D views
+                    self.depth_sequence += 1
+                    self.depth_stream.publish(
+                        await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence)
+                    )
         except Exception:
             logger.exception("Frame encoding failed")
         finally:

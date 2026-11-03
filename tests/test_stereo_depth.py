@@ -131,18 +131,23 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
             await bus.publish(DepthFrameTopic, DepthFrameMessage(
                 depth=depth, color=np.zeros((6, 8, 3), np.uint8), rectification=SHARED, frame_number=4, timestamp=1.0,
             ))
-            while True:
+            received = {}
+            while len(received) < 2:
                 message = cbor2.loads((await asyncio.wait_for(socket.receive(), timeout=5)).data)
-                if message["kind"] == "frame":
-                    break
+                if message["kind"] in ("frame", "depth_frame"):
+                    received[message["kind"]] = message
             await socket.close()
         server.stop()
         await pump
         bus.close()
-        return message
+        return received
 
-    frame = asyncio.run(scenario())
+    received = asyncio.run(scenario())
 
+    frame = received["frame"]
     assert [(camera["id"], camera["index"]) for camera in frame["cameras"]] == [("zed_rectified", 2), ("zed_depth", 3)]
     assert struct.unpack_from("<i", frame["image"], 16)[0] == 2  # Two images in the payload
-    assert encoded == [("uint8", (6, 8, 3)), ("uint16", (6, 8))]  # The JPEG encoder colours the depth
+    assert encoded[:2] == [("uint8", (6, 8, 3)), ("uint16", (6, 8))]  # The JPEG encoder colours the depth
+    depth = received["depth_frame"]
+    assert (depth["frame_number"], depth["camera"]["fx"], depth["depth"]["step"]) == (4, 340.0, 2)
+    assert depth["color"]["data"] == b"JPEG" and depth["camera_to_head"]["status"] == "nominal"
