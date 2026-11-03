@@ -8,6 +8,8 @@ Each run gets its own folder under `RunRecorderParams.folder`:
     targets.csv          every target the detector published; empty x and y when nobody was seen
     servo_state.csv      the head controller's published angles and lock flags
     commands.csv         every change in a commanded servo angle or motor throttle
+    imu.csv              with the ZED, every IMU sample: host and IMU times, acceleration (m/s²) and
+                         angular velocity (°/s) along the IMU's own axes, its temperature (°C)
     audio.wav            optional microphone audio
     run.json             launch configuration, timing, and counts of what was written or dropped
 
@@ -37,6 +39,7 @@ from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import ActuatorCommand, CommandRecorder
 from ultraskelly.core.bot.recording.microphone import Microphone, find_microphone
 from ultraskelly.core.pubsub.bot_topics import (
+    ImuTopic,
     PoseDataMessage,
     PoseDataTopic,
     ServoStateTopic,
@@ -46,6 +49,9 @@ from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptio
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
+
+IMU_HEADER = "time,imu_time,ax,ay,az,gx,gy,gz,temperature"
+IMU_FORMAT = ("%.6f", "%.6f", "%.4f", "%.4f", "%.4f", "%.3f", "%.3f", "%.3f", "%.2f")
 
 
 class VideoWriter(Protocol):
@@ -130,6 +136,7 @@ class RunRecorderNode(Node):
     counts: dict[str, int] = Field(default_factory=dict, description="Items written, by kind; written by the writer thread")
     dropped: dict[str, int] = Field(default_factory=dict, description="Items dropped because the disk fell behind")
     frames_missed: int = Field(default=0, description="Camera frame numbers that never reached the recorder")
+    imu_samples_missed: int = Field(default=0, description="IMU samples published that never reached the recorder")
     failure: str | None = Field(default=None, description="Why writing stopped early, if it did")
     pending: SkipValidation[queue.Queue | None] = Field(default=None, exclude=True)
     writer: SkipValidation[threading.Thread | None] = Field(default=None, exclude=True)
@@ -161,6 +168,7 @@ class RunRecorderNode(Node):
             "pose": pubsub.get_subscription(PoseDataTopic),
             "target": pubsub.get_subscription(TargetLocationTopic),
             "servo_state": pubsub.get_subscription(ServoStateTopic),
+            "imu": pubsub.get_subscription(ImuTopic),
         }
         return node
 
@@ -208,8 +216,8 @@ class RunRecorderNode(Node):
             servo = table("servo_state.csv", ("received", "pan", "tilt", "locked_x", "locked_y"))
             commands = table("commands.csv", ("time", "actuator", "value"))
             poses = files.enter_context(open(self.folder / "poses.jsonl", "w"))
-            video = None
-            previous_number = None
+            video = imu = None
+            previous_number = next_imu_sample = None
             while (item := self.pending.get()) is not None:
                 kind, received, message = item
                 if kind == "frame":
@@ -233,6 +241,19 @@ class RunRecorderNode(Node):
                     servo.writerow((received, message.pan_angle, message.tilt_angle, message.is_locked_x, message.is_locked_y))
                 elif kind == "command":
                     commands.writerow((message.at, message.actuator, message.value))
+                elif kind == "imu":
+                    if imu is None:  # Only runs with the ZED's IMU get the file
+                        imu = files.enter_context(open(self.folder / "imu.csv", "w", newline=""))
+                        imu.write(IMU_HEADER + "\n")
+                    if next_imu_sample is not None:
+                        self.imu_samples_missed += max(0, message.first_sample - next_imu_sample)
+                    next_imu_sample = message.first_sample + len(message.timestamps)
+                    temperature = np.nan if message.temperature is None else message.temperature
+                    np.savetxt(imu, np.column_stack([
+                        message.timestamps, message.imu_times, message.acceleration, message.angular_velocity,
+                        np.full(len(message.timestamps), temperature),
+                    ]), fmt=IMU_FORMAT, delimiter=",")
+                    self.counts["imu_sample"] = self.counts.get("imu_sample", 0) + len(message.timestamps)
                 self.counts[kind] = self.counts.get(kind, 0) + 1
 
     def _start(self) -> None:
@@ -266,6 +287,7 @@ class RunRecorderNode(Node):
             "written": self.counts,
             "dropped": self.dropped,
             "frames_missed": self.frames_missed,
+            "imu_samples_missed": self.imu_samples_missed,
             "failure": self.failure,
             "audio_first_sample_monotonic": audio_start,
             "git_commit": git_commit(),

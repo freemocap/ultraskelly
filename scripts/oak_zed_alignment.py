@@ -15,50 +15,65 @@ alignment: the colours should follow the scene's shapes.
 """
 import argparse
 import asyncio
+import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
 
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
-from ultraskelly.core.bot.sensory.oak_zed_alignment import ALIGNMENT_FILE, estimate_alignment
+from ultraskelly.core.bot.sensory.oak_zed_alignment import ALIGNMENT_FILE, estimate_alignment, points_from_depth
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
-from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNode, ZedCameraNodeParams
+from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 SAME_MOMENT = 0.02  # Seconds between an OAK frame and a depth frame taken together
 SETTLE_SECONDS = 2.0
+GIVE_UP_SECONDS = 60.0
+
+
+async def keep_recent(frames, recent: deque) -> None:
+    """Every frame from a subscription, newest last: its queue holds only the latest one."""
+    while True:
+        recent.append(await frames.get())
 
 
 async def capture_views(count: int) -> list:
     """(OAK frame, depth frame) pairs taken at about the same moment."""
     bus = PubSubTopicManager.create()
+    zed = ZedCameraNodeParams()
+    width, height = ZED_MODES[zed.resolution][0]
     nodes = [
         OakCameraNode.create(pubsub=bus, params=OakCameraNodeParams(flip_camera=True)),
-        ZedCameraNode.create(pubsub=bus, params=ZedCameraNodeParams()),
-        StereoDepthNode.create(pubsub=bus, params=StereoDepthNodeParams(), eye_size=(672, 376)),
+        ZedCameraNode.create(pubsub=bus, params=zed),
+        StereoDepthNode.create(pubsub=bus, params=StereoDepthNodeParams(), eye_size=(width // 2, height)),
     ]
-    oak_frames, depth_frames = bus.get_subscription(FrameTopic), bus.get_subscription(DepthFrameTopic)
+    recent, views = deque(maxlen=30), []  # A second of OAK frames
+    depth_frames = bus.get_subscription(DepthFrameTopic)
     tasks = [asyncio.create_task(node.run()) for node in nodes]
-    recent, views = [], []
+    collector = asyncio.create_task(keep_recent(bus.get_subscription(FrameTopic), recent))
     try:
         await asyncio.sleep(SETTLE_SECONDS)
+        deadline = time.monotonic() + GIVE_UP_SECONDS
         while len(views) < count:
-            while not oak_frames.empty():
-                recent = (recent + [oak_frames.get_nowait()])[-10:]
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Only {len(views)} of {count} depth frames had an OAK frame within "
+                                   f"{SAME_MOMENT * 1000:.0f} ms in {GIVE_UP_SECONDS:.0f} s")
             depth = await asyncio.wait_for(depth_frames.get(), timeout=10)
-            while not oak_frames.empty():
-                recent = (recent + [oak_frames.get_nowait()])[-10:]
-            if not recent or depth.timestamp is None:
+            await asyncio.sleep(0.1)  # Let the OAK frames taken just after it arrive too
+            timed = [frame for frame in recent if frame.timestamp is not None]
+            if not timed or depth.timestamp is None:
                 continue
-            oak = min(recent, key=lambda frame: abs(frame.timestamp - depth.timestamp))
+            oak = min(timed, key=lambda frame: abs(frame.timestamp - depth.timestamp))
             if abs(oak.timestamp - depth.timestamp) <= SAME_MOMENT:
                 views.append((oak, depth))
-            await asyncio.sleep(0.3)  # Spread the views over a little time
+                await asyncio.sleep(0.3)  # Spread the views over a little time
     finally:
+        collector.cancel()
         for node in nodes:
             node.stop()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(collector, *tasks, return_exceptions=True)
         bus.close()
     return views
 
@@ -69,11 +84,9 @@ def check_image(oak_image: np.ndarray, depth, alignment) -> np.ndarray:
 
     from ultraskelly.ui.runtime_server import depth_to_bgr
 
-    shared = depth.rectification
     rows, columns = np.nonzero(depth.depth[::2, ::2])
     rows, columns = rows * 2, columns * 2
-    z = depth.depth[rows, columns] / 1000.0
-    points = np.stack([(columns - shared.cx) * z / shared.focal_length, (rows - shared.cy) * z / shared.focal_length, z], 1)
+    points, _ = points_from_depth(np.stack([columns, rows], 1).astype(float), depth.depth, depth.rectification)
     in_oak = (points - alignment.translation) @ alignment.rotation  # rotation.T @ (point - translation)
     pixels = (in_oak @ alignment.oak_camera_matrix.T)[:, :2] / in_oak[:, 2:]
     colours = depth_to_bgr(depth.depth[rows, columns].reshape(1, -1)).reshape(-1, 3)

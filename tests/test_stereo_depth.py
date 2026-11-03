@@ -108,7 +108,8 @@ def test_the_node_turns_each_pair_into_depth_aligned_with_its_rectified_left_ima
     assert rectifier.calls == 2  # Both eyes of the raw pair; the rectified pair is used as it is
 
 
-def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
+@pytest.mark.parametrize("previews", [False, True])
+def test_a_depth_frame_streams_as_depth_and_only_on_request_as_images(previews):
     encoded = []
 
     def fake_encode(image, quality):
@@ -118,7 +119,7 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
     async def scenario():
         bus = PubSubTopicManager.create()
         server = RuntimeServerNode.create(
-            pubsub=bus, params=RuntimeServerParams(state_hz=50), cameras={}, recorder=None,
+            pubsub=bus, params=RuntimeServerParams(state_hz=50, depth_previews=previews), cameras={}, recorder=None,
             motors_simulated=True, node_status=lambda: [], encode_jpeg=fake_encode,
             stereo_cameras={"zed": StereoFrameTopic}, depth_cameras={"zed": DepthFrameTopic},
         )
@@ -132,10 +133,11 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
                 depth=depth, color=np.zeros((6, 8, 3), np.uint8), rectification=SHARED, frame_number=4, timestamp=1.0,
             ))
             received = {}
-            while len(received) < 2:
+            while "depth_frame" not in received or (previews and "frame" not in received):
                 message = cbor2.loads((await asyncio.wait_for(socket.receive(), timeout=5)).data)
                 if message["kind"] in ("frame", "depth_frame"):
                     received[message["kind"]] = message
+            received["cameras"] = list(server.robot_state()["cameras"])
             await socket.close()
         server.stop()
         await pump
@@ -144,10 +146,14 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
 
     received = asyncio.run(scenario())
 
-    frame = received["frame"]
-    assert [(camera["id"], camera["index"]) for camera in frame["cameras"]] == [("zed_rectified", 2), ("zed_depth", 3)]
-    assert struct.unpack_from("<i", frame["image"], 16)[0] == 2  # Two images in the payload
-    assert encoded[:2] == [("uint8", (6, 8, 3)), ("uint16", (6, 8))]  # The JPEG encoder colours the depth
+    if previews:
+        frame = received["frame"]
+        assert [(camera["id"], camera["index"]) for camera in frame["cameras"]] == [("zed_rectified", 2), ("zed_depth", 3)]
+        assert struct.unpack_from("<i", frame["image"], 16)[0] == 2  # Two images in the payload
+        assert encoded[:2] == [("uint8", (6, 8, 3)), ("uint16", (6, 8))]  # The JPEG encoder colours the depth
+    else:  # depth_frame carries both, so only its colour image is encoded
+        assert "frame" not in received and encoded == [("uint8", (6, 8, 3))]
+    assert received["cameras"][-2:] == (["zed_rectified", "zed_depth"] if previews else ["zed_right", "zed_rectified"])
     depth = received["depth_frame"]
     assert (depth["frame_number"], depth["camera"]["fx"], depth["depth"]["step"]) == (4, 340.0, 1)
     assert depth["color"]["data"] == b"JPEG" and depth["camera_to_head"]["status"] == "nominal"
