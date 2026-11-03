@@ -1,5 +1,6 @@
-"""What a viewer shows (docs/stream.md, "What a viewer draws"): the server encodes only the
-feeds someone shows, sends each viewer only its own views, and robot_state always."""
+"""What a viewer draws (docs/stream.md, "What a viewer draws"): from each viewer's display
+feedback the server encodes only the feeds someone draws, sends each viewer only what it
+draws and the kinds it wants, and robot_state always."""
 import asyncio
 import json
 import struct
@@ -16,11 +17,19 @@ from ultraskelly.core.pubsub.bot_topics import (
     DepthFrameTopic,
     FrameMessage,
     FrameTopic,
+    ImuMessage,
+    ImuTopic,
     StereoFrameMessage,
     StereoFrameTopic,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-from ultraskelly.ui.runtime_server import JpegCache, RuntimeServerNode, RuntimeServerParams, requested_views
+from ultraskelly.ui.runtime_server import (
+    Display,
+    JpegCache,
+    RuntimeServerNode,
+    RuntimeServerParams,
+    display_feedback,
+)
 
 SHARED = StereoRectification(width=8, height=6, focal_length=340.0, cx=4.0, cy=3.0, baseline=0.063,
                              left_rotation=((1, 0, 0), (0, 1, 0), (0, 0, 1)))
@@ -52,13 +61,24 @@ def depth(value):
                              rectification=SHARED)
 
 
+def imu_batch(first_sample, count=4):
+    times = 200.0 + 0.00126 * np.arange(first_sample, first_sample + count)
+    return ImuMessage(timestamps=times, imu_times=times - 50.0, acceleration=np.zeros((count, 3), np.float32),
+                      angular_velocity=np.ones((count, 3), np.float32), first_sample=first_sample, temperature=52.5)
+
+
 def make_server(bus, encoder, *, previews=False, **options):
     return RuntimeServerNode.create(
         pubsub=bus, params=RuntimeServerParams(state_hz=50, depth_previews=previews), cameras={"oak": FrameTopic},
-        recorder=None,
-        motors_simulated=True, encode_jpeg=encoder, stereo_cameras={"zed": StereoFrameTopic},
+        recorder=None, motors_simulated=True, encode_jpeg=encoder, stereo_cameras={"zed": StereoFrameTopic},
         depth_cameras={"zed": DepthFrameTopic}, **{"node_status": lambda: [], **options},
     )
+
+
+def feedback(cameras, kinds=(), size=(640, 480)):
+    """Display feedback as the dashboard sends it: each camera drawn at `size`, and `kinds`."""
+    sizes = {camera: {"width": size[0], "height": size[1]} for camera in cameras}
+    return {"frameNumber": 7, "displayImageSizes": sizes, "kinds": list(kinds)}
 
 
 class Inbox:
@@ -83,10 +103,11 @@ class Inbox:
         return [tuple(camera["id"] for camera in message["cameras"])
                 for message in self.messages if message["kind"] == "frame"]
 
-    async def show(self, views):
-        """Send a views message and wait until the server has applied it."""
-        await self.socket.send_str(json.dumps({"kind": "views", "views": views}))
-        await until(lambda: self.viewer.views == frozenset(views))
+    async def show(self, cameras, kinds=()):
+        """Send display feedback and wait until the server has applied it."""
+        await self.socket.send_str(json.dumps(feedback(cameras, kinds)))
+        await until(lambda: self.viewer.display is not None and set(self.viewer.display.sizes) == set(cameras)
+                    and self.viewer.display.kinds == frozenset(kinds))
 
     async def close(self):
         await self.socket.close()
@@ -99,14 +120,14 @@ async def until(condition, timeout=5.0):
             await asyncio.sleep(0.005)
 
 
-async def connect(client, server, views=None):
-    """A new viewer; with `views`, once the server has applied them."""
+async def connect(client, server, cameras=None, kinds=()):
+    """A new viewer; with `cameras`, once the server has applied its feedback."""
     count = len(server.viewers) + 1
     socket = await client.ws_connect("/stream")
     await until(lambda: len(server.viewers) == count)
     inbox = Inbox(socket, server.viewers[-1])
-    if views is not None:
-        await inbox.show(views)
+    if cameras is not None:
+        await inbox.show(cameras, kinds)
     return inbox
 
 
@@ -127,7 +148,7 @@ def run(scenario, **options):
     return asyncio.run(hosted())
 
 
-def test_each_viewer_gets_only_the_views_it_shows_and_always_the_robot_state():
+def test_each_viewer_gets_only_the_cameras_it_draws_and_always_the_robot_state():
     async def scenario(bus, server, client, encoder):
         oak_viewer = await connect(client, server, ["oak"])
         zed_viewer = await connect(client, server, ["zed_right", "no_such_camera"])  # One eye sends the pair
@@ -146,39 +167,40 @@ def test_each_viewer_gets_only_the_views_it_shows_and_always_the_robot_state():
     assert encoded == [10, 20, 21]  # Each image once
 
 
-def test_a_viewer_that_shows_nothing_gets_robot_state_and_nothing_is_encoded():
+def test_a_hidden_page_gets_robot_state_and_nothing_is_encoded():
     async def scenario(bus, server, client, encoder):
-        hidden = await connect(client, server, [])
+        hidden = await connect(client, server, [])  # What a hidden page sends: no cameras, no kinds
         await bus.publish(FrameTopic, oak(10))
         await bus.publish(StereoFrameTopic, zed(20))
         await bus.publish(DepthFrameTopic, depth(30))
-        await until(lambda: all(feed.frames_seen == 1 for feed in server.feeds.values()))
+        await bus.publish(ImuTopic, imu_batch(0))
+        await until(lambda: all(feed.frames_seen == 1 for feed in server.feeds.values()) and "imu" in server.latest)
         await until(lambda: hidden.kinds().count("robot_state") >= 3)
         await asyncio.sleep(0.05)
         await hidden.close()
-        return hidden.kinds(), encoder.images
+        return hidden.kinds(), encoder.images, server.imu_sequence
 
-    kinds, encoded = run(scenario)
+    kinds, encoded, imu_batches = run(scenario)
 
-    assert set(kinds) == {"robot_state"} and encoded == []
+    assert set(kinds) == {"robot_state"} and encoded == [] and imu_batches == 0
 
 
-def test_depth_shown_in_3d_sends_no_previews_and_encodes_only_the_colour_image():
+def test_depth_shown_in_3d_encodes_only_the_colour_image():
     async def scenario(bus, server, client, encoder):
-        viewer = await connect(client, server, ["depth_frame"])
+        viewer = await connect(client, server, [], ["depth_frame"])
         await bus.publish(DepthFrameTopic, depth(30))
         await until(lambda: "depth_frame" in viewer.kinds())
         await asyncio.sleep(0.05)
         await viewer.close()
         return viewer.frames(), encoder.images
 
-    frames, encoded = run(scenario)
+    frames, encoded = run(scenario, previews=True)
 
     assert frames == []  # Neither the rectified image nor the depth drawn in colour
     assert encoded == [30]  # The colour image the depth_frame carries; the depth is never coloured
 
 
-def test_a_depth_preview_alone_sends_no_depth_frame():
+def test_a_drawn_depth_preview_sends_no_depth_frame():
     async def scenario(bus, server, client, encoder):
         viewer = await connect(client, server, ["zed_depth"])
         await bus.publish(DepthFrameTopic, depth(30))
@@ -192,14 +214,26 @@ def test_a_depth_preview_alone_sends_no_depth_frame():
     assert "depth_frame" not in kinds and encoded == [30, 1500]
 
 
-def test_a_view_asked_for_later_gets_the_newest_frame_without_waiting_for_another():
+def test_without_depth_previews_a_drawn_preview_is_never_encoded():
+    async def scenario(bus, server, client, encoder):
+        viewer = await connect(client, server, ["zed_rectified", "zed_depth"])
+        await bus.publish(DepthFrameTopic, depth(30))
+        await until(lambda: server.feeds["zed_depth"].frames_seen == 1)
+        await asyncio.sleep(0.05)
+        await viewer.close()
+        return viewer.frames(), encoder.images
+
+    assert run(scenario) == ([], [])
+
+
+def test_a_camera_asked_for_later_gets_its_newest_frame_without_waiting_for_another():
     async def scenario(bus, server, client, encoder):
         viewer = await connect(client, server, [])
-        await bus.publish(DepthFrameTopic, depth(30))  # Depth comes at 5 Hz or less: worth not waiting for
+        await bus.publish(DepthFrameTopic, depth(30))  # Depth comes at 10 Hz or less: worth not waiting for
         await until(lambda: server.feeds["zed_depth"].frames_seen == 1)
         await asyncio.sleep(0.02)
         unshown = list(encoder.images)
-        await viewer.show(["depth_frame"])
+        await viewer.show([], ["depth_frame"])
         await until(lambda: "depth_frame" in viewer.kinds())
         await viewer.close()
         return unshown, encoder.images
@@ -209,24 +243,49 @@ def test_a_view_asked_for_later_gets_the_newest_frame_without_waiting_for_anothe
     assert unshown == [] and encoded == [30]
 
 
-def test_only_a_views_message_changes_what_a_viewer_gets():
-    assert requested_views('{"kind": "views", "views": ["oak", "depth_frame", 3]}') == {"oak", "depth_frame"}
-    assert requested_views('{"kind": "views", "views": [], "displayImageSizes": {}}') == frozenset()
-    for text in ('{"frameNumber": 3, "displayImageSizes": {"oak": {"width": 640, "height": 480}}, "kinds": []}',
-                 '{"kind": "views", "views": "oak"}', '{"kind": "other", "views": ["oak"]}', '["oak"]', "not json"):
-        assert requested_views(text) is None
+def test_imu_batches_go_only_to_viewers_that_want_the_kind():
+    async def scenario(bus, server, client, encoder):
+        plotting = await connect(client, server, [], ["imu"])
+        drawing = await connect(client, server, ["oak"])
+        await bus.publish(ImuTopic, imu_batch(0))
+        await until(lambda: "imu" in plotting.kinds())
+        await asyncio.sleep(0.05)
+        await plotting.close()
+        await drawing.close()
+        return plotting.kinds(), drawing.kinds()
 
+    plotted, drawn = run(scenario)
+
+    assert plotted.count("imu") == 1 and "imu" not in drawn
+
+
+def test_display_feedback_is_read_in_freemocaps_shape_with_kinds():
+    shown = display_feedback(json.dumps({
+        "frameNumber": 3, "displayImageSizes": {"oak": {"width": 640, "height": 480}, "zed_left": {"width": "wide"},
+                                                "zed_right": {"width": 316.6, "height": 178.2}},
+        "kinds": ["depth_frame", 3],
+    }))
+    assert shown == Display(sizes={"oak": (640, 480), "zed_left": None, "zed_right": (317, 178)},
+                            kinds=frozenset({"depth_frame"}))
+    assert display_feedback('{"displayImageSizes": {}, "kinds": []}') == Display(sizes={}, kinds=frozenset())
+    assert display_feedback('{"displayImageSizes": {"oak": {"width": 1, "height": 1}}}').kinds == frozenset()
+    for text in ('{"kind": "views", "views": ["oak"]}', '{"frameNumber": 3}', '{"displayImageSizes": ["oak"]}',
+                 '["oak"]', "not json"):
+        assert display_feedback(text) is None
+
+
+def test_other_text_changes_nothing():
     async def scenario(bus, server, client, encoder):
         viewer = await connect(client, server)
-        await viewer.socket.send_str('{"frameNumber": 3, "displayImageSizes": {}, "kinds": []}')
+        await viewer.socket.send_str('{"kind": "views", "views": []}')  # Not display feedback
         await viewer.socket.send_str("ping")  # Answered once the message before it was read
         await until(lambda: "pong" in viewer.texts)
         await bus.publish(FrameTopic, oak(10))
         await until(lambda: ("oak",) in viewer.frames())
         await viewer.close()
-        return viewer.viewer.views
+        return viewer.viewer.display
 
-    assert run(scenario) is None  # Still every view
+    assert run(scenario) is None  # Still everything
 
 
 def test_robot_state_is_published_only_while_someone_watches():

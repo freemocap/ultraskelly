@@ -6,14 +6,15 @@ very image (a stereo camera's two images travel together in one message);
 `robot_state` messages carry the bot's snapshot. The browser decodes them
 with @freemocap/client and draws the poses and guides itself. The stream is read-only
 and newest-wins: a slow browser receives fewer, newer messages and never blocks the
-bot's event loop. A viewer may say which views it shows; it then receives only those,
-and a feed nobody shows is not encoded (docs/stream.md). Motor values are the commands
-sent, not measured positions.
+bot's event loop. A viewer may say what it draws (display feedback); it then receives
+only that, and a feed nobody draws is not encoded (docs/stream.md). Motor values are the
+commands sent, not measured positions.
 Dashboard motor tests are separate commands with their own replies; see motor_test_routes.
 """
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -220,29 +221,54 @@ def person_trackers(camera: str, image_size: tuple[int, int], poses: PoseDataMes
     return trackers
 
 
-DEPTH_VIEWS = ("depth_frame",)  # The view name of depth_frame messages
+STATE_KIND, DEPTH_KIND, IMU_KIND = "robot_state", "depth_frame", "imu"
 
 
-def requested_views(text: str) -> frozenset[str] | None:
-    """The views a viewer's `views` message asks for (docs/stream.md, "What a viewer draws");
+@dataclass(frozen=True)
+class Display:
+    """What a viewer draws, from its display feedback: each camera ID with the size it draws
+    it at (None when it gave none usable), and the application kinds it wants."""
+
+    sizes: dict[str, tuple[int, int] | None]
+    kinds: frozenset[str]
+
+
+def display_feedback(text: str) -> Display | None:
+    """What a viewer's display feedback says it draws (docs/stream.md, "What a viewer draws");
     None for any other text, which changes nothing."""
     try:
         message = json.loads(text)
     except ValueError:
         return None
-    views = message.get("views") if isinstance(message, dict) and message.get("kind") == "views" else None
-    return frozenset(view for view in views if isinstance(view, str)) if isinstance(views, list) else None
+    if not isinstance(message, dict) or not isinstance(message.get("displayImageSizes"), dict):
+        return None
+
+    def size(drawn: object) -> tuple[int, int] | None:
+        if not isinstance(drawn, dict):
+            return None
+        width, height = drawn.get("width"), drawn.get("height")
+        usable = all(isinstance(side, (int, float)) and math.isfinite(side) and side >= 1 for side in (width, height))
+        return (round(width), round(height)) if usable else None
+
+    kinds = message.get("kinds")
+    return Display(
+        sizes={camera: size(drawn) for camera, drawn in message["displayImageSizes"].items()},
+        kinds=frozenset(kind for kind in kinds if isinstance(kind, str)) if isinstance(kinds, list) else frozenset(),
+    )
 
 
 @dataclass(eq=False)
 class Viewer:
-    """One /stream connection and the views it shows: None until it says, which is every view."""
+    """One /stream connection and what it draws: None until it says, which is everything."""
 
     connection: StreamConnection
-    views: frozenset[str] | None = None
+    display: Display | None = None
 
-    def wants(self, views: tuple[str, ...]) -> bool:
-        return self.views is None or not self.views.isdisjoint(views)
+    def wants(self, cameras: tuple[str, ...] = (), kind: str | None = None) -> bool:
+        """Whether the viewer draws one of `cameras` or wants `kind` messages; robot_state always."""
+        if self.display is None or kind == STATE_KIND or kind in self.display.kinds:
+            return True
+        return any(camera in self.display.sizes for camera in cameras)
 
 
 class JpegCache:
@@ -476,17 +502,19 @@ class RuntimeServerNode(Node):
         viewer = Viewer(StreamConnection(websocket.send_bytes, websocket.send_str))
         self.viewers.append(viewer)
         self.watched.set()
-        streams = [(self.state_stream, None), (self.imu_stream, None), (self.depth_stream, DEPTH_VIEWS),
-                   *((feed.stream, feed.views) for feed in self.feeds.values())]
-        sending = [asyncio.create_task(self._send(viewer, stream, views)) for stream, views in streams]
+        streams = [
+            (self.state_stream, (), STATE_KIND), (self.imu_stream, (), IMU_KIND), (self.depth_stream, (), DEPTH_KIND),
+            *((feed.stream, feed.views, None) for feed in self.feeds.values()),
+        ]
+        sending = [asyncio.create_task(self._send(viewer, stream, cameras, kind)) for stream, cameras, kind in streams]
         self._kick_all()
         try:
             async for message in websocket:
                 if message.type == WSMsgType.TEXT:
                     text = await viewer.connection.receive_text(message.data)  # Answers the client's ping
-                    if text is not None and (views := requested_views(text)) is not None:
-                        viewer.views = views
-                        self._kick_all()  # A view just asked for need not wait for its camera's next frame
+                    if text is not None and (display := display_feedback(text)) is not None:
+                        viewer.display = display
+                        self._kick_all()  # A camera just asked for need not wait for its next frame
                 elif message.type == WSMsgType.ERROR:
                     break
         except ConnectionResetError:
@@ -501,24 +529,26 @@ class RuntimeServerNode(Node):
         return websocket
 
     @staticmethod
-    async def _send(viewer: Viewer, stream: Latest, views: tuple[str, ...] | None) -> None:
-        """Send the stream's newest message, now and whenever it changes, while the viewer shows
-        one of `views` (None: always). New views apply from the next message, so no send is cut short."""
+    async def _send(viewer: Viewer, stream: Latest, cameras: tuple[str, ...], kind: str | None) -> None:
+        """Send the stream's newest message, now and whenever it changes, while the viewer draws one
+        of its `cameras` or wants its `kind`. New feedback applies from the next message, so no send
+        is cut short."""
         version = 0
         while True:
             version, message = await stream.after(version)
-            if views is None or viewer.wants(views):
+            if viewer.wants(cameras, kind):
                 await viewer.connection.send(message)
 
-    def _shown(self, views: tuple[str, ...]) -> bool:
-        """Whether any viewer shows one of `views`."""
-        return any(viewer.wants(views) for viewer in self.viewers)
+    def _shown(self, cameras: tuple[str, ...] = (), kind: str | None = None) -> bool:
+        """Whether any viewer draws one of `cameras` or wants `kind` messages."""
+        return any(viewer.wants(cameras, kind) for viewer in self.viewers)
 
     def _wanted(self, feed: CameraFeed) -> tuple[bool, bool]:
         """Whether any viewer shows the feed's pending frame as a frame message, and as a depth_frame.
         A depth frame travels as a frame message only with depth_previews."""
         depth = isinstance(feed.pending[0], DepthFrameMessage)
-        return (self.params.depth_previews or not depth) and self._shown(feed.views), depth and self._shown(DEPTH_VIEWS)
+        frames = (self.params.depth_previews or not depth) and self._shown(feed.views)
+        return frames, depth and self._shown(kind=DEPTH_KIND)
 
     def _kick(self, feed: CameraFeed) -> None:
         """Start encoding the feed's pending frame, unless that is under way or nobody shows it."""
@@ -537,7 +567,7 @@ class RuntimeServerNode(Node):
         )
 
     async def _encode(self, feed: CameraFeed) -> None:
-        """Encode the newest pending frame for the views someone shows, repeating while newer ones arrive."""
+        """Encode the newest pending frame as each viewer draws it, repeating while newer ones arrive."""
         try:
             while feed.pending is not None and any(wanted := self._wanted(feed)):
                 frames_shown, depth_shown = wanted
@@ -578,7 +608,7 @@ class RuntimeServerNode(Node):
             if previous is not None and now > previous.at:
                 rate = self.rates.get(name, 0.0)
                 self.rates[name] = rate + 0.1 * (1 / (now - previous.at) - rate)
-            if name == "imu" and self.viewers:  # Every batch, for time series
+            if name == "imu" and self._shown(kind=IMU_KIND):  # Every batch, for time series
                 self.imu_sequence += 1
                 self.imu_stream.publish(encode_imu_batch(message, sequence=self.imu_sequence))
             if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
@@ -609,7 +639,7 @@ class RuntimeServerNode(Node):
             now = time.monotonic()
             self.state_sequence += 1
             self.state_stream.publish(
-                encode_message("robot_state", self.robot_state(), timestamp=now, sequence=self.state_sequence)
+                encode_message(STATE_KIND, self.robot_state(), timestamp=now, sequence=self.state_sequence)
             )
             await asyncio.sleep(1 / self.params.state_hz)
 
