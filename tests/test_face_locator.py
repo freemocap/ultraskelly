@@ -109,6 +109,11 @@ def test_the_node_places_the_face_in_the_head_frame_from_recent_depth_only():
     face = node.locate(pose)
     stale = node.locate(PoseDataMessage(frame=frame.model_copy(update={"timestamp": 11.0}), target=pose.target))
     nobody = node.locate(PoseDataMessage(frame=frame, target=TargetLocationMessage()))
+    untimed = node.locate(PoseDataMessage(frame=frame.model_copy(update={"timestamp": None}), target=pose.target))
+    no_frame = node.locate(PoseDataMessage(target=pose.target))  # A detector that doesn't say which image
+    other_size = node.locate(PoseDataMessage(
+        frame=frame.model_copy(update={"frame": np.zeros((720, 1280, 3), np.uint8)}), target=pose.target,
+    ))
     bus.close()
 
     assert face.position_camera[2] == pytest.approx(1.2, abs=0.01)
@@ -119,6 +124,8 @@ def test_the_node_places_the_face_in_the_head_frame_from_recent_depth_only():
     assert face.distance == pytest.approx(np.linalg.norm(face.position_head))
     assert (face.pixel, face.pose_timestamp, face.depth_timestamp, face.alignment) == ((320, 240), 10.05, 10.0, "nominal")
     assert stale.distance is None and nobody.distance is None
+    assert untimed.distance is None and no_frame.distance is None and other_size.distance is None
+    assert node.size_warned
 
 
 def test_robot_state_reports_the_newest_face():

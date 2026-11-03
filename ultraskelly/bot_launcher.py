@@ -35,6 +35,7 @@ from ultraskelly.core.bot.sensory.pose_detection_node import (
 from ultraskelly.core.bot.sensory.face_locator_node import FaceLocatorNode, FaceLocatorParams
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
+from ultraskelly.core.bot.sensory.zed_imu_node import ZedImuNode, ZedImuNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import (
     RuntimeServerNode, RuntimeServerParams, TrackingOverlay, encode_jpeg_with_opencv,
@@ -97,6 +98,10 @@ class LaunchConfig(NodeParams):
     stereo_depth: StereoDepthNodeParams | None = Field(
         default=None,
         description="With zed_camera, also compute depth from its pair; None computes none",
+    )
+    zed_imu: ZedImuNodeParams | None = Field(
+        default=None,
+        description="With zed_camera, also stream its IMU for display and recording (never control); None reads none",
     )
     face_locator: FaceLocatorParams = Field(
         default_factory=FaceLocatorParams,
@@ -247,6 +252,11 @@ class BotLauncher(BaseModel):
         if zed is None:
             return {}
         self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=zed))
+        if self.config.zed_imu is not None:
+            try:
+                self.nodes.append(ZedImuNode.create(pubsub=self.pubsub, params=self.config.zed_imu))
+            except OSError as error:  # Display and recording only: the robot runs on without it
+                logger.error(f"Running without the ZED's IMU: {error}")
         feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
         if self.config.stereo_depth is not None:
             width, height = ZED_MODES[zed.resolution][0]
@@ -254,8 +264,9 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
             ))
             feeds["depth_cameras"] = {"zed": DepthFrameTopic}
-            if self.config.tracking and self.config.detector_type == DetectorType.HAILO_POSE:
-                # The Hailo detector reports the frame each target came from, so its time can be matched.
+            if self.config.tracking:
+                # It uses only pose results that carry the OAK frame they came from (its size and time),
+                # so any detector of OAK images feeds it and the others are ignored.
                 self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
         return feeds
 

@@ -45,6 +45,7 @@ from ultraskelly.core.pubsub.bot_topics import (
     FaceLocationMessage,
     FaceLocationTopic,
     FrameMessage,
+    ImuTopic,
     PoseDataMessage,
     PoseDataTopic,
     ServoStateMessage,
@@ -55,6 +56,7 @@ from ultraskelly.core.pubsub.bot_topics import (
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
 from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
+from ultraskelly.ui.imu_stream import encode_imu_batch
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
@@ -98,6 +100,11 @@ class RuntimeServerParams(NodeParams):
     port: int = Field(default=8080, ge=1, le=65535)
     state_hz: float = Field(default=20.0, gt=0.0, le=60.0, description="robot_state messages per second")
     jpeg_quality: int = Field(default=80, ge=10, le=100)
+    depth_previews: bool = Field(
+        default=False,
+        description="Also send each depth frame as frame-message images, cameras <name>_rectified and <name>_depth "
+                    "(depth drawn in colour); depth_frame carries both, so they are off by default",
+    )
 
 
 DEPTH_NEAR, DEPTH_FAR = 300, 5000  # Millimetres drawn red and blue
@@ -319,6 +326,8 @@ class RuntimeServerNode(Node):
     state_sequence: int = Field(default=0, exclude=True)
     depth_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # depth_frame messages
     depth_sequence: int = Field(default=0, exclude=True)
+    imu_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # imu messages
+    imu_sequence: int = Field(default=0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
 
     @property
@@ -349,7 +358,8 @@ class RuntimeServerNode(Node):
         `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
         the dashboard can run motor tests through /api/motor-test. A stereo camera's two
         images travel together in one frame message, as cameras `<name>_left` and `<name>_right`;
-        a depth frame's as `<name>_rectified` and `<name>_depth`, the depth drawn in colour.
+        a depth frame's as `<name>_rectified` and, with `depth_previews`, `<name>_depth`, the
+        depth drawn in colour.
         """
         node = cls(
             pubsub=pubsub,
@@ -364,8 +374,9 @@ class RuntimeServerNode(Node):
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
         feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
-        feeds += [(f"{name}_depth", topic, (f"{name}_rectified", f"{name}_depth"))
-                  for name, topic in (depth_cameras or {}).items()]
+        for name, topic in (depth_cameras or {}).items():
+            views = (f"{name}_rectified", f"{name}_depth") if params.depth_previews else (f"{name}_rectified",)
+            feeds.append((f"{name}_depth", topic, views))
         index = 0
         for name, topic, views in feeds:
             node.feeds[name] = CameraFeed(
@@ -378,6 +389,7 @@ class RuntimeServerNode(Node):
             "target": pubsub.get_subscription(TargetLocationTopic),
             "pose": pubsub.get_subscription(PoseDataTopic),
             "face": pubsub.get_subscription(FaceLocationTopic),
+            "imu": pubsub.get_subscription(ImuTopic),
         }
         return node
 
@@ -464,7 +476,7 @@ class RuntimeServerNode(Node):
         viewer = Viewer(StreamConnection(websocket.send_bytes, websocket.send_str))
         self.viewers.append(viewer)
         self.watched.set()
-        streams = [(self.state_stream, None), (self.depth_stream, DEPTH_VIEWS),
+        streams = [(self.state_stream, None), (self.imu_stream, None), (self.depth_stream, DEPTH_VIEWS),
                    *((feed.stream, feed.views) for feed in self.feeds.values())]
         sending = [asyncio.create_task(self._send(viewer, stream, views)) for stream, views in streams]
         self._kick_all()
@@ -502,13 +514,15 @@ class RuntimeServerNode(Node):
         """Whether any viewer shows one of `views`."""
         return any(viewer.wants(views) for viewer in self.viewers)
 
-    def _wanted(self, feed: CameraFeed) -> bool:
-        """Whether any viewer shows the feed's pending frame: one of its views, or a depth frame's depth_frame."""
-        return self._shown(feed.views) or (isinstance(feed.pending[0], DepthFrameMessage) and self._shown(DEPTH_VIEWS))
+    def _wanted(self, feed: CameraFeed) -> tuple[bool, bool]:
+        """Whether any viewer shows the feed's pending frame as a frame message, and as a depth_frame.
+        A depth frame travels as a frame message only with depth_previews."""
+        depth = isinstance(feed.pending[0], DepthFrameMessage)
+        return (self.params.depth_previews or not depth) and self._shown(feed.views), depth and self._shown(DEPTH_VIEWS)
 
     def _kick(self, feed: CameraFeed) -> None:
         """Start encoding the feed's pending frame, unless that is under way or nobody shows it."""
-        if feed.pending is not None and feed.encoder is None and self._wanted(feed):
+        if feed.pending is not None and feed.encoder is None and any(self._wanted(feed)):
             feed.encoder = asyncio.create_task(self._encode(feed))
 
     def _kick_all(self) -> None:
@@ -525,12 +539,13 @@ class RuntimeServerNode(Node):
     async def _encode(self, feed: CameraFeed) -> None:
         """Encode the newest pending frame for the views someone shows, repeating while newer ones arrive."""
         try:
-            while feed.pending is not None and self._wanted(feed):
+            while feed.pending is not None and any(wanted := self._wanted(feed)):
+                frames_shown, depth_shown = wanted
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
                 # Each image once: a depth frame's colour for both its messages, a camera frame's for the recorder too
                 jpegs = JpegCache(self.encode_jpeg, camera_frame)
-                if self._shown(feed.views):
+                if frames_shown:
                     cameras = [
                         (camera, feed.index + offset, image)
                         for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
@@ -543,7 +558,7 @@ class RuntimeServerNode(Node):
                         poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
                     )
                     feed.stream.publish(message)
-                if isinstance(camera_frame, DepthFrameMessage) and self._shown(DEPTH_VIEWS):  # The depth, for 3D views
+                if depth_shown:  # The depth itself, for depth tiles and 3D views
                     self.depth_sequence += 1
                     self.depth_stream.publish(
                         await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence, jpegs)
@@ -563,6 +578,9 @@ class RuntimeServerNode(Node):
             if previous is not None and now > previous.at:
                 rate = self.rates.get(name, 0.0)
                 self.rates[name] = rate + 0.1 * (1 / (now - previous.at) - rate)
+            if name == "imu" and self.viewers:  # Every batch, for time series
+                self.imu_sequence += 1
+                self.imu_stream.publish(encode_imu_batch(message, sequence=self.imu_sequence))
             if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
                 posed = self.feeds[self.pose_camera]
                 posed.last_pose_at = now

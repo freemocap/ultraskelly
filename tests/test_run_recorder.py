@@ -10,6 +10,8 @@ from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, Ru
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
     FrameTopic,
+    ImuMessage,
+    ImuTopic,
     PoseDataMessage,
     PoseDataTopic,
     ServoStateMessage,
@@ -160,6 +162,40 @@ def test_a_cameras_own_jpeg_is_recorded_as_it_came(tmp_path):
 def test_a_recording_quality_of_its_own_encodes_separately(tmp_path):
     video, encoder = record_frames(tmp_path, [frame(5)], jpeg_quality=95)
     assert video.frames == [b"JPEG5@95"]
+
+
+def imu_batch(first_sample, count=4):
+    times = 200.0 + 0.00126 * np.arange(first_sample, first_sample + count)
+    acceleration = np.tile(np.array([0.0, -9.8, 0.5], np.float32), (count, 1))
+    return ImuMessage(
+        timestamps=times, imu_times=times - 50.0, acceleration=acceleration,
+        angular_velocity=np.ones((count, 3), np.float32), first_sample=first_sample, temperature=52.5,
+    )
+
+
+def test_every_imu_sample_is_saved_and_missed_batches_are_counted(tmp_path):
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = make_recorder(bus, tmp_path, None, [])
+        task = asyncio.create_task(node.run())
+        for first in (0, 4, 12):  # The batch of samples 8 to 11 never reaches the recorder
+            await bus.publish(ImuTopic, imu_batch(first))
+            await asyncio.sleep(0.02)
+        node.stop()
+        await task
+        bus.close()
+        return node.folder
+
+    folder = asyncio.run(scenario())
+
+    saved = rows(folder / "imu.csv")
+    assert len(saved) == 12 and list(saved[0]) == ["time", "imu_time", "ax", "ay", "az", "gx", "gy", "gz", "temperature"]
+    assert (saved[0]["time"], saved[0]["imu_time"], saved[0]["ay"], saved[0]["temperature"]) == (
+        "200.000000", "150.000000", "-9.8000", "52.50",
+    )
+    assert saved[8]["time"] == "200.015120"  # Sample 12
+    run = json.loads((folder / "run.json").read_text())
+    assert run["written"]["imu"] == 3 and run["written"]["imu_sample"] == 12 and run["imu_samples_missed"] == 4
 
 
 def test_a_stalled_disk_drops_frames_instead_of_slowing_the_bot(tmp_path):

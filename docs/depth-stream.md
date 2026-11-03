@@ -3,18 +3,19 @@
 Status: draft for the dashboard's depth views (2026-11-02). The format is meant to stay;
 values marked nominal will be measured later.
 
-With `--zed --depth` (or `--zed-only --depth`), `/stream` carries three kinds of ZED
-message, all self-describing like everything else on the stream:
+With `--zed --depth` (or `--zed-only --depth`), `/stream` carries these ZED messages, all
+self-describing like everything else on the stream:
 
 | Message | Rate | What it holds |
 | --- | --- | --- |
 | `frame` with cameras `zed_left`, `zed_right` | 30 per second | The raw eyes, JPEG, as the cameras see them |
-| `frame` with cameras `zed_rectified`, `zed_depth` | at most 10 per second | A preview: the rectified left eye, and the depth drawn in colour (red near, blue far, black unknown) |
-| `depth_frame` | the same depth frames | The depth itself in millimetres, with everything needed to place it in 3D |
+| `depth_frame` | at most 10 per second | The depth itself in millimetres and the rectified left eye, with everything needed to place it in 3D |
+| `frame` with cameras `zed_rectified`, `zed_depth` | the same depth frames, only with `--depth-previews` | A preview: the rectified left eye, and the depth drawn in colour (red near, blue far, black unknown) |
 
-The `frame` messages show in today's video panels with no change. `depth_frame` is for
-the depth views that need numbers: a heat map with a scale, a raw view, a point cloud and
-a mesh. A frame's JPEG cannot carry 16-bit values, so depth travels in its own kind.
+`depth_frame` is for the depth views that need numbers: a heat map with a scale, a raw
+view, a point cloud and a mesh. A frame's JPEG cannot carry 16-bit values, so depth travels
+in its own kind. The preview frames repeat what `depth_frame` holds for viewers that draw
+only frames, so they are off unless asked for; the dashboard draws from `depth_frame`.
 
 ## `depth_frame`, version 0
 

@@ -1,0 +1,3 @@
+# Let the bot read the ZED Mini's IMU without root: its HID interface (USB 2b03:f681),
+# for the robot's user (in plugdev), at a fixed name, /dev/zed-mini-imu.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2b03", ATTRS{idProduct}=="f681", MODE="0660", GROUP="plugdev", SYMLINK+="zed-mini-imu"

@@ -52,9 +52,10 @@ def depth(value):
                              rectification=SHARED)
 
 
-def make_server(bus, encoder, **options):
+def make_server(bus, encoder, *, previews=False, **options):
     return RuntimeServerNode.create(
-        pubsub=bus, params=RuntimeServerParams(state_hz=50), cameras={"oak": FrameTopic}, recorder=None,
+        pubsub=bus, params=RuntimeServerParams(state_hz=50, depth_previews=previews), cameras={"oak": FrameTopic},
+        recorder=None,
         motors_simulated=True, encode_jpeg=encoder, stereo_cameras={"zed": StereoFrameTopic},
         depth_cameras={"zed": DepthFrameTopic}, **{"node_status": lambda: [], **options},
     )
@@ -186,7 +187,7 @@ def test_a_depth_preview_alone_sends_no_depth_frame():
         await viewer.close()
         return viewer.kinds(), encoder.images
 
-    kinds, encoded = run(scenario)
+    kinds, encoded = run(scenario, previews=True)
 
     assert "depth_frame" not in kinds and encoded == [30, 1500]
 
