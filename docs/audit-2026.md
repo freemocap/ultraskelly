@@ -735,6 +735,17 @@ second each, the depth 5, and the cloud turned with the commanded head. Over 20 
 known); the whole Pi was at 27% and 28% of 4 cores, with `throttled=0x0`. One sample each;
 live depth with the real matcher running on the same Pi is not measured yet.
 
+### Gaze ray (2026-11-02)
+
+The 3D scene draws the OAK's view cone and a ray from it through the followed person's target
+pixel, ending where it meets the ZED depth ([how](dashboard.md#gaze)). Checked on Windows in
+headless Chrome with the synthetic depth sample and a target pixel aimed at its ball, (401, 221)
+from the OAK's best-guess pose: the face point landed 0.115 m from the ball's centre, within
+5 mm of its 0.12 m surface, and the target row read 0.90 m. With the live sample, whose sparse
+depth has nothing on that ray, it stayed a dashed direction. The poses of both cameras in the
+head are nominal, so the face point is an estimate until W2 measures it or the camera bracket
+gives the poses.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

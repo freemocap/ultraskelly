@@ -14,7 +14,7 @@ export class DepthViews {
     this.worker.onmessage = ({data}) => this.done(data);
     this.worker.onerror = event => console.error('Depth worker failed:', event.message);
     this.inFlight = null; this.waiting = null; this.sent = 0; this.shown = 0;
-    this.latest = null;  // {mm, width, height} of the newest depth drawn, for the readout
+    this.latest = null;  // The newest depth drawn: millimetres, grid size, step, intrinsics and pose
     legend.ramp.style.background = turboGradient();
     for (const key of ['depth_heat', 'depth_raw']) this.readout(tiles.tiles.get(key));
   }
@@ -47,7 +47,8 @@ export class DepthViews {
     this.tiles.showBitmap('depth_heat', result.heat);
     this.tiles.showBitmap('depth_raw', result.raw);
     result.heat.close(); result.raw.close();
-    this.latest = {mm: result.mm, width: result.width, height: result.height};
+    this.latest = {mm: result.mm, width: result.width, height: result.height, step: meta.step,
+                   camera: meta.camera, cameraToHead: meta.cameraToHead};
     const {near, ramp, far, info} = this.legend;
     near.textContent = metres(result.near); far.textContent = metres(result.far);
     ramp.title = `Heat map: ${metres(result.near)} (red) to ${metres(result.far)} (blue), from this frame's 2nd to 98th percentile`;

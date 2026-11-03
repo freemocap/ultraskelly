@@ -24,7 +24,7 @@
     <div class="stage-foot">
       <div class="foot-left">
         <div class="layers" role="group" aria-label="Depth layers" title="The ZED's depth on the skeleton's head">
-          <button data-layer="cloud" aria-pressed="true">Cloud</button><button data-layer="mesh" aria-pressed="false">Mesh</button>
+          <button data-layer="cloud" aria-pressed="true">Cloud</button><button data-layer="mesh" aria-pressed="false">Mesh</button><button data-layer="gaze" aria-pressed="true" title="The OAK's view and its ray to the target">Gaze</button>
         </div>
         <span class="hint">Drag to orbit · scroll to zoom</span>
       </div>
@@ -50,6 +50,7 @@
       <div class="target-row">
         <span id="target-state" class="badge">No target</span>
         <span id="target-pixel">—</span><span id="target-angle"></span><span id="target-lock"></span><span id="target-age"></span>
+        <span id="target-face" title="Where the gaze ray meets the ZED depth, from between the eyes. Both cameras' poses are best guesses."></span>
       </div>
     </section>
     <section class="sensor zed" aria-label="Eyes and depth">
