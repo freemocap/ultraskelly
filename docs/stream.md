@@ -147,7 +147,7 @@ values are the commands sent, not measured positions.
 | `rates` | message rates in Hz: `servo_state`, `target`, `pose`, `face` with the face locator, and `imu` (batches) with the ZED |
 | `nodes` | each node's `name` and `state` (starting, running, stopped, crashed), with `error` when crashed |
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
-| `oak` | the OAK's own chip: `rates` per second over the last 2 s (`frames`; with its models `face_detection` and `palm_detection`, and `head_pose`, `gaze`, `face_landmarks` as faces measured per second and `hand_landmarks` as hands), `chip` (`leon_os_cpu` and `leon_rt_cpu` from 0 to 1, `ddr_used_mib`, `ddr_total_mib`, `temperature_c`) `faces_incomplete`, frames sent before all their measurements came, and `missing`, which answers those lacked (`results`, `mesh`, `palms`, `hands`). Null without the OAK |
+| `oak` | the OAK's own chip: `rates` per second over the last 2 s (`frames`; with its models `face_detection` and `palm_detection`, and `head_pose`, `gaze`, `face_landmarks` as faces measured per second and `hand_landmarks` as hands), `chip` (`leon_os_cpu` and `leon_rt_cpu` from 0 to 1, `ddr_used_mib`, `ddr_total_mib`, `temperature_c`), `faces_incomplete`, frames sent before all their measurements came, and `missing`, which answers those lacked (`results`, `mesh`, `palms`, `hands`). Null without the OAK |
 
 ## `depth_frame` messages
 
