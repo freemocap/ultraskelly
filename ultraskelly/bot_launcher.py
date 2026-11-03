@@ -13,6 +13,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     record_hardware_commands,
 )
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
+from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams
 
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
@@ -77,6 +78,10 @@ class LaunchConfig(NodeParams):
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
     )
+    stall_monitor: StallMonitorParams = Field(
+        default_factory=StallMonitorParams,
+        description="Stop the bot, for its service to restart it, when camera frames or pose results stop",
+    )
 
 
 class BotLauncher(BaseModel):
@@ -89,6 +94,11 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    shutting_down: bool = Field(default=False, exclude=True)
+
+    def healthy(self) -> bool:
+        """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
+        return not self.shutting_down
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -176,6 +186,14 @@ class BotLauncher(BaseModel):
                     configuration=self.config.model_dump(mode="json"),
                 )
             )
+        self.nodes.append(
+            StallMonitorNode.create(
+                pubsub=self.pubsub,
+                params=self.config.stall_monitor,
+                # Only the Hailo detector reports the frame each pose result belongs to.
+                watch_poses=self.config.detector_type == DetectorType.HAILO_POSE,
+            )
+        )
 
         logger.info(f"Created {len(self.nodes)} nodes")
 
@@ -208,7 +226,8 @@ class BotLauncher(BaseModel):
     async def _shutdown_nodes(self) -> None:
         """Stop all nodes and clean up tasks."""
         logger.info("Shutting down nodes...")
-        
+        self.shutting_down = True
+
         # Stop all nodes
         for node in self.nodes:
             node.stop()

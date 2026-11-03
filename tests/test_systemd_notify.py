@@ -47,9 +47,34 @@ def test_ready_follows_start_up_then_pings_continue_until_the_work_ends(monkeypa
         if hasattr(signal, "SIGUSR1"):
             faulthandler.unregister(signal.SIGUSR1)  # Registered for the watchdog; keep pytest's default
     assert sent[:2] == ["nodes built", "READY=1"]
-    assert sent[-1] == "STOPPING=1"
-    assert set(sent[2:-1]) == {"WATCHDOG=1"}
-    assert len(sent[2:-1]) >= 3
+    assert set(sent[2:]) == {"WATCHDOG=1"}  # No STOPPING=1: it would switch the watchdog off
+    assert len(sent[2:]) >= 3
+
+
+def test_pings_stop_once_the_bot_starts_shutting_down(monkeypatch):
+    sent = []
+    monkeypatch.setattr(systemd_notify, "notify", lambda state: sent.append(state) or True)
+    monkeypatch.setenv("WATCHDOG_USEC", "100000")  # A ping every 0.05 s
+    monkeypatch.setenv("WATCHDOG_PID", str(os.getpid()))
+    shutting_down = False
+
+    async def bot():
+        nonlocal shutting_down
+        await asyncio.sleep(0.2)
+        shutting_down = True  # As BotLauncher.healthy() turns false when its shutdown starts
+        pings = sent.count("WATCHDOG=1")
+        await asyncio.sleep(0.3)  # A slow shutdown
+        return pings
+
+    try:
+        pings_before_shutdown = asyncio.run(
+            systemd_notify.run_with_heartbeat(bot(), healthy=lambda: not shutting_down)
+        )
+    finally:
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.unregister(signal.SIGUSR1)
+    assert pings_before_shutdown >= 2
+    assert sent.count("WATCHDOG=1") <= pings_before_shutdown + 1  # At most one already under way
 
 
 @needs_sigusr1
