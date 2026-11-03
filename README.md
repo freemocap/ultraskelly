@@ -156,7 +156,11 @@ minute. If the bot's event loop stalls for 30 s, systemd kills it with SIGUSR1, 
 first logs every thread's Python traceback. After every exit, crashes and kills
 included, the service brakes the DC motors with `scripts/stop_motors.py`, giving up
 after 10 s; it leaves them alone when the bot never started because another program
-holds the robot lock. Re-run the script after moving the checkout.
+holds the robot lock. A motor board, camera or pose detector that drops out also ends the
+bot, and the restart reconnects everything: a board write that still fails after its
+retries, 5 s without camera frames, or 5 s without the Hailo detector's pose results
+(`StallMonitorNode`). Once the bot starts shutting down it stops feeding the watchdog,
+so a shutdown that hangs is ended too. Re-run the script after moving the checkout.
 Extra bot options go in `/etc/default/ultraskelly-bot`, for example while the motor
 boards are disconnected:
 
