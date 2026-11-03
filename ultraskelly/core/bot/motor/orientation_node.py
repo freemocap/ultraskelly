@@ -98,6 +98,7 @@ class OrientationNode(Node):
         params: OrientationNodeParams
     ) -> "OrientationNode":
         """Factory method to create and initialize OrientationNode."""
+        from adafruit_motor import motor as dc_motor
         from adafruit_motorkit import MotorKit
         from adafruit_servokit import ServoKit
 
@@ -126,6 +127,8 @@ class OrientationNode(Node):
         
         if node.waist_motor is None:
             raise ValueError(f"Could not initialize waist motor on channel {params.waist_motor_channel}")
+        # Braking between PWM pulses: quieter and gentler at low drive (see waist_drive.py)
+        node.waist_motor.decay_mode = dc_motor.SLOW_DECAY if params.waist.slow_decay else dc_motor.FAST_DECAY
         
         # Get subscription
         node.target_subscription = pubsub.get_subscription(TargetLocationTopic)

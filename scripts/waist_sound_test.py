@@ -36,7 +36,7 @@ import numpy as np
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
-from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams
 from ultraskelly.core.bot.motor.simulated_actuators import (
     ActuatorCommand,
     CommandRecorder,
@@ -87,6 +87,7 @@ class Profile:
     coast: bool = False  # Stop by releasing the motor instead of braking it
     slow_decay: bool = False  # Brake instead of coast between PWM pulses
     pwm_hz: float = 1600.0
+    steps: tuple[float | None, ...] = ()  # A recorded drive, one value per control period, instead of the shape above
 
     def __post_init__(self) -> None:
         if not 0 < self.seconds <= MAX_MOVE_SECONDS:
@@ -96,6 +97,8 @@ class Profile:
 
     def throttle(self, t: float) -> float | None:
         """Throttle magnitude t seconds into the move; None releases the motor."""
+        if self.steps:
+            return self.steps[min(int(t / CONTROL_PERIOD + 1e-9), len(self.steps) - 1)]  # Tolerates float error
         if t >= self.seconds:
             return None if self.coast else 0.0
         if self.pulse_on and t % (self.pulse_on + self.pulse_off) >= self.pulse_on:
@@ -110,18 +113,22 @@ class Profile:
         return level
 
 
-def drive_profile(params: WaistDriveParams, angle: float = 30.0, seconds: float = 1.5) -> Profile:
-    """One move of the bot's waist drive with the head held `angle` degrees off center, open loop.
+def drive_profile(params: WaistDriveParams, angle: float = 30.0, closing_dps: float = 20.0) -> Profile:
+    """One recentering move of the bot's own waist drive, replayed open loop.
 
-    The bot brakes a released waist after its coast; here it stays released through the rest.
+    The drive sees a head `angle` degrees off center coming back at `closing_dps`, as the camera
+    loop would bring it back while the waist turns, until the drive has stopped and braked.
     """
-    cruise = min(params.max_throttle, params.min_throttle + params.gain * max(0.0, angle - params.start_angle))
-    start = min(params.start_throttle, cruise)
+    drive, steps = WaistDrive(params), []
+    while len(steps) * CONTROL_PERIOD < MAX_MOVE_SECONDS:
+        t = len(steps) * CONTROL_PERIOD
+        value = drive.update(now=t, pan_offset=-max(0.0, angle - closing_dps * t))  # Negative pan: positive drive
+        steps.append(value)
+        if value == 0.0 and t > 0:
+            break
     return Profile(
-        f"the bot's drive with the head {angle:.0f} deg off: {start:.2f} ramping to {cruise:.2f}, "
-        f"down to {params.release_throttle:.2f}, released",
-        cruise=cruise, seconds=seconds, start=start, ramp_up=(cruise - start) / params.ramp_up,
-        stop=params.release_throttle, ramp_down=(cruise - params.release_throttle) / params.ramp_down, coast=True,
+        f"the bot's drive for a {angle:.0f} degree recentering (head back at {closing_dps:.0f} deg/s)",
+        seconds=len(steps) * CONTROL_PERIOD, steps=tuple(steps), slow_decay=params.slow_decay,
     )
 
 
