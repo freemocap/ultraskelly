@@ -63,7 +63,9 @@ pose, gaze and MediaPipe face landmarks on the faces it finds, and MediaPipe han
 a second (`--no-oak-models` turns them off; what runs where, and why, is in the audit). Fetch
 the models once with `.venv/bin/python -m scripts.fetch_oak_models`; the bot then loads them
 without the internet. The original IMX500 AI camera remains available as
-`DetectorType.POSE` in `ultraskelly/__main__bot.py`.
+`DetectorType.POSE` in `ultraskelly/__main__bot.py`. depthai, the OAK's library, uploads
+usage events to Luxonis by default; the bot and the OAK scripts turn that off
+(`DEPTHAI_TELEMETRY=0`) unless the variable is already set.
 
 ### Set up a Pi
 

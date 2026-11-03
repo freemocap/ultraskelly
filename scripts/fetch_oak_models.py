@@ -7,10 +7,11 @@ Needs no OAK and no robot lock. Prints each model's archive and its SHA-256.
 import hashlib
 from pathlib import Path
 
-from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, MODELS, PLATFORM
+from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, MODELS, PLATFORM, without_telemetry
 
 
 def main() -> None:
+    without_telemetry()
     import depthai as dai
 
     for name, slug in MODELS.items():

@@ -23,6 +23,8 @@ from pathlib import Path
 import depthai as dai
 import numpy as np
 
+from ultraskelly.core.bot.sensory.oak_models import without_telemetry
+
 CACHE = Path.home() / "ultraskelly-models" / "oak-zoo"
 MODELS = {
     "yunet": "luxonis/yunet:320x240",
@@ -245,6 +247,7 @@ def run(parts: list[str], args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
+    without_telemetry()
     parser = argparse.ArgumentParser(description="Measure Model Zoo models on the OAK's chip.")
     parser.add_argument("--run", action="append", required=True, help="Comma-separated parts in one pipeline; repeat for more runs")
     parser.add_argument("--seconds", type=float, default=15.0, help="Measuring window per run, after the warm-up")

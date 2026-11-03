@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, PLATFORM
+from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, PLATFORM, without_telemetry
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS
 from ultraskelly.core.bot.sensory.yolov8_pose import Letterbox, PoseDetections, decode_yolov8_pose
 
@@ -82,6 +82,7 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--save", type=Path, default=None, help="Folder for frames with both skeletons drawn")
     args = parser.parse_args()
+    without_telemetry()
     import cv2
     import depthai as dai
     import hailo_platform as hp

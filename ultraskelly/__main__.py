@@ -82,6 +82,8 @@ def main() -> None:
     # One OpenBLAS thread for NumPy, set before NumPy loads: its idle workers also spin after
     # each call; the ZED IMU node alone used 6.3% of a core with them and 2.6% without.
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    # The robot stays local: depthai uploads usage events to Luxonis unless told not to.
+    os.environ.setdefault("DEPTHAI_TELEMETRY", "0")
     import cv2
 
     # One OpenCV thread for the whole bot: the pool's idle workers spin between calls, which on

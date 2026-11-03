@@ -1094,7 +1094,11 @@ own JPEGs (506 at 30.0 fps, none dropped or missed, all decoding).
 - A frame published in the same moment as another can be lost on a latest-value topic, so the
   server takes each frame's results from the OAK node by frame number.
 - "Device crashed" at bot shutdown: 9 of 9 restarts of this work and 4 of 4 of main stopped
-  cleanly, the OAK in 1.2-1.5 s. The crash dumps from this morning's two hold the output of a probe of mine that had
+  cleanly, the OAK in 1.2-1.5 s.
+- depthai 3.x uploads usage events to Luxonis (device start and stop, model loads, chip load),
+  queued in `~/.cache/depthai/telemetry`; the queue on the Pi was draining, so they were being
+  sent. The bot and the OAK scripts now set `DEPTHAI_TELEMETRY=0` unless it is already set;
+  depthai then logs "Telemetry disabled via DEPTHAI_TELEMETRY". The crash dumps from this morning's two hold the output of a probe of mine that had
   crashed the OAK minutes before; depthai reports a crash at the next session's close.
 
 **The target.** The head still steers by the Hailo's nose keypoint. YuNet's nose arrives 7-15 ms
