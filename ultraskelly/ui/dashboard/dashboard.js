@@ -9,6 +9,7 @@ import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
+import { OakFinds, measuresOf } from '/faces.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -144,22 +145,45 @@ function showTarget(state) {
   setText($('target-age'), target?.age != null ? ago(target.age) : '');
 }
 
-// Rates as dt/dd pairs and nodes as chips, each made once per name and changed in place.
+// Rates as dt/dd pairs and nodes as chips, each made once per name and changed in place. A wide row takes the
+// list's whole width.
 const rateRows = new Map(), nodeChips = new Map();
 function definitionList(list, rows) {
   placeKeyed(list, rateRows, rows.map(([term]) => term), () => [document.createElement('dt'), document.createElement('dd')]);
-  for (const [term, value, stale, detail] of rows) {
+  for (const [term, value, stale, detail, wide] of rows) {
     const [dt, dd] = rateRows.get(term);
     setText(dt, term); setText(dd, value); setProperty(dd, 'title', detail ?? value);
     dd.classList.toggle('stale', Boolean(stale));
+    dt.classList.toggle('wide', Boolean(wide)); dd.classList.toggle('wide', Boolean(wide));
   }
 }
 
 const cameraName = name => ({oak: 'OAK', zed_left: 'ZED L', zed_right: 'ZED R'}[name] ?? name);
+// The OAK chip's own rates and load (robot_state.oak): its frames, what its models found or measured each second,
+// its two CPUs (LeonOS and LeonRT), memory and temperature. Null without the OAK.
+function oakRows(oak) {
+  if (!oak) return [];
+  const hz = name => oak.rates?.[name] == null ? '—' : `${oak.rates[name].toFixed(1)} Hz`, chip = oak.chip ?? {};
+  const percent = value => value == null ? '—' : `${Math.round(value * 100)}%`;
+  const missing = Object.entries(oak.missing ?? {}).filter(([, count]) => count).map(([what, count]) => `${what} ${count}`).join(', ');
+  return [
+    ['OAK frames', hz('frames')],
+    ['Faces', hz('face_detection'), false, `faces found ${hz('face_detection')}`],
+    ['Head pose', hz('head_pose'), false, `head pose ${hz('head_pose')}, gaze ${hz('gaze')}`],
+    ['Face mesh', hz('face_landmarks')],
+    ['Hands', hz('hand_landmarks'), false, `palms looked for ${hz('palm_detection')}, hands measured ${hz('hand_landmarks')}`],
+    ['OAK chip', `${percent(chip.leon_os_cpu)} · ${percent(chip.leon_rt_cpu)} · ${chip.temperature_c?.toFixed(0) ?? '—'} °C`, false,
+     `CPU LeonOS ${percent(chip.leon_os_cpu)}, LeonRT ${percent(chip.leon_rt_cpu)}; memory ${chip.ddr_used_mib?.toFixed(0) ?? '—'} of ` +
+     `${chip.ddr_total_mib?.toFixed(0) ?? '—'} MiB; ${chip.temperature_c?.toFixed(1) ?? '—'} °C` +
+     (oak.faces_incomplete ? `; ${oak.faces_incomplete} frames sent before all their measurements came (${missing})` : ''), true],
+  ];
+}
+
 // Node health and message rates, from the newest robot_state once a second.
 function showHealth(state) {
-  const labels = {servo_state: 'Servo', target: 'Target', pose: 'Pose'};
+  const labels = {servo_state: 'Servo', target: 'Target', pose: 'Body pose', face: 'Face locator', imu: 'IMU batches', results: 'OAK results'};
   const rows = Object.entries(state.rates ?? {}).map(([name, hz]) => [labels[name] || name, `${hz.toFixed(1)} Hz`]);
+  rows.push(...oakRows(state.oak));
   for (const [name, camera] of Object.entries(state.cameras ?? {})) {
     // Camera rates show in the camera sections; here a camera appears only once its frames stop.
     if (camera.width && camera.age <= 1) continue;
@@ -249,10 +273,12 @@ stream.subscribeToKind('imu', batch => {
 // The SDK delivers each frame message's channels, then its overlays, then its image, so what arrives
 // between a channels call and the image belongs to that image. Values are copied out of the decoder's
 // storage, which a later frame may reuse.
-const noFrame = {frameNumber: -1, overlays: [], target: null};
+const noFrame = {frameNumber: -1, overlays: [], target: null, finds: null};
+const oakFinds = new OakFinds();  // The OAK's faces and hands, each frame's with what earlier frames measured
 let frame = noFrame;
 stream.subscribeToChannels(views => {
-  frame = views ? {frameNumber: views.frameNumber, overlays: [], target: null} : noFrame;
+  frame = views ? {frameNumber: views.frameNumber, overlays: [], target: null, finds: null, measures: measuresOf(views),
+                   tracking: Boolean(views.cameras?.some(camera => camera.id === tiles.trackingId))} : noFrame;
   for (const view of views?.channels ?? []) {
     if (view.descriptor.kind !== 'ultraskelly.target' || view.rowCount < 1) continue;
     const column = name => view.data[view.descriptor.columns.indexOf(name)];
@@ -260,7 +286,7 @@ stream.subscribeToChannels(views => {
     frame.target = {cameraId: view.descriptor.camera_id, x: column('x'), y: column('y'), bodyAngle: column('body_angle_deg'), width, height};
   }
   // Each tracking-camera frame moves the gaze ray to its target (or hides it: the head follows nobody).
-  if (views?.cameras?.some(camera => camera.id === tiles.trackingId)) {
+  if (frame.tracking) {
     gazeTarget = frame.target;
     scene?.gaze.update(gazeTarget, facePoint);
   }
@@ -269,7 +295,10 @@ stream.subscribeToOverlay(overlay => {
   if (overlay.frameNumber === frame.frameNumber) frame.overlays.push(overlay);
 });
 stream.subscribeToImages((buffer, frameNumber) => {
-  tiles.handle(buffer, frame.frameNumber === frameNumber ? frame : noFrame);
+  if (frame.frameNumber !== frameNumber) { tiles.handle(buffer, noFrame); return; }
+  // The faces and hands of every tracking frame, decoded or not, so measurements carry over between them.
+  if (frame.tracking) frame.finds = oakFinds.update(frame.overlays, frame.measures);
+  tiles.handle(buffer, frame);
 });
 stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol error', problem); error(`Stream error: ${problem?.message ?? problem}`); });
 stream.on('open', () => { error(''); sentViews = ''; sendViews(); });  // Each connection starts wanting everything
@@ -295,7 +324,7 @@ document.addEventListener('visibilitychange', sendViews);
 addEventListener('resize', sendViews);
 stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
 stream.connect();
-window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness, frame rates, node health and message rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';

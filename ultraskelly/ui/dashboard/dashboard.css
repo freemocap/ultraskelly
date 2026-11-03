@@ -88,15 +88,18 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .tests-buttons{display:flex;gap:6px;margin-top:auto}
 .dashboard .tests-buttons button{padding:5px 12px}
 .dashboard button.stop,.motor-test-stop{border-color:#d68e82}
-.dashboard #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:3px;overflow-x:hidden;overflow-y:auto;min-height:0;flex:1;align-content:start}
+.dashboard .card.nodes{container-type:inline-size}
+.dashboard #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:3px;overflow-x:hidden;overflow-y:auto;min-height:22px;flex:1;align-content:start}
 .dashboard .node{display:flex;justify-content:space-between;gap:6px;padding:3px 7px;border:1px solid var(--line);border-radius:4px;font:11px ui-monospace,monospace;background:#10171b}
 .dashboard .node b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dashboard .node span{text-transform:uppercase;font-size:10px}
 .dashboard .node.running span{color:var(--accent)}.dashboard .node.starting span{color:var(--orange)}.dashboard .node.stopped span{color:var(--muted)}
 .dashboard .node.crashed{border-color:#d68e82}.dashboard .node.crashed span{color:#ff8f7f}
-.dashboard #rates{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);gap:2px 8px;font-size:11px;margin:0;flex:none}
+.dashboard #rates{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);gap:2px 8px;font-size:11px;margin:0;flex:0 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto}
 .dashboard #rates dt{color:var(--muted);white-space:nowrap}
 .dashboard #rates dd{margin:0;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard #rates dt.wide{grid-column:1}.dashboard #rates dd.wide{grid-column:2 / -1}
+@container (max-width:230px){.dashboard #rates{grid-template-columns:auto minmax(0,1fr)}}  /* A narrow card: one rate a row */
 .dashboard dd.stale,.dashboard span.stale{color:var(--orange)}
 
 /* The motor test panel (motor-test.js) inside the drawer. */

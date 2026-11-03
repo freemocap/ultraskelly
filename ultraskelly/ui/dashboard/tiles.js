@@ -6,6 +6,7 @@
 // picture asks for at once. People are drawn by tracker ID (docs/stream.md): `target` is the person the head
 // follows, and its ring comes from that frame's `ultraskelly.target` channel.
 import { readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
+import { drawFinds } from '/faces.js';
 
 const KEYPOINT_VISIBLE = 0.3;  // Keypoints below this confidence are not drawn
 const STALE_MS = 3000;         // A tile with no frame for this long is dimmed
@@ -128,8 +129,8 @@ export class CameraTiles {
     return key != null && (this.visible.has(key) || this.enlargedId === key);
   }
 
-  // One image buffer from the stream, with what came with it in the same frame message:
-  // frame = {overlays, target}, the people's keypoints and the target channel's row.
+  // One image buffer from the stream, with what came with it in the same frame message: frame = {overlays,
+  // target, finds}, the keypoints and boxes, the target channel's row, and the OAK's faces and hands (faces.js).
   handle(buffer, frame) {
     let payload;
     try { payload = readImagePayload(buffer); }
@@ -222,9 +223,11 @@ export class CameraTiles {
       ctx.strokeStyle = COLORS.aim; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(aimX - 20, aimY); ctx.lineTo(aimX + 20, aimY); ctx.moveTo(aimX, aimY - 20); ctx.lineTo(aimX, aimY + 20); ctx.stroke();
     }
-    const people = frame.overlays.filter(overlay => overlay.cameraId === cameraId);
+    // People are the body keypoints; faces' and hands' points and every box draw with the OAK's finds.
+    const people = frame.overlays.filter(overlay => overlay.cameraId === cameraId && overlay.layer === 0 && !/^(face|hand)-/.test(overlay.trackerId ?? ''));
     for (const overlay of people) if (overlay.trackerId !== 'target') drawPerson(ctx, overlay, false);
     for (const overlay of people) if (overlay.trackerId === 'target') drawPerson(ctx, overlay, true);  // On top
+    if (frame.finds && cameraId === this.trackingId) drawFinds(ctx, frame.finds);
     const target = frame.target;
     if (target && target.cameraId === cameraId && Number.isFinite(target.x) && Number.isFinite(target.y)) {
       const [sx, sy] = scaleFrom(ctx, [target.width, target.height]);
