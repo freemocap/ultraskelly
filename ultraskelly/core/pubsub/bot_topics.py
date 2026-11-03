@@ -77,6 +77,24 @@ class FaceLocationMessage(TopicMessageABC):
     model_config = ConfigDict(frozen=True)
 
 
+class ImuMessage(TopicMessageABC):
+    """A batch of IMU samples, oldest first: the ZED Mini's accelerometer and gyroscope, raw and in
+    the IMU's own axes (not the head frame). For display and recording; nothing steers by them."""
+    timestamps: np.ndarray  # (N,) float64 seconds on time.monotonic()'s clock
+    imu_times: np.ndarray  # (N,) float64 seconds by the IMU's own clock, which runs at its own rate
+    acceleration: np.ndarray  # (N, 3) float32 m/s² along the IMU's x, y, z; gravity included
+    angular_velocity: np.ndarray  # (N, 3) float32 degrees per second about the IMU's x, y, z
+    first_sample: int  # The first sample's number since the IMU node started: a jump means missed batches
+    lost: int = 0  # Samples the IMU took that never arrived, so far
+    temperature: float | None = None  # °C, the IMU's own, at the last sample
+    sample_rate: float | None = None  # Samples per second by time.monotonic()'s clock, once measured
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
 class TargetLocationMessage(TopicMessageABC):
     """Generic target location with orientation."""
     x: int | None = None
@@ -148,6 +166,7 @@ StereoFrameTopic = create_topic(StereoFrameMessage)
 DepthFrameTopic = create_topic(DepthFrameMessage)
 FaceLocationTopic = create_topic(FaceLocationMessage)
 FacesTopic = create_topic(FacesMessage)
+ImuTopic = create_topic(ImuMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)
 PoseDataTopic = create_topic(PoseDataMessage)

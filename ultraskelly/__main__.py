@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import signal
 
 from ultraskelly.systemd_notify import run_with_heartbeat
@@ -35,7 +36,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--zed", action="store_true",
-        help="With --hardware: also capture the ZED Mini stereo camera and stream its left and right images.",
+        help="With --hardware: also capture the ZED Mini stereo camera and stream its left and right images "
+             "and its IMU.",
     )
     parser.add_argument(
         "--zed-only", action="store_true",
@@ -43,8 +45,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--depth", nargs="?", const="sgbm", choices=["sgbm", "stereonet"],
-        help="With --zed or --zed-only: also compute depth from the ZED's pair, at most 5 Hz: with OpenCV on "
-             "the CPU (sgbm, the default) or StereoNet on the Hailo-8 (stereonet, needs the robot lock).",
+        help="With --zed or --zed-only: also compute depth from the ZED's pair: with OpenCV on the CPU, at most "
+             "10 Hz (sgbm, the default), or StereoNet on the Hailo-8, 1 Hz (stereonet, needs the robot lock).",
+    )
+    parser.add_argument(
+        "--depth-previews", action="store_true",
+        help="With --depth: also stream the depth as colour images (cameras zed_rectified and zed_depth); "
+             "the depth_frame messages carry the same, so the dashboard needs none.",
     )
     parser.add_argument(
         "--no-oak-models", action="store_true",
@@ -54,6 +61,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
+    if args.depth_previews and not args.depth:
+        parser.error("--depth-previews is used together with --depth")
     if (args.simulate_motors or args.no_window or args.record or args.zed or args.no_oak_models) and not args.hardware:
         parser.error("--simulate-motors, --no-window, --record, --zed and --no-oak-models are used together with --hardware")
     if args.microphone and not args.record:
@@ -65,6 +74,9 @@ def main() -> None:
         return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # One OpenBLAS thread for NumPy, set before NumPy loads: its idle workers also spin after
+    # each call; the ZED IMU node alone used 6.3% of a core with them and 2.6% without.
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     import cv2
 
     # One OpenCV thread for the whole bot: the pool's idle workers spin between calls, which on
@@ -80,8 +92,8 @@ def main() -> None:
         launcher = BotLauncher.from_config(launch_config(
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
-            zed=args.zed, zed_only=args.zed_only, depth=args.depth, port=args.port,
-            oak_models=not args.no_oak_models,
+            zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
+            port=args.port, oak_models=not args.no_oak_models,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

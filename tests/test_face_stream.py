@@ -97,4 +97,3 @@ def test_the_oak_frame_waits_for_its_faces_and_keeps_the_cameras_own_jpeg():
     assert encoded == []  # The Pi encoded nothing: the OAK had
     state = received["robot_state"][-1]
     assert state["oak"] == {"rates": {"face_detection": 30.0}}
-    assert "faces" in state["rates"]

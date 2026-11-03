@@ -215,6 +215,16 @@ fix_oak_rule() {
     sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=03e7
 }
 
+check_zed_imu_rule() {
+  file_in_place /etc/udev/rules.d/80-zed-mini-imu.rules || return 1
+  [[ -e /dev/zed-mini-imu ]] || { echo "the bot may read the ZED's IMU without root (/dev/zed-mini-imu appears with the ZED)"; return 0; }
+  echo "the bot may read the ZED's IMU without root: /dev/zed-mini-imu"
+}
+fix_zed_imu_rule() {
+  install_file /etc/udev/rules.d/80-zed-mini-imu.rules && sudo udevadm control --reload &&
+    sudo udevadm trigger --action=change --subsystem-match=hidraw && sudo udevadm settle
+}
+
 check_journal() {
   file_in_place /etc/systemd/journald.conf.d/90-ultraskelly-persistent.conf || return 1
   [[ -d /var/log/journal ]] || { echo "no /var/log/journal"; return 1; }
@@ -457,6 +467,7 @@ setting "Hailo driver fix" check_hailo_driver fix_hailo_driver
 setting "I2C" check_i2c fix_i2c
 setting "PCIe Gen 3" check_pcie fix_pcie
 setting "OAK udev rule" check_oak_rule fix_oak_rule
+setting "ZED IMU udev rule" check_zed_imu_rule fix_zed_imu_rule
 setting "Persistent journal" check_journal fix_journal
 setting "Boot report" check_boot_report fix_boot_report
 setting "Hardware watchdog" check_watchdog fix_watchdog
