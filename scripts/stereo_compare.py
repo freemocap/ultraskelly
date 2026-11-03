@@ -38,15 +38,17 @@ def compare(cpu: np.ndarray, hailo: np.ndarray) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--pairs", type=int, default=5)
+    parser.add_argument("--resolution", type=ZedResolution, default=ZedResolution.VGA, choices=list(ZedResolution),
+                        help="Eye size to capture; the CPU searches 64 disparities at VGA, 128 at larger sizes")
     parser.add_argument("--hef", default=DEFAULT_HEF)
     parser.add_argument("--save", type=Path, help="Folder for the last pair's images")
     args = parser.parse_args()
 
-    pairs = asyncio.run(capture_pairs(ZedResolution.VGA, args.pairs))
+    pairs = asyncio.run(capture_pairs(args.resolution, args.pairs))
     height, width = pairs[0].left.shape[:2]
     rectifier = zed_rectifier((width, height))
     shared = rectifier.rectification
-    cpu_matcher = SgbmMatcher(64, 5)
+    cpu_matcher = SgbmMatcher(64 if args.resolution == ZedResolution.VGA else 128, 5)
     hailo_matcher = HailoStereoNetMatcher(args.hef, (width, height), centre_row=shared.cy)
     band = hailo_matcher.band
     print(f"StereoNet band: rows {band.top}-{band.top + band.rows - 1} of {height}, scale {band.scale:.3f}, "
@@ -84,7 +86,7 @@ def main() -> None:
 
         args.save.mkdir(parents=True, exist_ok=True)
         canvas = np.hstack([left, depth_to_rgb(cpu), depth_to_rgb(hailo)])
-        path = args.save / "rectified-cpu-stereonet.jpg"
+        path = args.save / f"rectified-cpu-stereonet-{args.resolution.lower()}.jpg"
         cv2.imwrite(str(path), cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR))
         print(f"Saved {path}")
 
