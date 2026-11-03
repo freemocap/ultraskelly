@@ -10,7 +10,7 @@ CBOR messages, encoded on the Pi with `freemocap-stream` and decoded in the brow
   mid-stream draws the next frame without earlier messages.
 - **Newest wins.** `robot_state`, each camera and the depth have their own latest-value slot, so a slow
   viewer receives fewer, newer messages and the bot never waits for it. Nothing is
-  encoded while no viewer is connected.
+  encoded that no connected viewer shows (see "What a viewer draws").
 - **Heartbeat.** A text `ping` gets a text `pong`; the client SDK sends it.
 
 ## `frame` messages
@@ -130,29 +130,36 @@ timestamps.
 
 ## What a viewer draws
 
-A viewer may tell the server what it draws, so the Pi encodes only the feeds someone shows.
-It sends one JSON text message on `/stream`, FreeMoCap's inbound display feedback
-(`TransportService.sendDisplayFeedback`) with one more field:
+A viewer may tell the server which views it shows, so the Pi encodes only the feeds someone
+draws. It sends one JSON text message on `/stream`:
 
 ```json
-{"frameNumber": 1234,
+{"kind": "views", "views": ["oak", "zed_left", "zed_right", "depth_frame"],
  "displayImageSizes": {"oak": {"width": 640, "height": 480},
-                       "zed_left": {"width": 317, "height": 178}, "zed_right": {"width": 317, "height": 178}},
- "kinds": ["depth_frame"]}
+                       "zed_left": {"width": 317, "height": 178}, "zed_right": {"width": 317, "height": 178}}}
 ```
 
-- `displayImageSizes`: every camera ID the viewer draws, with the size in device pixels it
-  draws it at. A camera that is not listed is not wanted. A stereo pair is wanted when
-  either eye is listed.
-- `kinds`: the application kinds the viewer wants besides `robot_state`, which always
-  flows. Today that is `depth_frame`.
-- `frameNumber`: the newest frame the viewer drew.
+- `views`: the camera IDs of the frame messages the viewer draws (`oak`, `zed_left`,
+  `zed_right`, `zed_rectified`, `zed_depth`) and `depth_frame` for the depth messages.
+  Each message replaces the viewer's previous list. `[]` means `robot_state` only, which
+  every viewer always gets. A frame message that carries two views, such as the ZED pair,
+  is sent when either is wanted. Unknown names are ignored.
+- `displayImageSizes` (optional): each camera view's drawn size in device pixels, as in
+  FreeMoCap's display feedback, so the server could encode at the drawn size; it may
+  ignore it.
 
-The dashboard sends it after every connect and whenever what it shows changes, at most
-every 250 ms: a tile scrolled out of view, a tile enlarged, the 3D depth turned off, or the
-page hidden, which asks for nothing. A viewer that never sends one gets every feed.
-`robot_state.cameras` keeps reporting every camera. Status: the dashboard sends it; the
-server does not act on it yet.
+A viewer that never sends one gets every feed, so older pages and tools keep working. The
+dashboard sends it after every connect and whenever what it shows changes, at most every
+250 ms: a tile scrolled out of view or enlarged, the 3D depth turned off, or the page
+hidden, which sends `[]`. Its heat map and 3D depth need only `depth_frame`, which carries
+its own colour image; its face point comes from `robot_state.face`. `robot_state.cameras`
+keeps reporting every camera.
+
+The server encodes a feed only while some viewer shows one of its views and sends each
+viewer only the views it shows. The ZED's `zed_rectified` and `zed_depth` preview and its
+`depth_frame` are encoded separately, each only while shown. A view just asked for gets
+the newest frame at once rather than at the camera's next one. The server does not use
+`displayImageSizes` yet: images go out at camera size.
 
 ## Checking a stream
 
