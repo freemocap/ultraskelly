@@ -487,6 +487,8 @@ VGA at 30 fps; depth quality may justify HD720.
   captured in later runs, had one. The node drops frames whose sampled rows are mostly
   zero bytes and counts them. If torn frames appear instead (stale data, not zeros),
   `options uvcvideo nodrop=0` in `/etc/modprobe.d/` makes the driver drop them.
+  Damaged frames also appeared when the reader fell behind: rectifying HD720 pairs in
+  the capture thread (136% of a core) lost 8 of 173 frames. Keep the capture loop light.
 
 With the bot (`--hardware --simulate-motors --no-window --zed`, OAK and pose at
 30 fps), a client on another computer over Wi-Fi received OAK frames and ZED pairs at
@@ -494,6 +496,34 @@ With the bot (`--hardware --simulate-motors --no-window --zed`, OAK and pose at
 watched. The bot process used 107% of a core, against about 70% without the ZED
 above, and the whole Pi 28% of four cores with no Chromium on the Pi. No throttling;
 52 °C. A ZED-only run streamed 7,141 frames in 4 minutes, none lost.
+
+**Rectification.** Stereolabs' factory calibration for this camera
+(`ultraskelly/calibration/zed/SN12395566.conf`, downloaded unmodified; see `SOURCE`)
+gives per resolution each eye's intrinsics and distortion, and for the pair a 63.0 mm
+baseline and a rotation (RX, CV, RZ) of 0.04°, 0.50° and −0.04°.
+`stereo_rectification.py` passes the rotation and translation to `cv2.stereoRectify`
+as written (zero-disparity, `alpha=0`), as Stereolabs' MIT-licensed zed-open-capture
+sample does. With the rotation transposed instead, matched features sat further from
+their rows (median |dy| 1.25 against 0.74 px at VGA, 3.0 against 1.15 px at HD720)
+and disparities changed by 12 px at HD720, so the convention matters for depth too.
+`python -m scripts.zed_row_alignment` checks a live pair:
+
+| Eyes | Matches | dy median, raw → rectified | \|dy\| median | 90th percentile |
+| --- | --- | --- | --- | --- |
+| VGA 672×376 | 72 | −5.66 → −0.31 px | 5.66 → 0.87 px | 2.28 px |
+| HD720 1280×720 | 142 | −11.48 → −0.84 px | 11.48 → 1.05 px | 3.78 px |
+
+Rectified, both eyes share a 339.8 px (VGA) or 683.3 px (HD720) focal length. The
+constant −0.84 px left at HD720 (−0.31 at VGA) is a tilt of about 0.07° that the
+factory file does not hold; a measured correction can remove it if depth needs it. The
+skull's eye sockets now hide most of each view (since the rebuild), so the matches lie
+in the small region both eyes see; repeat the check once the ZED is re-seated.
+
+Remapping is the expensive step. In OpenCV 5.0 on the Pi, one 672×376 colour image
+takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.6 and
+4.3 ms); a grey image 1.3 ms. Rectifying every pair at 30 fps would cost about 14% of
+a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
+off by default), and depth rectifies only the pairs it uses, at its own rate.
 
 ## Validation and limits
 

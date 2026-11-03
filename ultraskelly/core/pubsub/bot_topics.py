@@ -1,6 +1,7 @@
 import numpy as np
 from pydantic import ConfigDict
 
+from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectification
 from ultraskelly.core.pubsub.pubsub_abcs import TopicMessageABC, create_topic
 
 
@@ -22,6 +23,8 @@ class StereoFrameMessage(TopicMessageABC):
     right: np.ndarray  # RGB, the same size: the skeleton's right eye
     frame_number: int | None = None  # Counts camera frame periods, so a dropped frame skips a number
     timestamp: float | None = None  # Capture time in seconds on time.monotonic()'s clock, when known
+    # The camera both images now share, when they were rectified; None for the camera's own images.
+    rectification: StereoRectification | None = None
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,

@@ -1,0 +1,4 @@
+Stereolabs factory calibration for the ZED Mini with serial 12395566 (the camera in the skull's eye sockets).
+Downloaded unmodified on 2026-11-02 from https://calib.stereolabs.com/?SN=12395566
+SN12395566.conf sha256 91e090b528fd774a5ee702b9bbfb475442f0b051ac1468266b35df1a0e917646
+For another ZED, save https://calib.stereolabs.com/?SN=<serial> here as SN<serial>.conf.

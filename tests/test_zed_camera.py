@@ -14,6 +14,7 @@ from ultraskelly.core.bot.sensory.zed_camera_node import (
     find_zed_device,
     has_lost_rows,
 )
+from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectification
 from ultraskelly.core.pubsub.bot_topics import StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -123,6 +124,36 @@ def test_node_publishes_eye_pairs_drops_lost_frames_and_reopens_a_stopped_camera
     assert (third.right[0, 0, 0], third.timestamp) == (202, 9.0)
     assert node.frames_lost == 1 and node.frames_published == 3
     assert sources[0].closed and sources[1].closed and node.source is None
+
+
+def test_the_node_rectifies_each_pair_and_says_how():
+    class SwappingRectifier:
+        rectification = StereoRectification(width=EYE_WIDTH, height=HEIGHT, focal_length=10.0, cx=6.0, cy=4.0,
+                                            baseline=0.063, left_rotation=((1, 0, 0), (0, 1, 0), (0, 0, 1)))
+
+        def rectify(self, left, right):
+            return right, left
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        source = FakeSource()
+        node = ZedCameraNode(pubsub=bus, params=ZedCameraNodeParams(), open_source=lambda: source,
+                             to_rgb=luma_as_rgb, rectifier=SwappingRectifier())
+        node.source = source
+        pairs = bus.get_subscription(StereoFrameTopic)
+        running = asyncio.create_task(node.run())
+        source.frames.put((yuyv_pair(40, 200), 1.0))
+        pair = await asyncio.wait_for(pairs.get(), timeout=5)
+        node.stop()
+        source.frames.put(None)
+        await asyncio.wait_for(running, timeout=5)
+        bus.close()
+        return pair
+
+    pair = asyncio.run(scenario())
+
+    assert (pair.left[0, 0, 0], pair.right[0, 0, 0]) == (200, 40)
+    assert pair.rectification.baseline == 0.063
 
 
 def test_importing_the_zed_node_loads_no_camera_library():
