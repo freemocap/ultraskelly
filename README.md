@@ -38,8 +38,11 @@ uv run --locked python -m ultraskelly.replay --steps 80
 The default application command prints help. Replay feeds scripted targets into
 the real orientation and mouth coroutines with memory-only actuators and prints
 JSON lines of commanded state. It needs no camera, motors, browser, or API key.
-It uses wall-clock scheduling; it is a test harness, not yet a deterministic
-physics simulator. To save a run in PowerShell:
+`--serve` loops the targets and serves the live dashboard on http://127.0.0.1:8081
+instead; `--serve --people 3` replaces them with a synthetic camera showing three people,
+so the video, poses and target channel in [the stream guide](docs/stream.md) can be
+developed without the robot. It uses wall-clock scheduling; it is a test harness, not
+yet a deterministic physics simulator. To save a run in PowerShell:
 
 ```powershell
 uv run --locked python -m ultraskelly.replay --steps 400 | Set-Content -Encoding utf8 replay.jsonl
