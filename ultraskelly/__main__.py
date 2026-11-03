@@ -58,7 +58,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--no-oak-models", action="store_true",
-        help="With --hardware: run no models on the OAK's own chip (face detection, head pose, gaze, face landmarks).",
+        help="With --hardware: run no models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).",
     )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()

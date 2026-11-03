@@ -1,6 +1,6 @@
 """Luxonis OAK USB camera (such as the OAK-1): frames for the pose detector, and the models on the OAK's own chip.
 
-The OAK does its own image work: its ISP turns the image the right way up, its hardware
+The OAK does its own image work: its sensor reads the image out the right way up, its hardware
 encoder makes each frame's JPEG for the dashboard and the recorder, and a Sync node pairs
 the two on the chip, so the Pi neither flips nor encodes. With `models`, the OAK's neural
 engines also run Luxonis Model Zoo models: YuNet face detection on every frame, then head
@@ -46,6 +46,19 @@ RESOURCES = {"face_detection": (1, 4), "head_pose": (1, 1), "gaze": (1, 1), "fac
              "palm_detection": (1, 3), "hand_landmarks": (1, 2)}
 
 
+def turn_image(dai, camera) -> None:
+    """Turn the camera's image 180 degrees from its board's default, for an OAK mounted upside down.
+
+    An OAK-1's board already reads its sensor out turned 180 degrees (CameraImageOrientation.AUTO;
+    its IMX378 sits upside down on the board), so ROTATE_180_DEG shows what AUTO shows and the
+    sensor's own readout, NORMAL, is the turn. Done in the readout, it costs the chip nothing and
+    reaches every output: frames, JPEGs and the models' inputs. Neither depthai's camera features
+    nor a frame's transformation tell the readouts apart; scripts/check_oak_orientation.py compares
+    frames on the robot.
+    """
+    camera.setImageOrientation(dai.CameraImageOrientation.NORMAL)
+
+
 class OakModelParams(NodeParams):
     """The models on the OAK's chip: faces on every frame, and what is measured on them and on hands."""
 
@@ -78,7 +91,7 @@ class OakCameraNodeParams(NodeParams):
     fps: float = Field(default=30.0, gt=0.0, le=60.0)
     flip_camera: bool = Field(
         default=False,
-        description="Rotate camera image 180 degrees (for upside-down mounting); the OAK's ISP does it",
+        description="Turn the image 180 degrees from the board's default (an upside-down OAK), in the sensor's readout",
     )
     jpeg_quality: int | None = Field(
         default=80, ge=10, le=100,
@@ -110,6 +123,7 @@ class OakCameraNode(Node):
     # The results of recent frames by frame number, for consumers that need every frame's (results_for).
     recent_results: SkipValidation[dict[int, OakResultsMessage]] = Field(default_factory=dict, exclude=True)
     dropped: int = Field(default=0, exclude=True)  # Messages the event loop was too busy to take
+    models_error: str | None = Field(default=None, exclude=True)  # Why the OAK runs without its models
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: OakCameraNodeParams) -> "OakCameraNode":
@@ -130,7 +144,7 @@ class OakCameraNode(Node):
         camera = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
         camera.setOutputsNumFramesPool(params.frames_pool)
         if params.flip_camera:
-            camera.setImageOrientation(dai.CameraImageOrientation.ROTATE_180_DEG)
+            turn_image(dai, camera)
         size = (params.width, params.height)
         rgb = camera.requestOutput(size, dai.ImgFrame.Type.RGB888i, fps=params.fps)
         frames = rgb
@@ -153,14 +167,24 @@ class OakCameraNode(Node):
 
     def _build_models(self, dai, camera, models: OakModelParams) -> None:
         """YuNet on its own small camera output; the Script node cuts the crops out of full-size frames,
-        planar BGR like the networks take, so cropping converts nothing."""
+        planar BGR like the networks take, so cropping converts nothing. Every model is loaded
+        first: with one missing, the OAK runs none and the bot tracks with the Hailo alone."""
         pipeline = self.pipeline
         hands = models.hands_every is not None
+        names = ["face_detection", "head_pose", "gaze"]
+        names += ["face_landmarks"] if models.mesh_every is not None else []
+        names += ["palm_detection", "hand_landmarks"] if hands else []
+        try:
+            archives = {name: load_archive(name, models.model_cache) for name in names}
+        except RuntimeError as error:
+            self.models_error = str(error)
+            logger.error(f"Running the OAK without its models: {error}")
+            return
 
         def network(name: str, image_inputs: list | None = None):
             threads, shaves = models.resources[name]
             node = pipeline.create(dai.node.NeuralNetwork)
-            node.setNNArchive(load_archive(name, models.model_cache), shaves)  # The SHAVE count picks the blob
+            node.setNNArchive(archives[name], shaves)  # The SHAVE count picks the blob
             node.setNumInferenceThreads(threads)
             for port in image_inputs if image_inputs is not None else [node.input]:
                 port.setBlocking(True)  # Inside the chain nothing is dropped, so answers stay in step
@@ -246,6 +270,7 @@ class OakCameraNode(Node):
         return {
             "rates": rates,
             "chip": dict(self.chip),
+            "models_error": self.models_error,
             "faces_incomplete": 0 if self.assembler is None else self.assembler.incomplete,
             "missing": {} if self.assembler is None else dict(self.assembler.missing),
         }

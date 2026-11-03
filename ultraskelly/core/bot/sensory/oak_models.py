@@ -2,7 +2,8 @@
 
 Each is the zoo's build for RVC2, the OAK-1's Myriad X. They download once, with
 `python -m scripts.fetch_oak_models`, into MODEL_CACHE; after that the bot loads them from
-there without the internet. A missing model fails loudly at startup, naming that command.
+there without the internet. With a model missing, the OAK runs none of them and says why in
+the log and in robot_state.oak.models_error, naming that command; the bot still tracks.
 """
 import os
 from pathlib import Path

@@ -1051,7 +1051,7 @@ models on the same frames waits for a person in front of the robot (`scripts/com
 
 | On the OAK | Rate (one face, no hand in view) |
 | --- | --- |
-| 180° rotation in the ISP, the JPEG in the hardware encoder, each frame paired with its JPEG on the chip | 30 fps |
+| The 180° turn in the sensor's readout, the JPEG in the hardware encoder, each frame paired with its JPEG on the chip | 30 fps |
 | YuNet face detection, every frame | 30 fps |
 | Head pose and gaze, up to 2 faces, every second frame | 15 a second |
 | MediaPipe face landmarks (468), largest face, every fourth frame | 7.5 a second |
@@ -1064,7 +1064,10 @@ out of that same frame (`oak_script.py`) and chains head pose into gaze on the c
 chip finds in a frame is joined by frame number (`oak_results.py`) and travels in that frame's
 stream message ([stream guide](stream.md), "Faces" and "Hands"); the server holds an OAK frame
 up to 0.1 s for it. Models come from the zoo once (`python -m scripts.fetch_oak_models`) into
-`~/ultraskelly-models/oak-zoo/` and then load without the internet.
+`~/ultraskelly-models/oak-zoo/` and then load without the internet. With one missing and no
+internet, the OAK runs none of them and `robot_state.oak.models_error` names that command; on
+the robot, with an empty cache behind a dead proxy, frames still came at 30 fps and the
+Hailo's pose at 30 a second, and the bot stopped cleanly.
 
 **Pi CPU the OAK and the Hailo changes took off.** Per 30 fps frame on the Pi: the NumPy flip
 3.26 ms (9.8% of a core) and the JPEG 2.97 ms (8.9%) are gone. The Hailo's outputs now come as
@@ -1097,12 +1100,24 @@ own JPEGs (506 at 30.0 fps, none dropped or missed, all decoding).
 - A frame published in the same moment as another can be lost on a latest-value topic, so the
   server takes each frame's results from the OAK node by frame number.
 - "Device crashed" at bot shutdown: 9 of 9 restarts of this work and 4 of 4 of main stopped
-  cleanly, the OAK in 1.2-1.5 s.
+  cleanly, the OAK in 1.2-1.5 s. The two crash dumps from the morning of 2026-11-03 hold the
+  output of a Script node probe that had crashed the OAK minutes before; depthai reports a
+  crash at the next session's close.
 - depthai 3.x uploads usage events to Luxonis (device start and stop, model loads, chip load),
   queued in `~/.cache/depthai/telemetry`; the queue on the Pi was draining, so they were being
   sent. The bot and the OAK scripts now set `DEPTHAI_TELEMETRY=0` unless it is already set;
-  depthai then logs "Telemetry disabled via DEPTHAI_TELEMETRY". The crash dumps from this morning's two hold the output of a probe of mine that had
-  crashed the OAK minutes before; depthai reports a crash at the next session's close.
+  depthai then logs "Telemetry disabled via DEPTHAI_TELEMETRY".
+- From the merge (4af4a76) until the fix, the bot's OAK image was upside down, with the motors
+  off the robot: `setImageOrientation(ROTATE_180_DEG)` changes nothing on an OAK-1, whose
+  board already reads its sensor out turned 180° by default (`AUTO`; its IMX378 sits upside
+  down on the board, [luxonis/depthai#200](https://github.com/luxonis/depthai/issues/200)).
+  The coordinator found it from dashboard screenshots before and after the merge and two
+  frames, with and without the call, alike at +1.000. The sensor's own readout, `NORMAL`, is
+  the turn: on the robot its frame matched the default's turned 180° (+0.83, unshifted) and
+  not the default (-0.17), as the NumPy flip did before. Neither depthai's camera features
+  (`AUTO`) nor a frame's transformation tell the readouts apart, so
+  `scripts/check_oak_orientation.py` builds the bot's OAK pipeline with and without
+  `flip_camera` and compares the frames and the JPEG.
 
 **The target.** The head still steers by the Hailo's nose keypoint. YuNet's nose arrives 7-15 ms
 sooner (its output reaches the Pi 39-47 ms after capture; the Hailo's pose message 54 ms, the
@@ -1112,7 +1127,8 @@ a face fills the frame and no body is found; that and its accuracy wait for peop
 
 **Not yet checked:** with a person in front of the robot, the pose models on the same frames,
 the signs of head pose and gaze, handedness on this unmirrored camera, hand landmarks on a real
-hand, and the chip's load with two faces.
+hand, the chip's load with two faces, and that people stand upright in the OAK's image once
+it is back in the skull.
 
 ## Validation and limits
 

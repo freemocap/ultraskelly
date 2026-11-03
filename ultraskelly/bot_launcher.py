@@ -219,7 +219,8 @@ class BotLauncher(BaseModel):
                 pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
                 motor_tests=self.motor_tester,
                 # The OAK's own chip finds faces in the same frames.
-                results_camera=camera_name if oak_running and self.config.oak_camera.models is not None else None,
+                # Only while the OAK runs its models: without them no frame would ever get its results.
+                results_camera=camera_name if oak_running and oak.assembler is not None else None,
                 results_for=oak.results_for if oak_running else None,
                 oak_status=oak.status if oak_running else None,
             )

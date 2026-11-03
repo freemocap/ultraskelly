@@ -35,14 +35,14 @@ def launch_config(
         depth: With the ZED, also compute depth from its pair with this matcher (sgbm or stereonet).
         depth_previews: With depth, also stream it as colour images, besides the depth_frame messages.
         port: The dashboard's port.
-        oak_models: Run the face models on the OAK's own chip (face detection, head pose, gaze, face landmarks).
+        oak_models: Run the face and hand models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
     config = LaunchConfig(
         detector_type=DetectorType.HAILO_POSE,
         oak_camera=OakCameraNodeParams(
-            flip_camera=True,  # The OAK's image arrives upside down; its ISP turns it
+            flip_camera=True,  # The OAK sits upside down; its sensor reads the image out turned
             models=OakModelParams() if oak_models else None,
         ),
         hailo_pose_detector=HailoPoseDetectorParams(

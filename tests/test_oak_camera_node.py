@@ -3,6 +3,7 @@ import asyncio
 import time
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock, call
 
 import numpy as np
 import pytest
@@ -188,7 +189,7 @@ def test_a_palm_becomes_a_hand_crop_request_and_the_hand_joins_its_frame():
     hand_request = node.crop_requests.sent[1]
     [detection] = hand_request.detections
     assert (detection.label, detection.confidence, hand_request.sequence) == (5, 0.0, 9)
-    (x, y), (width, height), angle = detection.rect.center, detection.rect.size, detection.rect.angle
+    (x, _), (width, height), angle = detection.rect.center, detection.rect.size, detection.rect.angle
     assert x == pytest.approx(0.5, abs=0.04) and angle == pytest.approx(0.0)  # The anchor nearest the middle
     assert width * 640 == pytest.approx(height * 480)  # A square in pixels, normalized per axis
     assert published(node) == []
@@ -199,3 +200,32 @@ def test_a_palm_becomes_a_hand_crop_request_and_the_hand_joins_its_frame():
     [(topic, message)] = published(node)
     [hand] = message.hands
     assert topic is OakResultsTopic and (hand.presence, hand.handedness) == pytest.approx((0.95, 0.7))
+
+
+def test_flip_camera_reads_the_sensor_out_turned_from_the_oak_1s_default():
+    """An OAK-1's board already reads its sensor out turned 180 degrees (AUTO), so ROTATE_180_DEG
+    changes nothing there; the sensor's own readout is the turn (scripts/check_oak_orientation.py)."""
+    for flip_camera, turns in [(True, 1), (False, 0)]:
+        fake = MagicMock()
+        node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(flip_camera=flip_camera))
+        node.pipeline = MagicMock()
+
+        node._build(fake)
+
+        camera = node.pipeline.create.return_value.build.return_value
+        assert camera.setImageOrientation.call_args_list == [call(fake.CameraImageOrientation.NORMAL)] * turns
+
+
+def test_a_missing_model_leaves_the_oak_without_models_instead_of_stopping_the_bot(monkeypatch):
+    import ultraskelly.core.bot.sensory.oak_camera_node as oak
+
+    def missing(name, cache):
+        raise RuntimeError(f"OAK model {name} is not in {cache}")
+
+    monkeypatch.setattr(oak, "load_archive", missing)
+    node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(models=OakModelParams()))
+
+    node._build_models(dai=None, camera=None, models=node.params.models)  # Builds nothing: no pipeline is touched
+
+    assert node.assembler is None and "face_detection" not in node.queues
+    assert "is not in" in node.status()["models_error"]
