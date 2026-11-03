@@ -53,6 +53,7 @@ class ResultsAssembler:
         self.detections = 0
         self.pending: dict[int, Pending] = {}
         self.incomplete = 0  # Frames published without every answer
+        self.missing: dict[str, int] = {}  # Which answers those frames lacked: results, mesh, palms, hands
 
     def detected(
         self, sequence: int, timestamp: float | None, faces: FaceDetections, now: float,
@@ -117,7 +118,15 @@ class ResultsAssembler:
             frame = self.pending[sequence]
             if self.complete(frame) or now - frame.since > self.timeout:
                 del self.pending[sequence]
-                self.incomplete += not self.complete(frame)
+                if not self.complete(frame):
+                    self.incomplete += 1
+                    for answer, lacking in (
+                        ("results", frame.awaits_results and frame.results is None),
+                        ("mesh", frame.mesh_crop is not None and frame.mesh is None),
+                        ("palms", frame.awaits_palms and frame.palms is None),
+                        ("hands", frame.palms is not None and len(frame.hands) < len(frame.hand_crops)),
+                    ):
+                        self.missing[answer] = self.missing.get(answer, 0) + lacking
                 messages.append(self.message(frame))
         return messages
 

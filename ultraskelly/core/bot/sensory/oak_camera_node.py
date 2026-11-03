@@ -51,10 +51,12 @@ class OakModelParams(NodeParams):
 
     fps: float = Field(default=30.0, gt=0.0, le=60.0, description="Frames per second YuNet looks for faces in")
     score_threshold: float = Field(default=0.6, ge=0.0, le=1.0, description="Least YuNet score kept as a face")
-    max_faces: int = Field(default=3, ge=0, le=8, description="Most faces per frame measured for head pose and gaze")
+    # Defaults measured on the robot's OAK-1 with one face in view: with hands every sixth frame they
+    # keep its real-time CPU near 75%, leaving room for a second face (audit).
+    max_faces: int = Field(default=2, ge=0, le=8, description="Most faces per frame measured for head pose and gaze")
     measure_every: int = Field(default=2, ge=1, description="Head pose and gaze in one face detection of this many")
     mesh_every: int | None = Field(
-        default=2, ge=1,
+        default=4, ge=1,
         description="MediaPipe's 468 face landmarks, on the largest face, in one detection of this many; None: never",
     )
     hands_every: int | None = Field(
@@ -245,6 +247,7 @@ class OakCameraNode(Node):
             "rates": rates,
             "chip": dict(self.chip),
             "faces_incomplete": 0 if self.assembler is None else self.assembler.incomplete,
+            "missing": {} if self.assembler is None else dict(self.assembler.missing),
         }
 
     # The reader thread: everything below runs there, except _deliver, on the event loop.
