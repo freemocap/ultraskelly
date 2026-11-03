@@ -129,8 +129,9 @@ without stopping its motors, for example when killed, the motor board keeps its 
 command: `.venv/bin/python -m scripts.stop_motors` brakes them all.
 
 Add `--zed` to also capture the ZED Mini stereo camera in the skull's eye sockets: its
-left and right images (672×376 each at 30 fps) travel together in one `frame` message,
-as cameras `zed_left` and `zed_right`, and appear as two more video panels. Its IMU
+left and right images (672×376 each at 30 fps, sent at the size the dashboard draws them)
+travel together in one `frame` message, as cameras `zed_left` and `zed_right`, and appear
+as two more video panels. Its IMU
 (accelerometer and gyroscope, 794 samples a second) streams as `imu` messages for display
 and `--record`, never for control; `scripts/setup-pi.sh` installs the udev rule that lets
 the bot read it.

@@ -144,6 +144,17 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
     return jpeg.tobytes()
 
 
+def resize_with_opencv(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """`image` at `size` (width, height), averaging pixels; a uint16 depth image keeps exact values."""
+    import cv2
+
+    nearest = image.ndim == 2 and image.dtype == np.uint16
+    return cv2.resize(image, size, interpolation=cv2.INTER_NEAREST if nearest else cv2.INTER_AREA)
+
+
+SHRINK_BELOW = 0.75  # Viewers that all draw a feed at most this fraction of its size get it shrunk
+
+
 POSE_TRACKER = "yolov8_pose"
 KEYPOINT_NAMES = tuple(keypoint.name.lower() for keypoint in CocoKeypoint)
 KEYPOINT_COLUMNS = ("x", "y", "visibility")
@@ -171,10 +182,17 @@ def encode_camera_frame(
     poses: PoseDataMessage | None,
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
+    scale: float = 1.0,
+    resize: Callable[[np.ndarray, tuple[int, int]], np.ndarray] = resize_with_opencv,
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
-    together, and each person's keypoints in pixels of the first image. Pure CPU work,
-    safe to run in a worker thread."""
+    together, shrunk by `scale` when it is below 1, and each person's keypoints in pixels
+    of the first image (so frames with poses keep their size). Pure CPU work, safe to run
+    in a worker thread."""
+    if scale < 1:
+        cameras = [(camera, index, resize(image, (max(1, round(image.shape[1] * scale)),
+                                                  max(1, round(image.shape[0] * scale)))))
+                   for camera, index, image in cameras]
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
     trackers = person_trackers(camera, (width, height), poses)
@@ -343,6 +361,9 @@ class RuntimeServerNode(Node):
     node_status: SkipValidation[Callable[[], list[dict]]] = Field(default=lambda: [], exclude=True)
     encode_jpeg: SkipValidation[Callable[[np.ndarray, int], bytes]] = Field(
         default=encode_jpeg_with_opencv, exclude=True
+    )
+    resize: SkipValidation[Callable[[np.ndarray, tuple[int, int]], np.ndarray]] = Field(
+        default=resize_with_opencv, exclude=True
     )
     pose_camera: str | None = Field(default=None, description="Camera whose frames the pose detector reads")
     state_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)
@@ -551,6 +572,23 @@ class RuntimeServerNode(Node):
         frames = (self.params.depth_previews or not depth) and self._shown(feed.views)
         return frames, depth and self._shown(kind=DEPTH_KIND)
 
+    def _scale(self, feed: CameraFeed, size: tuple[int, int]) -> float:
+        """How small the viewers that draw the feed draw its images of `size` (width, height), as a
+        fraction of it; 1 sends them as they are. A viewer that gives no size gets them whole, and
+        a feed with guides or poses keeps its camera's pixels, which those are drawn in."""
+        if feed.overlay is not None or feed.name == self.pose_camera:
+            return 1.0
+        needed = 0.0
+        for viewer in self.viewers:
+            if viewer.display is None:
+                return 1.0
+            for camera in feed.views:
+                if camera in viewer.display.sizes:
+                    if (drawn := viewer.display.sizes[camera]) is None:
+                        return 1.0
+                    needed = max(needed, drawn[0] / size[0], drawn[1] / size[1])
+        return needed if needed <= SHRINK_BELOW else 1.0
+
     def _kick(self, feed: CameraFeed) -> None:
         """Start encoding the feed's pending frame, unless that is under way or nobody shows it."""
         if feed.pending is not None and feed.encoder is None and any(self._wanted(feed)):
@@ -577,9 +615,10 @@ class RuntimeServerNode(Node):
                 # Each image once: a depth frame's colour for both its messages, a camera frame's for the recorder too
                 jpegs = JpegCache(self.encode_jpeg, camera_frame)
                 if frames_shown:
+                    images = camera_images(camera_frame)
                     cameras = [
                         (camera, feed.index + offset, image)
-                        for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
+                        for offset, (camera, image) in enumerate(zip(feed.views, images))
                     ]
                     message = await asyncio.to_thread(
                         encode_camera_frame, cameras,
@@ -587,6 +626,7 @@ class RuntimeServerNode(Node):
                                       else feed.encoded),
                         timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                         poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
+                        scale=self._scale(feed, (images[0].shape[1], images[0].shape[0])), resize=self.resize,
                     )
                     feed.stream.publish(message)
                 if depth_shown:  # The depth itself, for depth tiles and 3D views

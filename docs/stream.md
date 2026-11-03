@@ -33,7 +33,8 @@ message was encoded or sent; a camera that reports none gets the encoding time.
 
 The stereo camera in the eye sockets sends its two eyes together: one frame message with
 cameras `zed_left` and `zed_right`, indices after the OAK's, at 30 per second, without
-trackers. They are the raw eyes, 672×376 each, as the camera sees them. Their frame
+trackers. They are the raw eyes as the camera sees them, 672×376 each, shrunk when every
+viewer draws them smaller (see "What a viewer draws"). Their frame
 number counts camera frame periods, so a frame lost in USB transfer skips a number, and
 the timestamp is when the frame's first USB packet arrived (the kernel's buffer time).
 
@@ -191,7 +192,15 @@ viewer only the cameras it draws and the kinds it wants. A depth frame's `depth_
 encoded only while some viewer wants it, and its preview (with `--depth-previews`) only
 while one draws `zed_rectified` or `zed_depth`. A camera just asked for gets its newest
 frame at once rather than at its next one. A text message without `displayImageSizes`
-changes nothing. The server does not use the sizes yet: images go out at camera size.
+changes nothing.
+
+The sizes set how large the images go out. When every viewer that draws a feed draws it at
+most three quarters of its camera's size, its images are encoded at the largest drawn size
+instead (each image's `image_size` says which): the Pi's dashboard draws the ZED eyes at
+317×178, so they go out at 318×178, 4.5 times fewer pixels. An enlarged tile reports its
+large size, and a viewer that gives no size gets the camera size. The OAK keeps its pixels
+whatever the size, because its keypoints and the guides in `robot_state.overlays` are in
+them. `depth_frame` and `robot_state.cameras` always describe the camera's own size.
 
 ## Checking a stream
 

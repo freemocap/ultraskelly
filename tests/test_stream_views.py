@@ -28,7 +28,9 @@ from ultraskelly.ui.runtime_server import (
     JpegCache,
     RuntimeServerNode,
     RuntimeServerParams,
+    TrackingOverlay,
     display_feedback,
+    resize_with_opencv,
 )
 
 SHARED = StereoRectification(width=8, height=6, focal_length=340.0, cx=4.0, cy=3.0, baseline=0.063,
@@ -37,14 +39,21 @@ PAIR, PREVIEW = ("zed_left", "zed_right"), ("zed_rectified", "zed_depth")
 
 
 class Encoder:
-    """Stands in for the JPEG encoder: names each image by its first value and remembers it."""
+    """Stands in for the JPEG encoder: names each image by its first value and remembers it and its size."""
 
     def __init__(self):
-        self.images = []
+        self.images, self.sizes = [], []
 
     def __call__(self, image, quality):
         self.images.append(int(image.flat[0]))
+        self.sizes.append((image.shape[1], image.shape[0]))
         return b"JPEG%d" % int(image.flat[0])
+
+
+def nearest(image, size):
+    """Stands in for the resize: nearest pixels, without OpenCV."""
+    width, height = size
+    return image[np.arange(height) * image.shape[0] // height][:, np.arange(width) * image.shape[1] // width]
 
 
 def oak(value, **fields):
@@ -76,8 +85,10 @@ def make_server(bus, encoder, *, previews=False, **options):
 
 
 def feedback(cameras, kinds=(), size=(640, 480)):
-    """Display feedback as the dashboard sends it: each camera drawn at `size`, and `kinds`."""
-    sizes = {camera: {"width": size[0], "height": size[1]} for camera in cameras}
+    """Display feedback as the dashboard sends it: each camera drawn at `size`, and `kinds`.
+    `cameras` may also map each camera ID to its own size."""
+    drawn = cameras if isinstance(cameras, dict) else dict.fromkeys(cameras, size)
+    sizes = {camera: {"width": width, "height": height} for camera, (width, height) in drawn.items()}
     return {"frameNumber": 7, "displayImageSizes": sizes, "kinds": list(kinds)}
 
 
@@ -136,6 +147,7 @@ def run(scenario, **options):
     async def hosted():
         bus, encoder = PubSubTopicManager.create(), Encoder()
         server = make_server(bus, encoder, **options)
+        server.resize = nearest
         pump = asyncio.create_task(server.pump())
         try:
             async with TestClient(TestServer(server.build_app())) as client:
@@ -257,6 +269,88 @@ def test_imu_batches_go_only_to_viewers_that_want_the_kind():
     plotted, drawn = run(scenario)
 
     assert plotted.count("imu") == 1 and "imu" not in drawn
+
+
+EYES = (672, 376)  # The ZED's eyes at VGA, width and height
+
+
+def eyes(value):
+    width, height = EYES
+    return StereoFrameMessage(left=np.full((height, width, 3), value, np.uint8),
+                              right=np.full((height, width, 3), value + 1, np.uint8))
+
+
+def sent_sizes(inbox):
+    """Each frame message's declared image sizes, by camera ID."""
+    return [{camera["id"]: tuple(camera["image_size"]) for camera in message["cameras"]}
+            for message in inbox.messages if message["kind"] == "frame"]
+
+
+def stream_eyes(viewers, **options):
+    """Publish one ZED pair to viewers that send the given feedback (None: none); return what the
+    first one got and the sizes encoded."""
+    async def scenario(bus, server, client, encoder):
+        inboxes = []
+        for drawn in viewers:
+            inbox = await connect(client, server)
+            if drawn is not None:
+                await inbox.socket.send_str(json.dumps(feedback(drawn)))
+                await until(lambda: inbox.viewer.display is not None)
+            inboxes.append(inbox)
+        await bus.publish(StereoFrameTopic, eyes(20))
+        await until(lambda: PAIR in inboxes[0].frames())
+        for inbox in inboxes:
+            await inbox.close()
+        return sent_sizes(inboxes[0]), encoder.sizes
+
+    return run(scenario, **options)
+
+
+def test_eyes_drawn_small_are_encoded_at_the_drawn_size():
+    sent, encoded = stream_eyes([{"zed_left": (317, 178), "zed_right": (317, 178)}])
+
+    assert sent == [{"zed_left": (318, 178), "zed_right": (318, 178)}]  # 4.5 times fewer pixels each
+    assert encoded == [(318, 178), (318, 178)]
+
+
+def test_one_drawn_eye_sets_the_pairs_size():
+    sent, _ = stream_eyes([{"zed_left": (317, 178)}, {"zed_right": (160, 90)}])
+
+    assert sent == [{"zed_left": (318, 178), "zed_right": (318, 178)}]  # The larger, for both eyes
+
+
+def test_an_enlarged_eye_or_a_viewer_without_sizes_gets_the_camera_size():
+    enlarged, _ = stream_eyes([{"zed_left": (317, 178)}, {"zed_left": (1238, 734)}])
+    unsized, _ = stream_eyes([{"zed_left": (317, 178)}, None])
+    nearly_whole, _ = stream_eyes([{"zed_left": (560, 313)}])  # 83%: resizing would cost about what it saves
+
+    assert enlarged == unsized == nearly_whole == [{"zed_left": EYES, "zed_right": EYES}]
+
+
+def test_the_oak_keeps_its_pixels_for_its_guides_and_poses():
+    async def scenario(bus, server, client, encoder):
+        viewer = await connect(client, server, {"oak": (160, 120)})
+        await bus.publish(FrameTopic, FrameMessage(frame=np.full((480, 640, 3), 10, np.uint8)))
+        await until(lambda: ("oak",) in viewer.frames())
+        await viewer.close()
+        return sent_sizes(viewer), encoder.sizes
+
+    sent, encoded = run(scenario, overlays={"oak": TrackingOverlay()}, pose_camera="oak")
+
+    assert sent == [{"oak": (640, 480)}] and encoded == [(640, 480)]  # Aim point and keypoints are in these pixels
+
+
+def test_the_resize_averages_colour_and_keeps_depth_values_exact():
+    pytest.importorskip("cv2", reason="OpenCV comes with the hardware extra")
+    colour = np.zeros((376, 672, 3), np.uint8)
+    colour[:, ::2] = 200  # Alternate columns: averaging gives about 100
+    depth_image = np.zeros((376, 672), np.uint16)
+    depth_image[:, ::2] = 1500
+
+    small_colour, small_depth = resize_with_opencv(colour, (336, 188)), resize_with_opencv(depth_image, (336, 188))
+
+    assert small_colour.shape == (188, 336, 3) and abs(int(small_colour.mean()) - 100) <= 1
+    assert small_depth.dtype == np.uint16 and set(np.unique(small_depth)) <= {0, 1500}
 
 
 def test_display_feedback_is_read_in_freemocaps_shape_with_kinds():
