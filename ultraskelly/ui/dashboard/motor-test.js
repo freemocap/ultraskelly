@@ -1,6 +1,8 @@
 // Motor test panel: moves one actuator at a time through /api/motor-test. The bot applies the
 // test limits and pauses tracking during each test; every test is answered once it has
 // finished, been stopped or been refused, and the answer is shown here.
+import { setText } from '/dom.js';
+
 const CENTER = 90;      // Degrees; the head's neutral angle
 const SERVO_STEP = 10;  // Degrees per nudge
 
@@ -139,11 +141,11 @@ export class MotorTestPanel {
     for (const name of ['pan', 'tilt']) {
       const value = state.motors?.commands?.[name]?.value;
       this.commands[name] = value ?? undefined;
-      this.shown[name].textContent = value == null ? '—' : `${value.toFixed(0)}°`;
+      setText(this.shown[name], value == null ? '—' : `${value.toFixed(0)}°`);
     }
     const test = state.motor_test;
     if (!test) return;
-    this.travel.textContent = signed(test.waist_travel);
+    setText(this.travel, signed(test.waist_travel));
     if (test.running && !this.running) this.show(`Running from another screen: ${test.running.description}`);
   }
 }

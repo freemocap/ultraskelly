@@ -2,7 +2,8 @@
 // (data-camera="oak") shows whichever camera the head steers by. Each image source, the set of camera
 // IDs one frame message carries, has its own newest-wins decode slot: while one of its frames decodes,
 // only its newest arrival waits, and no source holds up another. Frames whose tiles cannot be seen are
-// not decoded at all. People are drawn by tracker ID (docs/stream.md): `target` is the person the head
+// not decoded at all. A decoded picture waits for the page's frame (frameclock.js), which a tracking-camera
+// picture asks for at once. People are drawn by tracker ID (docs/stream.md): `target` is the person the head
 // follows, and its ring comes from that frame's `ultraskelly.target` channel.
 import { readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
 
@@ -16,20 +17,59 @@ const IGNORED = new Set(['zed_rectified', 'zed_depth']);  // ZED previews: depth
 
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
 
+// JPEG decoding. WebCodecs' ImageDecoder, where the page may use it (a secure context such as localhost on the
+// Pi), decodes the bytes as they are, in about half the time of the SDK's createImageBitmap on a Blob, which also
+// sends them through the browser process; elsewhere the SDK decodes, and so does every frame after one WebCodecs
+// could not. Either way each picture has the size its header gives and is closed once drawn or replaced.
+let webCodecs = typeof ImageDecoder === 'function';
+async function decodePictures(payload) {
+  if (webCodecs) {
+    try { return await decodeWithWebCodecs(payload); }
+    catch (problem) { webCodecs = false; console.warn('WebCodecs could not decode a camera frame; using createImageBitmap from now on', problem); }
+  }
+  return (await decodeImageBitmaps(payload)).map(image => ({...image, picture: image.bitmap}));
+}
+async function decodeWithWebCodecs(payload) {
+  const decoded = await Promise.allSettled(payload.images.map(async image => {
+    const decoder = new ImageDecoder({data: image.jpeg, type: 'image/jpeg'});
+    try { return (await decoder.decode()).image; } finally { decoder.close(); }
+  }));
+  const wrong = decoded.findIndex(({status, value}, i) =>
+    status === 'rejected' || value.displayWidth !== payload.images[i].width || value.displayHeight !== payload.images[i].height);
+  if (wrong >= 0) {
+    for (const {value} of decoded) value?.close();
+    throw decoded[wrong].reason ?? new Error(`JPEG dimensions disagree with the image header for ${payload.images[wrong].cameraId}`);
+  }
+  return payload.images.map((image, i) => ({...image, picture: decoded[i].value}));
+}
+
+// A tile that just drew: counted for its rate, live and not stale. A forced toggle leaves an unchanged class
+// alone, where add and remove would write it again with every frame.
+function counted(tile) {
+  tile.drawn += 1; tile.lastAt = performance.now();
+  tile.figure.classList.toggle('live', true); tile.figure.classList.toggle('stale', false);
+}
+
 function sizeCanvas(canvas, width, height) {
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
   return canvas.getContext('2d');
 }
 
-// One person's keypoints. The followed person (`target`) is drawn bold; everyone else thin and muted.
+// From coordinates in an image of `size` [width, height] to the canvas's pixels; no size, no scaling.
+function scaleFrom(ctx, size) {
+  return size?.[0] > 0 && size?.[1] > 0 ? [ctx.canvas.width / size[0], ctx.canvas.height / size[1]] : [1, 1];
+}
+
+// One person's keypoints, in the pixels of their channel's image_size. The followed person (`target`) is drawn
+// bold; everyone else thin and muted.
 function drawPerson(ctx, overlay, followed) {
   const column = name => overlay.columns.indexOf(name), width = overlay.columns.length;
-  const [x, y, visibility] = [column('x'), column('y'), column('visibility')];
+  const [x, y, visibility] = [column('x'), column('y'), column('visibility')], [sx, sy] = scaleFrom(ctx, overlay.imageSize);
   const point = row => {
     if (row == null) return null;
     const values = overlay.data.subarray(row * width, row * width + width);
     const seen = visibility < 0 || values[visibility] >= KEYPOINT_VISIBLE;
-    return seen && Number.isFinite(values[x]) && Number.isFinite(values[y]) ? [values[x], values[y]] : null;
+    return seen && Number.isFinite(values[x]) && Number.isFinite(values[y]) ? [values[x] * sx, values[y] * sy] : null;
   };
   const rowOf = new Map(overlay.names.map((name, row) => [name, row]));
   ctx.strokeStyle = followed ? COLORS.bone : COLORS.other; ctx.lineWidth = followed ? 3 : 1.5;
@@ -52,8 +92,8 @@ function drawPerson(ctx, overlay, followed) {
 }
 
 export class CameraTiles {
-  // root holds the tiles; enlarged = {element, canvas, label} shows one camera large.
-  constructor(root, enlarged) {
+  // root holds the tiles; enlarged = {element, canvas, label} shows one camera large; clock: the page's FrameClock.
+  constructor(root, enlarged, clock) {
     this.tiles = new Map();
     for (const figure of root.querySelectorAll('.tile[data-camera]')) {
       this.tiles.set(figure.dataset.camera, {figure, canvas: figure.querySelector('canvas'), label: figure.dataset.label, drawn: 0, lastAt: 0});
@@ -63,6 +103,9 @@ export class CameraTiles {
     this.trackingId = 'oak';   // Camera the head steers by: the one robot_state.overlays describes
     this.state = null;         // Latest robot_state: aim point, jaw zone and target
     this.slots = new Map();    // Source key -> {busy, waiting}
+    this.pending = new Map();  // Tile key -> {image, frame}: decoded, waiting for the page's frame
+    this.clock = clock;
+    clock.add(() => this.present());
     this.unknown = new Set();
     this.visible = new Set();
     this.onChange = null;      // Called when what the page shows changes (wanted views, docs/stream.md)
@@ -109,9 +152,7 @@ export class CameraTiles {
     slot.busy = true;
     try {
       for (let next = job; next; next = slot.waiting, slot.waiting = null) {
-        const images = await decodeImageBitmaps(next.payload);
-        try { for (const image of images) this.draw(image, next.frame); }
-        finally { for (const image of images) image.bitmap.close(); }
+        for (const image of await decodePictures(next.payload)) this.hold(image, next.frame);
       }
     } catch (problem) {
       console.error('Could not show a camera frame', problem);
@@ -125,33 +166,59 @@ export class CameraTiles {
     return this.enlargedId === key ? [tile.canvas, this.enlarged.canvas] : [tile.canvas];
   }
 
+  // A decoded picture waits for the page's next frame. When a newer one for the same tile comes first, the
+  // older is drawn at once rather than lost.
+  hold(image, frame) {
+    const key = this.keyOf(image.cameraId);
+    if (key == null) { image.picture.close(); return; }
+    const older = this.pending.get(key);
+    if (older) this.show(older);
+    this.pending.set(key, {image, frame});
+    if (image.cameraId === this.trackingId) this.clock.tracked();
+    else this.clock.changed();
+  }
+
+  show({image, frame}) {
+    try { this.draw(image, frame); }
+    finally { image.picture.close(); }
+  }
+
+  // The tiles' part of the page's frame: every picture that arrived since the last one.
+  present() {
+    for (const held of this.pending.values()) this.show(held);
+    this.pending.clear();
+    return false;
+  }
+
   draw(image, frame) {
     const key = this.keyOf(image.cameraId), tile = this.tiles.get(key);
     if (!tile) return;
     for (const canvas of this.canvasesFor(key)) {
       const ctx = sizeCanvas(canvas, image.width, image.height);
-      ctx.drawImage(image.bitmap, 0, 0);
+      ctx.drawImage(image.picture, 0, 0);
       this.drawGuides(ctx, image.cameraId, frame);
     }
-    tile.drawn += 1; tile.lastAt = performance.now();
-    tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
+    counted(tile);
   }
 
-  // A bitmap made elsewhere (the depth views) into a tile; the caller closes the bitmap.
-  showBitmap(key, bitmap) {
+  // A tile drawn elsewhere (the heat map, on its own WebGL canvas): count it, and copy it into the enlarged
+  // view when that shows this tile.
+  markDrawn(key) {
     const tile = this.tiles.get(key);
     if (!tile) return;
-    for (const canvas of this.canvasesFor(key)) sizeCanvas(canvas, bitmap.width, bitmap.height).drawImage(bitmap, 0, 0);
-    tile.drawn += 1; tile.lastAt = performance.now();
-    tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
+    if (this.enlargedId === key) sizeCanvas(this.enlarged.canvas, tile.canvas.width, tile.canvas.height).drawImage(tile.canvas, 0, 0);
+    counted(tile);
   }
 
-  // Aim point, jaw zone, people and the target ring, in the pixels of this camera's image. The ring
-  // is the target channel's row from the same frame; without one the head follows nobody.
+  // Aim point, jaw zone, people and the target ring over this camera's image. The ring is the target channel's row
+  // from the same frame; without one the head follows nobody. Each comes in its own pixels: the aim point and jaw
+  // zone in the camera's (robot_state.cameras), the keypoints and the ring in their channel's image_size. Each is
+  // scaled to the image as it arrived, which the server may send smaller than the camera's (docs/stream.md).
   drawGuides(ctx, cameraId, frame, guides = this.state?.overlays?.[cameraId]) {
     if (guides) {
-      const [aimX, aimY] = guides.aim, zone = guides.jaw_zone;
-      ctx.strokeStyle = COLORS.jaw; ctx.lineWidth = 1; ctx.strokeRect(aimX - zone, aimY - zone, 2 * zone, 2 * zone);
+      const camera = this.state?.cameras?.[cameraId], [sx, sy] = scaleFrom(ctx, camera && [camera.width, camera.height]);
+      const aimX = guides.aim[0] * sx, aimY = guides.aim[1] * sy, zoneX = guides.jaw_zone * sx, zoneY = guides.jaw_zone * sy;
+      ctx.strokeStyle = COLORS.jaw; ctx.lineWidth = 1; ctx.strokeRect(aimX - zoneX, aimY - zoneY, 2 * zoneX, 2 * zoneY);
       ctx.strokeStyle = COLORS.aim; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(aimX - 20, aimY); ctx.lineTo(aimX + 20, aimY); ctx.moveTo(aimX, aimY - 20); ctx.lineTo(aimX, aimY + 20); ctx.stroke();
     }
@@ -160,8 +227,9 @@ export class CameraTiles {
     for (const overlay of people) if (overlay.trackerId === 'target') drawPerson(ctx, overlay, true);  // On top
     const target = frame.target;
     if (target && target.cameraId === cameraId && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+      const [sx, sy] = scaleFrom(ctx, [target.width, target.height]);
       ctx.strokeStyle = COLORS.target; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(target.x, target.y, 20, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(target.x * sx, target.y * sy, 20, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
