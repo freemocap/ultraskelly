@@ -32,7 +32,8 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
   and mesh and the OAK's gaze ride on the head, each with a layer toggle (see Depth and
   Gaze).
 - **Tracking camera (OAK):** the video with the poses found in each frame, the aim
-  crosshair, jaw zone and target ring, drawn in the browser. The row under it shows the
+  crosshair, jaw zone and target ring, and the faces and hands the OAK's own chip finds
+  (see Faces and hands), drawn in the browser. The row under it shows the
   target state, pixel, face distance, whether the target is inside the jaw zone, its body
   angle and its age; a narrow tile drops the last of these. Without video, as in
   `replay --serve`, the tile shows the target on a grid.
@@ -41,7 +42,10 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
   reports it (`robot_state.face`): its distance from between the eyes, its position in the
   head frame, the OAK pixel it came from, the alignment that placed it and its age.
 - **Readout strip:** the time series (below), motor tests, and node health with the
-  message rates; a camera whose frames stop appears there too.
+  message rates and the OAK chip's own (`robot_state.oak`): its frames, faces found, head
+  poses, face meshes and hands measured a second, and in one row its two CPUs, LeonOS and
+  LeonRT, and its temperature, with its memory and any frames sent before all their
+  measurements came in the row's tooltip. A camera whose frames stop appears there too.
 - **Motor tests:** the strip card shows the running or last test and the net waist travel,
   with Open and Stop; Stop works with the panel closed. Open docks the motor test panel
   (`motor-test.js`) over the right of the 3D scene, so the skeleton stays in view. On a
@@ -145,3 +149,20 @@ pixel looked up in the ZED's depth), drawn in orange; the dashboard does not com
 Without a face point newer than 0.5 s, the ray is a dashed 3 m direction through the frame's
 `ultraskelly.target` pixel, and the head following nobody hides it. Camera poses are nominal
 until the camera bracket gives them, and the waist angle is not measured.
+
+## Faces and hands
+
+The OAK's own chip finds faces and hands ([the stream](stream.md#faces-found-by-the-oaks-own-chip)),
+and `faces.js` draws them over the tracking tile in the pixels the stream gives them in,
+scaled to the image as it arrives: each face's box and its five landmarks joined to the
+nose, the head-pose axes from the nose (red, green, blue, as OpenVINO's head-pose demos
+draw them), the gaze as a yellow arrow from between the eyes, and the 468-point face mesh
+as light dots; each hand's palm box, its 21 landmarks and bones, and its handedness score.
+The chip measures less often than it detects: head pose and gaze every second frame, the
+mesh every fourth, hands every sixth. A face ID names a face in one frame only, so each face
+keeps the measurements of the previous frame's face its box overlaps most, for 0.3 s (the
+mesh 0.5 s); hands stay until the next ones or for 0.25 s. The axes and handedness are the
+models' published conventions, not yet checked against a person in front of the robot, and
+the drawing takes the image as the stream sends it, upside down while the OAK's rotation
+setting has no effect. Against W7's 8 s clip from the robot and `replay --serve --people 3`
+on Windows, Chromium used 4% and 7% more than without them.

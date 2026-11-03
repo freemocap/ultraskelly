@@ -58,11 +58,13 @@ The robot runs on a Raspberry Pi 5 with Raspberry Pi OS Trixie (desktop). By def
 tracks people with a Luxonis OAK USB camera and YOLOv8 pose on a Hailo-8 AI HAT+, and
 drives a servo board at I²C `0x40` and a DC motor HAT at `0x60`; see
 [the hardware notes](docs/hardware.md). The OAK reads its frames out the right way up,
-encodes them on its own chip and runs face and hand models from Luxonis' Model Zoo: YuNet face detection on every frame, head
-pose, gaze and MediaPipe face landmarks on the faces it finds, and MediaPipe hands five times
-a second (`--no-oak-models` turns them off; what runs where, and why, is in the audit). Fetch
-the models once with `.venv/bin/python -m scripts.fetch_oak_models`; the bot then loads them
-without the internet, and without them it runs the OAK as a plain camera and says why. The original IMX500 AI camera remains available as
+encodes them on its own chip and runs face and hand models from Luxonis' Model Zoo: YuNet
+face detection on every frame, head pose, gaze and MediaPipe face landmarks on the faces it
+finds, and MediaPipe hands five times a second (`--no-oak-models` turns them off; what runs
+where, and why, is in the audit).
+`scripts/setup-pi.sh` fetches the models once (`.venv/bin/python -m scripts.fetch_oak_models`
+does it alone); the bot then loads them without the internet, and with one missing it runs
+the OAK as a plain camera and says why. The original IMX500 AI camera remains available as
 `DetectorType.POSE` in `ultraskelly/__main__bot.py`. depthai, the OAK's library, uploads
 usage events to Luxonis by default; the bot and the OAK scripts turn that off
 (`DEPTHAI_TELEMETRY=0`) unless the variable is already set.
@@ -82,17 +84,18 @@ It installs the packages, including the Hailo runtime; patches the Hailo driver
 replace them; turns on I²C and PCIe Gen 3; installs the system files kept in
 `scripts/pi-system/` (the OAK udev rule, a persistent journal synced every 10 s, a report
 of why the Pi last stopped, the hardware watchdog, Wi-Fi power save off); makes the
-desktop log in by itself and keep the screen on; installs uv and builds `.venv`; and
-installs the robot's services, disabled. The first sudo may ask for your password.
+desktop log in by itself and keep the screen on; installs uv and builds `.venv`; fetches
+the OAK's models into `~/ultraskelly-models/oak-zoo`; and installs the robot's services,
+disabled. The first sudo may ask for your password.
 Reboot when it says so; it is safe to re-run. `.venv` is built on the system Python
 because Picamera2, libcamera and the Hailo runtime with its pose model come from
 Raspberry Pi OS; the `hardware` extra adds the motor, OpenCV and OAK (`depthai`)
 packages. Installing the extra on Windows does not provide a Pi runtime.
 
-`scripts/setup-pi.sh --check` changes nothing. It reports every setting, why the Pi
-last stopped, the power and USB state, the Hailo-8, the I²C boards, Wi-Fi, and any git
-objects or network profiles a power loss emptied. Run it after a power loss or whenever
-something seems off.
+`scripts/setup-pi.sh --check` changes nothing. It reports every setting, the OAK's models
+among them, why the Pi last stopped, the power and USB state, the Hailo-8, the I²C boards,
+Wi-Fi, and any git objects or network profiles a power loss emptied. Run it after a power
+loss or whenever something seems off.
 
 ### Run the robot
 

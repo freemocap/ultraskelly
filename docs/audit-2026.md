@@ -408,6 +408,9 @@ With five settings removed by hand, the check reported them missing and the scri
 all five back. After the reboot every setting was in place (27 OK); the one warning,
 once the services had stopped, was the disconnected I2C boards. Not tested: a freshly
 imaged Pi, where the script also installs packages, uv and the virtual environment.
+It has since gained two settings: the ZED IMU's udev rule, and (2026-11-03) the OAK's
+models, which it fetches into `~/ultraskelly-models/oak-zoo` when one is missing; `--check`
+reads only that cache, offline. On the robot's Pi the check found all six there.
 
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
