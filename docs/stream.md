@@ -24,10 +24,11 @@ message was encoded or sent; a camera that reports none gets the encoding time.
 - `cameras`: one uncalibrated entry per image, with its ID (`oak`), index and `image_size`
   `[width, height]`. Images captured together travel in one message, one camera each (the
   ZED below).
-- `image`: the SkellyCam image payload with each camera's JPEG.
+- `image`: the SkellyCam image payload with each camera's JPEG. The OAK's is made by the
+  OAK's own hardware encoder (quality 80), so the Pi encodes none of them.
 - `trackers`: on the camera the pose detector reads (the OAK), one observation per person
-  found in that very image. Frames travel without trackers while the detector is stalled
-  (no pose message for 0.5 s).
+  found in that very image, then one per face the OAK's own chip found in it (below).
+  Frames travel without people while the detector is stalled (no pose message for 0.5 s).
 
 ### The ZED Mini (`--zed`)
 
@@ -74,6 +75,39 @@ keypoints. It is absent when the head follows nobody: no person, or the best per
 target keypoint is below the confidence threshold. Unlike `robot_state.target`, it belongs
 to the image it travels with, so draw this one over video.
 
+### Faces, found by the OAK's own chip
+
+With the OAK's models on (the default; `--no-oak-models` turns them off), YuNet looks for
+faces in every OAK frame on the OAK's chip, and the chip measures them: head pose, gaze and
+MediaPipe's 468 face landmarks. Each face travels in the frame message of the image it was
+found in, after the people. The bot holds an OAK frame up to 0.1 s for its faces, so no
+frame carries a neighbour's.
+
+| Field | Value |
+| --- | --- |
+| `tracker_id` | `face-<row>`, `<row>` its place among this frame's faces, best YuNet score first. Like people's, an ID names a face in one frame, not a person across frames |
+| `detector_type` | `yunet` |
+| `model_id` | none; `connection_groups` holds `face`, lines from each eye and mouth corner to the nose |
+
+Its channels, all in pixels of the OAK image (`camera_id` `oak`, `image_size` [640, 480]):
+
+| Kind | Rows | Columns | Meaning |
+| --- | --- | --- | --- |
+| `BOXES_2D` | 1, `face` | `x1`, `y1`, `x2`, `y2`, `confidence`, `detector_ran` | the face box, YuNet's score, and 1 |
+| `OVERLAY_2D` | 5: `right_eye`, `left_eye`, `nose`, `right_mouth`, `left_mouth` | `x`, `y`, `visibility` | YuNet's landmarks. Right and left are the person's own: facing the camera, their right eye is on the image's left. `visibility` is the face's score |
+| `ultraskelly.head_pose` | 1, `head` | `yaw_deg`, `pitch_deg`, `roll_deg` | the head pose network's Tait-Bryan angles in degrees, OpenVINO's head-pose-estimation-adas-0001: with X from the face's centre to the camera, Y to the right and Z up, yaw turns counterclockwise about Z, pitch counterclockwise about Y, roll clockwise about X; 0, 0, 0 faces the camera |
+| `ultraskelly.gaze` | 1, `gaze` | `x`, `y`, `z` | the gaze direction scaled to unit length, OpenVINO's gaze-estimation-adas: z from the point between the eyes to the camera, y vertical, x completing a right-handed set, so looking into the camera gives z near 1 |
+| `ultraskelly.face_mesh` | 468, unnamed | `x`, `y`, `z` | MediaPipe face landmarks in MediaPipe's order: `x`, `y` in pixels, `z` relative depth on the same scale, smaller toward the camera |
+
+The measurements share the chip, so they run on fewer frames than detection: head pose and
+gaze for up to 3 faces in every second frame, the face landmarks for the largest face in
+every second frame (`OakFaceParams`: `measure_every`, `max_faces`, `mesh_every`). In the
+other frames a face carries its box and landmarks only. A channel is absent, never
+zero-filled, when it was not measured. These axes are the models' published ones; their
+signs have not yet been checked against a person in front of the robot. `python -m
+ultraskelly.replay --serve --people N` sends synthetic faces in this format, measured on the
+same frames as the bot's.
+
 ## `robot_state` messages
 
 UltraSkelly's application kind, version 0, at 20 Hz while a viewer is connected. Motor
@@ -91,6 +125,7 @@ values are the commands sent, not measured positions.
 | `rates` | message rates in Hz: `servo_state`, `target`, `pose`, `face` with the face locator, and `imu` (batches) with the ZED |
 | `nodes` | each node's `name` and `state` (starting, running, stopped, crashed), with `error` when crashed |
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
+| `oak` | the OAK's own chip: `rates` per second over the last 2 s (`frames`; with its models `face_detection`, and `head_pose`, `gaze`, `face_landmarks` as faces measured per second), `chip` (`leon_os_cpu` and `leon_rt_cpu` from 0 to 1, `ddr_used_mib`, `ddr_total_mib`, `temperature_c`) and `faces_incomplete`, frames sent before all their measurements came. Null without the OAK |
 
 ## `depth_frame` messages
 

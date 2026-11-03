@@ -88,9 +88,12 @@ def test_serve_with_people_streams_several_people_with_the_followed_one_as_targe
 
     frames = asyncio.run(scenario())
 
-    positions = set()
+    positions, measured = set(), 0
     for frame in frames:
-        ids = [tracker["tracker_id"] for tracker in frame["trackers"]]
+        faces = [tracker for tracker in frame["trackers"] if tracker["tracker_id"].startswith("face-")]
+        assert [face["tracker_id"] for face in faces] == ["face-0", "face-1", "face-2"]  # Each person's face, best first
+        measured += any(channel["kind"] == "ultraskelly.head_pose" for channel in faces[0]["channels"])
+        ids = [tracker["tracker_id"] for tracker in frame["trackers"] if not tracker["tracker_id"].startswith("face-")]
         assert len(ids) == 3 and ids.count("target") == 1
         target = frame["trackers"][ids.index("target")]
         nose = np.frombuffer(target["channels"][0]["data"], "<f4")[:2]
@@ -99,3 +102,4 @@ def test_serve_with_people_streams_several_people_with_the_followed_one_as_targe
         positions.add(ids.index("target"))
         assert frame["cameras"][0]["id"] == "synthetic" and frame["image"][24 + 56:24 + 58] == b"\xff\xd8"
     assert len(positions) > 1  # The rows really were reordered
+    assert 0 < measured < len(frames)  # Head pose in some frames, as the OAK measures every second one
