@@ -8,7 +8,7 @@ import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
-from ultraskelly.core.bot.sensory.pose_common import CocoKeypoint, select_target
+from ultraskelly.core.bot.sensory.pose_common import CocoKeypoint, locate_target
 from ultraskelly.core.bot.sensory.yolov8_pose import Letterbox, PoseDetections, decode_yolov8_pose
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
@@ -143,8 +143,10 @@ class HailoPoseDetectorNode(DetectorNode):
             max_people=self.params.max_people,
         )
 
-    def _select_target(self, detections: PoseDetections) -> tuple[int | None, int | None, float | None]:
-        return select_target(
+    def _locate_target(
+        self, detections: PoseDetections
+    ) -> tuple[int | None, tuple[int | None, int | None, float | None]]:
+        return locate_target(
             keypoints=detections.keypoints,
             scores=detections.scores,
             target_keypoint=self.params.target_keypoint,
@@ -153,23 +155,28 @@ class HailoPoseDetectorNode(DetectorNode):
 
     def detect(self, image: np.ndarray) -> tuple[int | None, int | None, float | None]:
         """Detect poses in one RGB image and return the tracked keypoint and body angle."""
-        return self._select_target(self._infer(image))
+        return self._locate_target(self._infer(image))[1]
 
     async def _publish(self, detections: PoseDetections | None, frame: FrameMessage | None = None) -> None:
-        """Publish the target and full pose data detected in `frame`; None or no people means no target."""
+        """Publish the target and full pose data detected in `frame`; None or no people means no target.
+        The pose data carries the same target and the row of the person it belongs to."""
         if detections is None or detections.count == 0:
-            await self.pubsub.topics[TargetLocationTopic].publish(TargetLocationMessage())
-            await self.pubsub.topics[PoseDataTopic].publish(PoseDataMessage(frame=frame))
+            target = TargetLocationMessage()
+            await self.pubsub.topics[TargetLocationTopic].publish(target)
+            await self.pubsub.topics[PoseDataTopic].publish(PoseDataMessage(frame=frame, target=target))
             return
 
-        x, y, angle = self._select_target(detections)
-        await self.pubsub.topics[TargetLocationTopic].publish(TargetLocationMessage(x=x, y=y, angle=angle))
+        row, (x, y, angle) = self._locate_target(detections)
+        target = TargetLocationMessage(x=x, y=y, angle=angle)
+        await self.pubsub.topics[TargetLocationTopic].publish(target)
         await self.pubsub.topics[PoseDataTopic].publish(
             PoseDataMessage(
                 keypoints=detections.keypoints,
                 scores=detections.scores,
                 boxes=list(detections.boxes),
                 frame=frame,
+                target=target,
+                target_person=row,
             )
         )
 

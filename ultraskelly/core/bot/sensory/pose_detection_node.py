@@ -23,6 +23,7 @@ from ultraskelly.core.bot.sensory.camera_node import FrameMessage
 from ultraskelly.core.bot.sensory.pose_common import (  # re-exported for existing importers
     SKELETON_CONNECTIONS,
     CocoKeypoint,
+    locate_target,
     select_target,
 )
 
@@ -175,20 +176,21 @@ class PoseDetectorNode(DetectorNode):
 
         try:
             while not self.stop_event.is_set():
-                # Extract target from latest detection - using abstract detect method
-                x, y, angle = self.detect()  # Frame comes from callback
-
-                await self.pubsub.topics[TargetLocationTopic].publish(
-                    TargetLocationMessage(x=x, y=y, angle=angle)
+                # One snapshot of the latest detections (the camera callback replaces them), so the
+                # target and the pose data describe the same people.
+                keypoints, scores, boxes = self.latest_keypoints, self.latest_scores, self.latest_boxes
+                row, (x, y, angle) = locate_target(
+                    keypoints=keypoints,
+                    scores=scores,
+                    target_keypoint=self.params.target_keypoint,
+                    keypoint_threshold=self.params.keypoint_threshold,
                 )
+                target = TargetLocationMessage(x=x, y=y, angle=angle)
+                await self.pubsub.topics[TargetLocationTopic].publish(target)
 
-                # Publish full pose data for visualization
+                # Publish full pose data for visualization, with the same target
                 await self.pubsub.topics[PoseDataTopic].publish(
-                    PoseDataMessage(
-                        keypoints=self.latest_keypoints,
-                        scores=self.latest_scores,
-                        boxes=self.latest_boxes,
-                    )
+                    PoseDataMessage(keypoints=keypoints, scores=scores, boxes=boxes, target=target, target_person=row)
                 )
 
                 # Publish frames for UI
