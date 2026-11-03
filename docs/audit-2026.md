@@ -254,6 +254,36 @@ the bot from a non-interactive shell also exposed that background jobs inherit
 an ignored SIGINT; `python -m ultraskelly` now restores Ctrl+C and maps SIGTERM
 to the same clean shutdown.
 
+### Encoding only what viewers draw (2026-11-03)
+
+The server now reads each viewer's display feedback (docs/stream.md, "What a viewer
+draws"). It encodes a feed only while some viewer draws it, sends each viewer only that,
+and encodes the ZED's eyes at the largest size drawn when that is at most three quarters
+of the camera's. It waits on its topics instead of polling them every 5 ms. It also sends
+without permessage-deflate, which browsers negotiated and which deflated every JPEG and
+zlib payload again for nothing.
+
+Measured on the Pi with the bot at `--hardware --simulate-motors --zed --depth`, serving
+on localhost only, with the Pi's full-screen Chromium as the viewer: 30 s samples after
+30 s, main `eb16215` against `w4-stream-views` `ee61990`.
+
+| | Before | After |
+| --- | --- | --- |
+| Bot process | 1.60 cores | 1.22 cores |
+| Chromium on the Pi | 1.85 cores | 1.53 cores |
+| Whole Pi | 89.5% of 4 cores | 72.1% of 4 cores |
+| Sent to the dashboard | 3.9 MB/s | 2.9 MB/s |
+| Frames the dashboard drew, OAK and ZED | 22 and 22 a second of 30 | 30 and 30 |
+| Bot with no viewer | 0.66 cores | 0.68 cores |
+
+The dashboard asked for the OAK at 640×480, both eyes at 317×178 and `depth_frame`; the
+eyes went out at 318×178. The OAK keeps its pixels because the dashboard draws the aim
+point and jaw zone in them, from `robot_state.overlays`; it could shrink too once the
+dashboard scales those. Single samples; earlier samples of main with the dashboard
+differed by up to 0.06 cores. `robot_state`'s unchanging fields (overlays, the node list,
+the motor-test limits) are 570 of its 1443 bytes, but encoding them costs 36 µs a message,
+0.07% of a core at 20 Hz, so they still travel in every message.
+
 ### Hailo-8 driver warning storm and reset (2026-11-02)
 
 The Pi reset itself at 10:12 with the bot running. The previous boot's kernel
@@ -553,8 +583,9 @@ adapter in software with the waist at rest.
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK
 needs CUDA. `ZedCameraNode` finds its V4L2 capture node by the name the camera
-reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread, converts
-each eye to RGB and publishes both on `StereoFrameTopic`. Frame times are the kernel
+reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread and
+publishes them on `StereoFrameTopic` as they came (until 2026-11-03 it converted each
+eye to RGB first; see "One conversion per eye" below). Frame times are the kernel
 buffer timestamps, which uvcvideo takes on CLOCK_MONOTONIC: the clock of
 `time.monotonic()` and of the OAK's depthai timestamps. They mark the arrival of a
 frame's first USB packet, one transfer time (19 ms at VGA, 30 ms at HD720) before the
@@ -623,8 +654,9 @@ in the small region both eyes see; repeat the check once the ZED is re-seated.
 Remapping is the expensive step. In OpenCV 5.0 on the Pi, one 672×376 colour image
 takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.6 and
 4.3 ms); a grey image 1.3 ms. Rectifying every pair at 30 fps would cost about 14% of
-a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
-off by default), and depth rectifies only the pairs it uses, at its own rate.
+a core at VGA, and HD720 fell behind. So the node publishes raw pairs, and depth
+rectifies only the pairs it uses, at its own rate. (The node's own `rectify` option, off
+by default and used by nothing, was removed on 2026-11-03.)
 
 **Depth, CPU baseline.** `StereoDepthNode` (`--depth` with `--zed` or `--zed-only`)
 takes the newest pair at most 5 times a second, rectifies the left eye in colour and
@@ -796,6 +828,31 @@ NumPy's OpenBLAS thread pool spins after each call, like OpenCV's: the IMU node 
 sets `OPENBLAS_NUM_THREADS=1` before NumPy loads. Its effect on the whole bot is not
 measured yet: the robot was in use by the other workstreams.
 
+**One conversion per eye (2026-11-03).** The ZED node used to convert both eyes from YUYV
+to RGB 30 times a second, whether anything used them or not. The stream then converted
+each to BGR for its JPEG encoder, and depth converted them again to grey. Now
+`StereoFrameMessage` carries the camera's YUYV as it came, and each consumer converts
+what it needs once. The stream goes from YUYV straight to BGR in its encoding thread.
+Depth matches the two eyes' Y bytes as they are, with no colour conversion, and converts
+only the left eye to colour, for the image the depth belongs to (StereoNet, which matches
+colour, converts both). The face locator and the recorder are untouched: they read depth
+and the OAK's frames, whose contracts are unchanged. Timed on the Pi, which was busy,
+for both eyes at 30 frames a second with depth at 10 a second:
+
+| Path | Old | New |
+| --- | --- | --- |
+| With a viewer | 102-110 ms a second | 94-96 ms |
+| With no viewer | 71-78 ms | 39-40 ms |
+
+Depth's own share rose from 2.5 to 3.9-4.0 ms a frame: it now converts the left eye
+itself and remaps that eye's grey apart from its colour. Rectifying the left eye's
+chroma and converting at the small size instead took 5.1 ms, in part because building
+its chroma planes in NumPy is slow, so it was not kept. The larger cost on this path is
+JPEG-encoding both full-size eyes for a dashboard that draws them at 317×178: 4.8 ms a
+pair, 145 ms a second at 30 frames, against 2.2 ms (66 ms a second) for eyes halved
+first. Acting on the size a viewer reports it draws ("What a viewer draws" in
+`docs/stream.md`) would save that.
+
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 
 FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
@@ -887,6 +944,76 @@ from the OAK's best-guess pose: the face point landed 0.115 m from the ball's ce
 depth has nothing on that ray, it stayed a dashed direction. The poses of both cameras in the
 head are nominal, so the face point is an estimate until W2 measures it or the camera bracket
 gives the poses.
+
+### Dashboard work per frame (2026-11-03)
+
+The 3D scene had drawn for each of three unsynchronised inputs (the gaze each tracking frame,
+`robot_state`, the depth) from an animation loop that woke on every display frame; the readouts
+rebuilt about 40 elements on every `robot_state`; and the depth worker coloured the heat map
+pixel by pixel. Now the scene draws on demand at most once per tracking-camera frame, without
+multisampling on the Pi's GPU; text is written only where it changes, and node health and rates
+once a second; and the heat map is coloured on the GPU, its range taken from every 4th pixel
+([how](dashboard.md#frame-rate-on-the-pi)). The tiles had also rewritten their `live` and
+`stale` classes with every video frame: `classList.add` and `remove` set the attribute even when
+nothing changes, 200 mutation records a second on their own.
+
+Measured in headless Chrome on Windows at the Pi's layout, against a fake stream with a moving
+person: OAK and ZED frames at 30 a second, `robot_state` at 20 and the live depth sample at 10, on
+independent clocks as on the Pi. One 8 s run each, the commit before (8e98317) against this one:
+
+| Per second | Before | After |
+| --- | --- | --- |
+| 3D renders | 32 | 28 |
+| Animation-frame callbacks | 60 | 36, and 13 timers |
+| DOM mutation records | 645 | 81 |
+| Layout and style recalculation | 16.0 ms | 4.3 ms |
+| Renderer process | 0.38 cores | 0.31 cores |
+| Idle (head held, target fixed, no depth): renders, callbacks, mutations | 1, 60, 483 | 0, 0, 1 |
+
+The depth worker's round trip fell from 3.1 to 1.9 ms a frame. The GPU heat map matches the
+old colouring within 3 of 255 levels on both of W2's samples, unknown pixels stay black, and
+the enlarged copy is identical. The 81 remaining mutation records are text that changes: the
+target pixel, the face position and age, the commanded angles. An orbit drag ends where it
+did before and settles as fast, with half the renders. On the Pi this commit alone barely
+moved Chromium's total (below).
+
+### Dashboard CPU on the Pi (2026-11-03)
+
+W2 measured Chromium at about 186% of a core with main's dashboard open, against about 106%
+before the time-series milestone, and the bot's depth slowing from 17 to 36 ms a frame. With
+`ps`, the Pi's own dashboard window (main's dashboard, the bot from the service, nobody
+touching either) used 1.75 to 1.81 cores, by thread: the renderer's main thread 0.60, its
+image decoding 0.26, its compositor 0.09, the depth worker 0.06, the GPU process's main
+thread 0.41 and compositor 0.06, the browser 0.20, the network service 0.06. The bot used
+about 1.6 cores, so the Pi's four cores were about 90% busy.
+
+What it spent them on, from the DevTools profiler and from switching parts off (Windows,
+headless Chrome with its CPU slowed four times, which keeps the main thread as busy as the
+Pi's): the 3D scene, 67 draw calls a render, 64 of them the skeleton's separate meshes; the
+video tiles, decoded by the SDK through a `Blob`, which copies every JPEG through the browser
+process; about 60 page frames a second, because the cameras, `robot_state`, the depth and
+the IMU each drew on their own; the time series, redrawn 10 times a second; and a console
+warning for each `imu` message, a kind the dashboard had not registered.
+
+f60f561 draws the page once per tracking-camera frame, decodes with WebCodecs, merges the
+skeleton (17 draw calls) and draws the time series 4 times a second ([how](dashboard.md#frame-rate-on-the-pi)).
+Against a fake stream with the Pi's rates (OAK and ZED 30 a second on their own clocks,
+`robot_state` 20, depth 10, IMU 15):
+
+| | main (e15087d) | f60f561 |
+| --- | --- | --- |
+| Pi, headless Chromium on its GPU, `ps` over 60 s | 1.57 cores: renderer 0.77, GPU 0.62, browser 0.13 | 1.17 cores: renderer 0.45, GPU 0.63, browser 0.03 |
+| Windows, headless Chrome | 0.69 cores, main thread 134 ms a second, 60 page frames a second | 0.50 cores, 80 ms, 30 frames |
+
+One run each on the Pi, with the bot not running (its service was waiting for the robot lock
+this measurement held, see below). The GPU process did not fall: what it spends 0.6 cores on
+is the next question, after the Pi's rebuild. The largest remaining cost is likely the ZED's
+two 672×376 eyes, decoded 30 times a second each to be drawn at 317×178: encoding them at the
+drawn size, as the display feedback allows, would also save the bot's encoding.
+
+Holding `/run/lock/ultraskelly-robot.lock` keeps the bot service from starting
+(`run-bot.sh` exits 75 and systemd retries), even for a measurement that uses no hardware;
+this one kept the dashboard without the bot for about four minutes.
 
 ## Validation and limits
 

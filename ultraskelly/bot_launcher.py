@@ -37,7 +37,9 @@ from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, Ster
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.core.bot.sensory.zed_imu_node import ZedImuNode, ZedImuNodeParams
 from ultraskelly.ui.cv2_ui import UINode, UINodeParams
-from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
+from ultraskelly.ui.runtime_server import (
+    RuntimeServerNode, RuntimeServerParams, TrackingOverlay, encode_jpeg_with_opencv,
+)
 from ultraskelly.core.pubsub.bot_topics import DepthFrameTopic, FrameTopic, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
@@ -69,8 +71,9 @@ class LaunchConfig(NodeParams):
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
     )
     show_window: bool = Field(
-        default=True,
-        description="Show the OpenCV camera window; needs a desktop session. The dashboard works either way.",
+        default=False,
+        description="Also show the OpenCV camera window (`--window`), which needs a desktop session; "
+                    "the dashboard works either way.",
     )
     limits: ActuatorLimits = Field(
         default_factory=ActuatorLimits,
@@ -230,6 +233,9 @@ class BotLauncher(BaseModel):
                     frame_topic=FrameTopic,
                     commands=self.command_recorder,
                     configuration=self.config.model_dump(mode="json"),
+                    # The stream's encoder and quality: a frame both keep is encoded once.
+                    encode_jpeg=encode_jpeg_with_opencv,
+                    stream_jpeg_quality=self.config.runtime_server.jpeg_quality,
                 )
             )
         self.nodes.append(

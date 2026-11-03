@@ -54,11 +54,16 @@ Click a video tile to enlarge it over the 3D scene; click it again or press Esc 
 Strip charts of the last 30 s (`timeseries.js`), on the Pi's clock (`robot_state.time`):
 the head pan and tilt and the waist and jaw drive, as commanded; the target's offset from
 the aim point, which is the controllers' input; the face distance from the Pi's face
-locator; and the ZED's accelerometer and gyroscope, measured, once the stream carries
-them. No motor reports its position: the servos have no feedback and the DC motors no
-encoders, so there is no measured motor trace, and the panel says so. Each lane's header
-gives the newest values. The canvas redraws at most 10 times a second, only when something
-new arrived, at one point per pixel column (the first, lowest, highest and last value in it).
+locator; and the ZED's accelerometer (m/s²) and gyroscope (°/s), measured, from the `imu`
+messages ([the stream](stream.md#imu-messages)). The IMU's values are in its own sensor
+axes, which the lanes say: the ZED sits rolled, so gravity reads about (-6.8, 7.3, -1.2)
+m/s², and their place in the head frame is not measured. No motor reports its position:
+the servos have no feedback and the DC motors no encoders, so there is no measured motor
+trace, and the panel says so. Each lane's header gives the newest values. The canvas
+redraws at most 4 times a second, only when something new arrived, at one point per pixel
+column (the first, lowest, highest and last value in it). The IMU's 794 samples a second
+arrive in batches of about 53; each batch keeps its lowest and highest value per axis, and
+a missed batch breaks the line.
 
 ## Sizing
 
@@ -86,15 +91,36 @@ page is one scrolling column: 3D scene, OAK, ZED tiles, then the cards.
 
 The OAK video is drawn one to one. Each image source has its own newest-wins decode slot,
 so the ZED pair never starves the OAK. One depth image feeds the heat map and the 3D point
-cloud on the GPU. Covered or hidden tiles skip decoding. The 3D scene draws only when a
-command, the depth or the view changed, and the time series at most 10 times a second.
+cloud on the GPU. Covered or hidden tiles skip decoding. Where the page may use WebCodecs
+(a secure context, such as `localhost` on the Pi) the tiles decode their JPEGs with
+`ImageDecoder`, about twice as fast as the SDK's `createImageBitmap` on a `Blob`, which also
+copies each image through the browser process; elsewhere the SDK decodes them, and so does
+every frame after one that WebCodecs could not decode.
+
+Everything the page shows changes in one frame per tracking-camera frame
+(`frameclock.js`): a decoded OAK picture asks for the frame, and the ZED pictures, the heat
+map, the 3D scene, the readouts and the time series that changed since the last one draw in
+it too. The cameras, `robot_state`, the depth and the IMU arrive out of step, and each
+drawing on its own would make about twice as many frames for the browser to lay out and
+composite. A picture is never lost to this: when a newer one for the same tile comes before
+the frame, the older draws at once. Without tracking frames, changes draw at most once per
+the tracking camera's last frame period. Nothing runs while nothing changes.
+
+The 3D scene draws only when something in it changed (a command, the gaze, the depth or
+the view). The skeleton is merged into one mesh per moving part and material, so a render
+makes 17 draw calls instead of 67, with the same triangles. On the Pi's GPU (V3D) and on software renderers it draws without
+multisampling; `?antialias=1` or `?antialias=0` in the address decides instead. Readouts are
+written only where their text changes, node health and message rates refresh once a
+second, and the time series draws at most 4 times a second.
 
 ## Depth
 
 The ZED's `depth_frame` messages ([the depth stream](depth-stream.md)) are decoded in a
-worker (`depth-worker.js`): it inflates the millimetres, colours the heat map and decodes
-the rectified colour image, so the page itself only copies bytes out of the stream and
-draws. Newest wins: while the worker is busy, only the newest frame waits.
+worker (`depth-worker.js`): it inflates the millimetres, takes the heat map's range from
+every 4th pixel and decodes the rectified colour image, so the page itself only copies
+bytes out of the stream and draws. The heat map is coloured on the GPU from the 16-bit
+millimetres (`heatmap.js`), with the legend's turbo colours. Newest wins: while the worker
+is busy, only the newest frame waits.
 
 - **Heat map:** each frame from its 2nd to its 98th percentile, red near and blue far, the
   range eased between frames. The legend under the tiles gives that range in metres, the

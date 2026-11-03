@@ -18,7 +18,7 @@ import numpy as np
 
 from scripts.zed_row_alignment import capture_pairs
 from ultraskelly.core.bot.sensory.hailo_stereonet import DEFAULT_HEF, HailoStereoNetMatcher
-from ultraskelly.core.bot.sensory.stereo_depth_node import SgbmMatcher, depth_millimetres, rgb_to_grey_with_opencv
+from ultraskelly.core.bot.sensory.stereo_depth_node import SgbmMatcher, depth_millimetres
 from ultraskelly.core.bot.sensory.stereo_rectification import zed_rectifier
 from ultraskelly.core.bot.sensory.zed_camera_node import ZedResolution
 
@@ -36,6 +36,8 @@ def compare(cpu: np.ndarray, hailo: np.ndarray) -> str:
 
 
 def main() -> None:
+    import cv2
+
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--pairs", type=int, default=5)
     parser.add_argument("--resolution", type=ZedResolution, default=ZedResolution.VGA, choices=list(ZedResolution),
@@ -57,7 +59,7 @@ def main() -> None:
     try:
         for pair in pairs:
             left, right = rectifier.rectify(pair.left, pair.right)
-            grey_left, grey_right = rgb_to_grey_with_opencv(left), rgb_to_grey_with_opencv(right)
+            grey_left, grey_right = (cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) for image in (left, right))
             started = time.perf_counter()
             cpu = depth_millimetres(cpu_matcher.disparity(grey_left, grey_right), shared, MIN_DEPTH, MAX_DEPTH,
                                     cpu_matcher.search_range)
@@ -80,8 +82,6 @@ def main() -> None:
     for name, values in timings.items():
         print(f"{name}: {1000 * np.median(values):.0f} ms per pair (median of {len(values)})")
     if args.save:
-        import cv2
-
         from ultraskelly.ui.runtime_server import depth_to_rgb
 
         args.save.mkdir(parents=True, exist_ok=True)

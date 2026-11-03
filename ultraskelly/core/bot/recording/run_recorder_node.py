@@ -2,7 +2,8 @@
 
 Each run gets its own folder under `RunRecorderParams.folder`:
 
-    <camera>.avi         every camera frame the bot saw (after any flip), Motion JPEG
+    <camera>.avi         every camera frame the bot saw (after any flip), Motion JPEG: the same
+                         JPEG bytes the stream sends, so each frame is encoded once
     <camera>_frames.csv  per video frame: its index, the camera's frame number, capture and arrival times
     poses.jsonl          per detector result: the frame it came from and each person's keypoints
     targets.csv          every target the detector published; empty x and y when nobody was seen
@@ -38,7 +39,9 @@ from pydantic import Field, SkipValidation
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import ActuatorCommand, CommandRecorder
 from ultraskelly.core.bot.recording.microphone import Microphone, find_microphone
+from ultraskelly.core.bot.recording.mjpeg_avi import MjpegAviWriter
 from ultraskelly.core.pubsub.bot_topics import (
+    FrameMessage,
     ImuTopic,
     PoseDataMessage,
     PoseDataTopic,
@@ -52,23 +55,18 @@ logger = logging.getLogger(__name__)
 
 IMU_HEADER = "time,imu_time,ax,ay,az,gx,gy,gz,temperature"
 IMU_FORMAT = ("%.6f", "%.6f", "%.4f", "%.4f", "%.4f", "%.3f", "%.3f", "%.3f", "%.2f")
+DEFAULT_JPEG_QUALITY = 80  # As the stream's; see RunRecorderParams.jpeg_quality
 
 
 class VideoWriter(Protocol):
-    def write(self, frame: np.ndarray) -> None: ...
+    def write(self, jpeg: bytes) -> None: ...
 
     def release(self) -> None: ...
 
 
-def open_mjpeg_writer(path: Path, size: tuple[int, int], fps: float, quality: int) -> VideoWriter:
-    """An OpenCV Motion JPEG writer taking BGR frames of `size` (width, height)."""
-    import cv2
-
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter.fourcc(*"MJPG"), fps, size)
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open {path} for writing")
-    writer.set(cv2.VIDEOWRITER_PROP_QUALITY, quality)  # Ignored by backends without the property
-    return writer
+def open_mjpeg_writer(path: Path, size: tuple[int, int], fps: float) -> VideoWriter:
+    """A Motion JPEG AVI of `size` (width, height) that stores each frame's JPEG bytes as they are."""
+    return MjpegAviWriter(path, size, fps)
 
 
 def pose_record(message: PoseDataMessage, received: float) -> dict:
@@ -110,7 +108,11 @@ class RunRecorderParams(NodeParams):
     folder: Path = Field(
         default_factory=lambda: Path.home() / "ultraskelly-recordings", description="Each run gets a new folder in here"
     )
-    jpeg_quality: int = Field(default=90, ge=10, le=100)
+    jpeg_quality: int | None = Field(
+        default=None, ge=10, le=100,
+        description="None: the stream's JPEG quality, so the stream and the recording share one encoding of "
+                    "each frame; another value encodes the recording separately",
+    )
     nominal_fps: float = Field(
         default=30.0, gt=0.0, description="Frame rate in the video's header; the frames table has the real times"
     )
@@ -130,6 +132,9 @@ class RunRecorderNode(Node):
     subscriptions: SkipValidation[dict[str, TopicSubscriptionQueue]] = Field(default_factory=dict, exclude=True)
     commands: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     open_writer: SkipValidation[Callable[..., VideoWriter]] = Field(default=open_mjpeg_writer, exclude=True)
+    # Encodes a frame that came without the camera's own JPEG; FrameMessage.jpeg_bytes shares the result.
+    encode_jpeg: SkipValidation[Callable[[np.ndarray, int], bytes]] = Field(exclude=True)
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY
     folder: Path | None = None
     started: datetime | None = None
     started_at: float | None = None
@@ -151,10 +156,15 @@ class RunRecorderNode(Node):
         camera: str,
         frame_topic: type[PubSubTopicABC],
         commands: CommandRecorder | None,
+        encode_jpeg: Callable[[np.ndarray, int], bytes],
+        stream_jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         configuration: dict | None = None,
         open_writer: Callable[..., VideoWriter] = open_mjpeg_writer,
     ) -> "RunRecorderNode":
-        """Factory method: subscribes to the camera's frames, the detections and the head's state."""
+        """Factory method: subscribes to the camera's frames, the detections and the head's state.
+
+        `encode_jpeg` and `stream_jpeg_quality` are the stream's, so a frame both keep is encoded once.
+        """
         node = cls(
             pubsub=pubsub,
             params=params,
@@ -162,6 +172,8 @@ class RunRecorderNode(Node):
             configuration=configuration or {},
             commands=commands,
             open_writer=open_writer,
+            encode_jpeg=encode_jpeg,
+            jpeg_quality=stream_jpeg_quality if params.jpeg_quality is None else params.jpeg_quality,
         )
         node.frames = pubsub.get_subscription(frame_topic)
         node.subscriptions = {
@@ -192,6 +204,12 @@ class RunRecorderNode(Node):
             while not subscription.empty():
                 self._enqueue(kind, now, subscription.get_nowait())
 
+    async def _forward(self, kind: str, subscription: TopicSubscriptionQueue) -> None:
+        """Queue each message for the writer as it arrives."""
+        while True:
+            message = await subscription.get()
+            self._enqueue(kind, time.monotonic(), message)
+
     def _write_all(self) -> None:
         """The writer thread. A failure ends the recording but never the run: later items
         are dropped, and the queue keeps draining so shutdown cannot wait on a full one."""
@@ -221,14 +239,14 @@ class RunRecorderNode(Node):
             while (item := self.pending.get()) is not None:
                 kind, received, message = item
                 if kind == "frame":
+                    frame: FrameMessage = message
                     if video is None:
-                        height, width = message.frame.shape[:2]
+                        height, width = frame.frame.shape[:2]
                         video = self.open_writer(
                             self.folder / f"{self.camera}.avi", (width, height), self.params.nominal_fps,
-                            self.params.jpeg_quality,
                         )
                         files.callback(video.release)
-                    video.write(np.ascontiguousarray(message.frame[..., 2::-1]))  # RGB to BGR
+                    video.write(frame.jpeg_bytes(self.jpeg_quality, self.encode_jpeg))
                     frames.writerow((self.counts.get("frame", 0), message.frame_number, message.timestamp, received))
                     if previous_number is not None and message.frame_number is not None:
                         self.frames_missed += max(0, message.frame_number - previous_number - 1)
@@ -299,11 +317,16 @@ class RunRecorderNode(Node):
         """Record until stopped, then write everything still queued."""
         self._start()
         logger.info(f"Recording this run to {self.folder}")
+        forwarders = [
+            asyncio.create_task(self._forward(kind, subscription))
+            for kind, subscription in [("frame", self.frames), *self.subscriptions.items()]
+        ]
         try:
-            while not self.stop_event.is_set():
-                self._drain()
-                await asyncio.sleep(0.005)
+            await self.stop_event.wait()
         finally:
+            for forwarder in forwarders:
+                forwarder.cancel()
+            await asyncio.gather(*forwarders, return_exceptions=True)
             self._drain()
             await asyncio.to_thread(self._finish)
             logger.info(f"RunRecorderNode stopped; saved {self.counts.get('frame', 0)} frames to {self.folder}")

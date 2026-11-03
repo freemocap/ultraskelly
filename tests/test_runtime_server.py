@@ -110,7 +110,7 @@ def test_dashboard_assets_are_served_locally_with_explicit_types():
         server = make_server(bus, encoded=[])
         served = {}
         async with TestClient(TestServer(server.build_app())) as client:
-            for path in ["/", "/dashboard.js", "/dashboard.css", "/scene.js", "/tiles.js", "/depth.js", "/depth3d.js", "/gaze.js", "/timeseries.js", "/depth-worker.js", "/colormap.js", "/style.css", "/skeleton.js",
+            for path in ["/", "/dashboard.js", "/dashboard.css", "/scene.js", "/tiles.js", "/depth.js", "/depth3d.js", "/gaze.js", "/timeseries.js", "/depth-worker.js", "/colormap.js", "/heatmap.js", "/dom.js", "/frameclock.js", "/style.css", "/skeleton.js",
                          "/vendor/three.module.js", "/vendor/three.core.js", "/vendor/OrbitControls.js",
                          "/vendor/freemocap-client.js", "/vendor/freemocap-client.js.map"]:
                 response = await client.get(path)
@@ -195,8 +195,9 @@ def test_a_stereo_pair_travels_as_one_frame_with_both_cameras():
         pump = asyncio.create_task(server.pump())
         async with TestClient(TestServer(server.build_app())) as client:
             socket = await connect_stream(client, server)
-            left, right = np.full((376, 672, 3), 3, np.uint8), np.full((376, 672, 3), 4, np.uint8)
-            await bus.publish(StereoFrameTopic, StereoFrameMessage(left=left, right=right, frame_number=8, timestamp=2.5))
+            yuyv = np.full((376, 2 * 672, 2), 128, np.uint8)  # As the ZED sends it: the eyes' Y are 3 and 4
+            yuyv[:, :672, 0], yuyv[:, 672:, 0] = 3, 4
+            await bus.publish(StereoFrameTopic, StereoFrameMessage(yuyv=yuyv, frame_number=8, timestamp=2.5))
             received = await receive_stream(socket, lambda got: got["frame"] and any(
                 state["cameras"]["zed_left"]["width"] for state in got["robot_state"]))
             await socket.close()
