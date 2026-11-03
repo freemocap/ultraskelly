@@ -1054,8 +1054,8 @@ models on the same frames waits for a person in front of the robot (`scripts/com
 | MediaPipe face landmarks (468), largest face, every fourth frame | 7.5 a second |
 | MediaPipe palm detection on the whole frame, every sixth frame; hand landmarks for up to 2 palms | 5 a second |
 
-With all of it the OAK's real-time CPU (LeonRT) runs at 75% and frames reach the Pi at 30 fps,
-44 ms after capture. The Pi decodes YuNet's boxes and the palms (NumPy, `yunet.py`,
+With all of it the OAK's real-time CPU (LeonRT) runs at 75-81% and frames reach the Pi at
+30 fps, 44 ms after capture. The Pi decodes YuNet's boxes and the palms (NumPy, `yunet.py`,
 `mediapipe_hands.py`) and sends each frame's crops back; a Script node on the OAK cuts them
 out of that same frame (`oak_script.py`) and chains head pose into gaze on the chip. What the
 chip finds in a frame is joined by frame number (`oak_results.py`) and travels in that frame's
@@ -1068,8 +1068,17 @@ up to 0.1 s for it. Models come from the zoo once (`python -m scripts.fetch_oak_
 the chip's 8-bit values with only the cells the decoder reads made real, bit for bit the FLOAT32
 values: HailoRT's host work per inference fell from 5.84 to 2.59 ms (9.7% of a core). Its
 letterbox padding is filled once. The OAK node waits on its outputs instead of polling every
-2 ms. In one batch with the dashboard watching, the bot with all the OAK's models used 1.04
-cores against main's 1.01 without them.
+2 ms. In one batch, same scene, ZED and depth on, the Pi's dashboard watching, 20 s each:
+
+| Bot | Bot process | Chromium | Whole Pi |
+| --- | --- | --- | --- |
+| main (`79f6d3c`) | 1.02 cores | 0.83 | 50% of 4 cores |
+| this work, all the OAK's models | 0.79 | 0.85 | 45% |
+| this work, `--no-oak-models` | 0.69 | 0.80 | 41% |
+
+The OAK's image work and the Hailo's outputs saved a third of a core; decoding YuNet and the
+palms and sending the faces cost a tenth back. A recorded run kept every frame with the OAK's
+own JPEGs (506 at 30.0 fps, none dropped or missed, all decoding).
 
 **Found on the way.**
 - depthai's default threads and SHAVEs let one network starve the others (0 fps); each network
@@ -1084,12 +1093,13 @@ cores against main's 1.01 without them.
   far more than a fixed one, which is what sets the rates above.
 - A frame published in the same moment as another can be lost on a latest-value topic, so the
   server takes each frame's results from the OAK node by frame number.
-- "Device crashed" at bot shutdown: 6 of 6 restarts of this branch and 4 of 4 of main stopped
-  cleanly. The crash dumps from this morning's two hold the output of a probe of mine that had
+- "Device crashed" at bot shutdown: 9 of 9 restarts of this work and 4 of 4 of main stopped
+  cleanly, the OAK in 1.2-1.5 s. The crash dumps from this morning's two hold the output of a probe of mine that had
   crashed the OAK minutes before; depthai reports a crash at the next session's close.
 
-**The target.** The head still steers by the Hailo's nose keypoint. YuNet's nose arrives about
-15 ms sooner (its output reaches the Pi 39-47 ms after capture, the Hailo's pose about 60), but
+**The target.** The head still steers by the Hailo's nose keypoint. YuNet's nose arrives 7-15 ms
+sooner (its output reaches the Pi 39-47 ms after capture; the Hailo's pose message 54 ms, the
+median of 506 in a recorded run, 58 ms at the 90th percentile), but
 YuNet finds only faces turned toward the camera and gives no body angle. It could take over when
 a face fills the frame and no body is found; that and its accuracy wait for people in view.
 
