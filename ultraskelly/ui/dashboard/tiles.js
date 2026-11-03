@@ -19,11 +19,17 @@ const hasTarget = state => state?.target && state.target.x != null && state.targ
 
 // JPEG decoding. WebCodecs' ImageDecoder, where the page may use it (a secure context such as localhost on the
 // Pi), decodes the bytes as they are, in about half the time of the SDK's createImageBitmap on a Blob, which also
-// sends them through the browser process; elsewhere the SDK decodes. Either way each picture has the size its
-// header gives and is closed once drawn or replaced.
-const WEBCODECS = typeof ImageDecoder === 'function';
+// sends them through the browser process; elsewhere the SDK decodes, and so does every frame after one WebCodecs
+// could not. Either way each picture has the size its header gives and is closed once drawn or replaced.
+let webCodecs = typeof ImageDecoder === 'function';
 async function decodePictures(payload) {
-  if (!WEBCODECS) return (await decodeImageBitmaps(payload)).map(image => ({...image, picture: image.bitmap}));
+  if (webCodecs) {
+    try { return await decodeWithWebCodecs(payload); }
+    catch (problem) { webCodecs = false; console.warn('WebCodecs could not decode a camera frame; using createImageBitmap from now on', problem); }
+  }
+  return (await decodeImageBitmaps(payload)).map(image => ({...image, picture: image.bitmap}));
+}
+async function decodeWithWebCodecs(payload) {
   const decoded = await Promise.allSettled(payload.images.map(async image => {
     const decoder = new ImageDecoder({data: image.jpeg, type: 'image/jpeg'});
     try { return (await decoder.decode()).image; } finally { decoder.close(); }

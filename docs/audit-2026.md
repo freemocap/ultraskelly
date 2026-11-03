@@ -917,8 +917,46 @@ The depth worker's round trip fell from 3.1 to 1.9 ms a frame. The GPU heat map 
 old colouring within 3 of 255 levels on both of W2's samples, unknown pixels stay black, and
 the enlarged copy is identical. The 81 remaining mutation records are text that changes: the
 target pixel, the face position and age, the commanded angles. An orbit drag ends where it
-did before and settles as fast, with half the renders. Chromium's CPU on the Pi is not
-measured yet.
+did before and settles as fast, with half the renders. On the Pi this commit alone barely
+moved Chromium's total (below).
+
+### Dashboard CPU on the Pi (2026-11-03)
+
+W2 measured Chromium at about 186% of a core with main's dashboard open, against about 106%
+before the time-series milestone, and the bot's depth slowing from 17 to 36 ms a frame. With
+`ps`, the Pi's own dashboard window (main's dashboard, the bot from the service, nobody
+touching either) used 1.75 to 1.81 cores, by thread: the renderer's main thread 0.60, its
+image decoding 0.26, its compositor 0.09, the depth worker 0.06, the GPU process's main
+thread 0.41 and compositor 0.06, the browser 0.20, the network service 0.06. The bot used
+about 1.6 cores, so the Pi's four cores were about 90% busy.
+
+What it spent them on, from the DevTools profiler and from switching parts off (Windows,
+headless Chrome with its CPU slowed four times, which keeps the main thread as busy as the
+Pi's): the 3D scene, 67 draw calls a render, 64 of them the skeleton's separate meshes; the
+video tiles, decoded by the SDK through a `Blob`, which copies every JPEG through the browser
+process; about 60 page frames a second, because the cameras, `robot_state`, the depth and
+the IMU each drew on their own; the time series, redrawn 10 times a second; and a console
+warning for each `imu` message, a kind the dashboard had not registered.
+
+f60f561 draws the page once per tracking-camera frame, decodes with WebCodecs, merges the
+skeleton (17 draw calls) and draws the time series 4 times a second ([how](dashboard.md#frame-rate-on-the-pi)).
+Against a fake stream with the Pi's rates (OAK and ZED 30 a second on their own clocks,
+`robot_state` 20, depth 10, IMU 15):
+
+| | main (e15087d) | f60f561 |
+| --- | --- | --- |
+| Pi, headless Chromium on its GPU, `ps` over 60 s | 1.57 cores: renderer 0.77, GPU 0.62, browser 0.13 | 1.17 cores: renderer 0.45, GPU 0.63, browser 0.03 |
+| Windows, headless Chrome | 0.69 cores, main thread 134 ms a second, 60 page frames a second | 0.50 cores, 80 ms, 30 frames |
+
+One run each on the Pi, with the bot not running (its service was waiting for the robot lock
+this measurement held, see below). The GPU process did not fall: what it spends 0.6 cores on
+is the next question, after the Pi's rebuild. The largest remaining cost is likely the ZED's
+two 672×376 eyes, decoded 30 times a second each to be drawn at 317×178: encoding them at the
+drawn size, as the display feedback allows, would also save the bot's encoding.
+
+Holding `/run/lock/ultraskelly-robot.lock` keeps the bot service from starting
+(`run-bot.sh` exits 75 and systemd retries), even for a measurement that uses no hardware;
+this one kept the dashboard without the bot for about four minutes.
 
 ## Validation and limits
 
