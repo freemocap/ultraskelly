@@ -1061,7 +1061,10 @@ out of that same frame (`oak_script.py`) and chains head pose into gaze on the c
 chip finds in a frame is joined by frame number (`oak_results.py`) and travels in that frame's
 stream message ([stream guide](stream.md), "Faces" and "Hands"); the server holds an OAK frame
 up to 0.1 s for it. Models come from the zoo once (`python -m scripts.fetch_oak_models`) into
-`~/ultraskelly-models/oak-zoo/` and then load without the internet.
+`~/ultraskelly-models/oak-zoo/` and then load without the internet. With one missing and no
+internet, the OAK runs none of them and `robot_state.oak.models_error` names that command; on
+the robot, with an empty cache behind a dead proxy, frames still came at 30 fps and the
+Hailo's pose at 30 a second, and the bot stopped cleanly.
 
 **Pi CPU the OAK and the Hailo changes took off.** Per 30 fps frame on the Pi: the NumPy flip
 3.26 ms (9.8% of a core) and the JPEG 2.97 ms (8.9%) are gone. The Hailo's outputs now come as

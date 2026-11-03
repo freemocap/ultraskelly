@@ -62,7 +62,7 @@ runs face and hand models from Luxonis' Model Zoo: YuNet face detection on every
 pose, gaze and MediaPipe face landmarks on the faces it finds, and MediaPipe hands five times
 a second (`--no-oak-models` turns them off; what runs where, and why, is in the audit). Fetch
 the models once with `.venv/bin/python -m scripts.fetch_oak_models`; the bot then loads them
-without the internet. The original IMX500 AI camera remains available as
+without the internet, and without them it runs the OAK as a plain camera and says why. The original IMX500 AI camera remains available as
 `DetectorType.POSE` in `ultraskelly/__main__bot.py`. depthai, the OAK's library, uploads
 usage events to Luxonis by default; the bot and the OAK scripts turn that off
 (`DEPTHAI_TELEMETRY=0`) unless the variable is already set.
