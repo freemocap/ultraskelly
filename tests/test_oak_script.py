@@ -50,13 +50,16 @@ class NNData(Message):
 
 
 class ImageManipConfig:
-    ResizeMode = SimpleNamespace(STRETCH="stretch")
+    ResizeMode = SimpleNamespace(STRETCH="stretch", LETTERBOX="letterbox")
 
     def __init__(self):
-        self.crop = self.size = self.type = None
+        self.crop = self.rotated = self.size = self.type = None
 
     def addCrop(self, x, y, w, h):
         self.crop = (x, y, w, h)
+
+    def addCropRotatedRect(self, rect, normalized):
+        self.rotated = (rect, normalized)
 
     def setOutputSize(self, w, h, mode):
         self.size = (w, h, mode)
@@ -134,6 +137,8 @@ def run(requests, frames, *, answer_head_pose=lambda count: True):
         exec(compile(SCRIPT, "oak_script", "exec"), {
             "node": node, "NNData": NNData, "ImageManipConfig": ImageManipConfig,
             "ImgFrame": SimpleNamespace(Type=SimpleNamespace(BGR888p="bgr888p")),
+            "RotatedRect": lambda center, size, angle: SimpleNamespace(center=center, size=size, angle=angle),
+            "Point2f": lambda x, y: (x, y), "Size2f": lambda w, h: (w, h),
         })
     return outputs
 
@@ -191,6 +196,31 @@ def test_a_landmark_crop_alone_sends_no_results():
     outputs = run([request(5, crop(CropKind.MESH, 0, (0.3, 0.1, 0.7, 0.6)))], [Frame(5)])
 
     assert len(outputs["mesh_image"].sent) == 1 and "results" not in outputs
+
+
+def hand_crop(row, center, size, angle):
+    rect = SimpleNamespace(center=SimpleNamespace(x=center[0], y=center[1]),
+                           size=SimpleNamespace(width=size[0], height=size[1]), angle=angle)
+    return SimpleNamespace(label=int(CropKind.HAND), confidence=float(row), getBoundingBox=lambda: rect)
+
+
+def test_the_palm_detector_gets_the_whole_frame_and_each_hand_a_turned_square_in_pixels():
+    outputs = run([request(8, crop(CropKind.PALM, 0, (0.0, 0.0, 1.0, 1.0))),
+                   request(8, hand_crop(0, (0.5, 0.25), (0.3, 0.4), 30.0))], [Frame(8)])
+
+    palm = outputs["palm_config"].sent[0]
+    assert (palm.crop, palm.rotated, palm.size) == (None, None, (128, 128, "letterbox"))
+    hand = outputs["hand_config"].sent[0]
+    rect, normalized = hand.rotated
+    assert (rect.center, rect.size, rect.angle, normalized) == ((320.0, 120.0), (192.0, 192.0), 30.0, False)
+    assert hand.size == (224, 224, "stretch") and "results" not in outputs  # Hands answer straight to the Pi
+
+
+def test_a_hand_request_for_an_earlier_frame_finds_it_among_the_frames_kept():
+    outputs = run([request(7, crop(CropKind.HEAD_POSE, 0, (0.1, 0.1, 0.2, 0.2))),
+                   request(5, hand_crop(0, (0.5, 0.5), (0.2, 0.2), 0.0))], [Frame(5), Frame(6), Frame(7)])
+
+    assert [frame.getSequenceNum() for frame in outputs["hand_image"].sent] == [5]
 
 
 def test_a_request_for_a_frame_that_already_left_is_skipped():

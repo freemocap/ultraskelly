@@ -8,15 +8,16 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from ultraskelly.core.pubsub.bot_topics import (
     FaceObservation,
-    FacesMessage,
-    FacesTopic,
+    HandObservation,
+    OakResultsMessage,
+    OakResultsTopic,
     FrameMessage,
     FrameTopic,
     PoseDataMessage,
     PoseDataTopic,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-from ultraskelly.ui.face_stream import face_trackers
+from ultraskelly.ui.oak_stream import face_trackers, hand_trackers, oak_trackers
 from ultraskelly.ui.runtime_server import encode_camera_frame
 
 from test_runtime_server import connect_stream, frame, make_server, read_image_payload, receive_stream
@@ -34,7 +35,7 @@ def values(channel):
 
 def test_each_face_carries_its_box_landmarks_and_what_was_measured():
     mesh = np.arange(468 * 3, dtype=np.float32).reshape(468, 3)
-    faces = FacesMessage(faces=[face(head_pose=(20.0, -5.0, 3.0), gaze=(0.0, 0.6, -0.8), mesh=mesh), face()],
+    faces = OakResultsMessage(faces=[face(head_pose=(20.0, -5.0, 3.0), gaze=(0.0, 0.6, -0.8), mesh=mesh), face()],
                          image_size=(640, 480), frame_number=8)
 
     measured, bare = face_trackers("oak", faces)
@@ -59,17 +60,35 @@ def test_faces_and_people_share_the_frame_message_they_were_found_in():
         [("oak", 0, frame(1))], frame_number=8, timestamp=1.0,
         poses=PoseDataMessage(keypoints=np.zeros((1, 17, 3), np.float32), scores=np.array([0.7])),
         encode_jpeg=lambda image, quality: b"JPEG", jpeg_quality=80,
-        faces=FacesMessage(faces=[face()], image_size=(640, 480), frame_number=8),
+        results=OakResultsMessage(faces=[face()], image_size=(640, 480), frame_number=8),
     ))
 
     assert [tracker["tracker_id"] for tracker in decoded["trackers"]] == ["person-0", "face-0"]
+
+
+def test_each_hand_carries_its_palm_box_landmarks_depth_and_handedness():
+    points = np.column_stack([np.arange(21) * 2.0, np.arange(21) * 3.0, np.arange(21) * -0.5]).astype(np.float32)
+    results = OakResultsMessage(faces=[face()], image_size=(640, 480), frame_number=8, hands=[HandObservation(
+        palm_box=(100.0, 200.0, 140.0, 240.0), palm_score=0.8, points=points, presence=0.95, handedness=0.3)])
+
+    [hand] = hand_trackers("oak", results)
+
+    assert (hand["tracker_id"], hand["detector_type"]) == ("hand-0", "mediapipe_hands")
+    assert hand["connection_groups"][0]["name"] == "hand" and len(hand["connection_groups"][0]["pairs"]) == 20
+    box, landmarks, depth, handedness = hand["channels"]
+    assert values(box).tolist() == [pytest.approx([100, 200, 140, 240, 0.8, 1])]
+    assert landmarks["names"][0] == "wrist" and landmarks["names"][-1] == "pinky_tip"
+    assert values(landmarks)[:, :2].tolist() == points[:, :2].tolist()
+    assert (depth["kind"], values(depth)[:, 0].tolist()) == ("ultraskelly.hand_depth", points[:, 2].tolist())
+    assert (handedness["kind"], handedness["columns"]) == ("ultraskelly.handedness", ["right"])
+    assert [tracker["tracker_id"] for tracker in oak_trackers("oak", results)] == ["face-0", "hand-0"]
 
 
 def test_the_oak_frame_waits_for_its_faces_and_keeps_the_cameras_own_jpeg():
     async def scenario():
         bus = PubSubTopicManager.create()
         encoded, faces = [], {}
-        server = make_server(bus, encoded=encoded, pose_camera="oak", faces_camera="oak", faces_for=faces.get,
+        server = make_server(bus, encoded=encoded, pose_camera="oak", results_camera="oak", results_for=faces.get,
                              oak_status=lambda: {"rates": {"face_detection": 30.0}})
         pump = asyncio.create_task(server.pump())
         async with TestClient(TestServer(server.build_app())) as client:
@@ -79,7 +98,7 @@ def test_the_oak_frame_waits_for_its_faces_and_keeps_the_cameras_own_jpeg():
             await bus.publish(PoseDataTopic, PoseDataMessage(keypoints=np.zeros((1, 17, 3), np.float32),
                                                              scores=np.array([0.8]), frame=camera_frame))
             await asyncio.sleep(0.03)  # The pose is in, the faces are still on their way
-            faces[41] = FacesMessage(faces=[face()], image_size=(640, 480), frame_number=41)
+            faces[41] = OakResultsMessage(faces=[face()], image_size=(640, 480), frame_number=41)
             received = await receive_stream(
                 socket, lambda got: got["robot_state"] and any(message["frame_number"] == 41 for message in got["frame"]))
             await socket.close()
@@ -104,13 +123,13 @@ def stream_frames(faces_after: dict[int, float | None], count: int = 12) -> list
     async def scenario():
         bus = PubSubTopicManager.create()
         faces = {}
-        server = make_server(bus, encoded=[], pose_camera="oak", faces_camera="oak", faces_for=faces.get)
+        server = make_server(bus, encoded=[], pose_camera="oak", results_camera="oak", results_for=faces.get)
         pump = asyncio.create_task(server.pump())
 
         async def faces_later(number, delay):
             await asyncio.sleep(delay)
             box = (float(number), 110.0, 360.0, 220.0)
-            faces[number] = FacesMessage(faces=[FaceObservation(box=box, score=0.9, landmarks=LANDMARKS)],
+            faces[number] = OakResultsMessage(faces=[FaceObservation(box=box, score=0.9, landmarks=LANDMARKS)],
                                          image_size=(640, 480), frame_number=number)
 
         async with TestClient(TestServer(server.build_app())) as client:

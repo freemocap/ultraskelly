@@ -10,7 +10,7 @@ from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
-from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakFaceParams
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNodeParams
@@ -43,7 +43,7 @@ def launch_config(
         detector_type=DetectorType.HAILO_POSE,
         oak_camera=OakCameraNodeParams(
             flip_camera=True,  # The OAK's image arrives upside down; its ISP turns it
-            faces=OakFaceParams() if oak_models else None,
+            models=OakModelParams() if oak_models else None,
         ),
         hailo_pose_detector=HailoPoseDetectorParams(
             target_keypoint=CocoKeypoint.NOSE,

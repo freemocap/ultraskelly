@@ -1,8 +1,8 @@
 """Hardware-free target replay through the production controller coroutines.
 
 This observes commanded state; it is not a physical model of the robot. With `--serve
---people N`, a synthetic camera shows N people, and the faces the OAK's chip would find on
-them, to the dashboard instead of scripted targets.
+--people N`, a synthetic camera shows N people, and the faces and hands the OAK's chip would
+find on them, to the dashboard instead of scripted targets.
 """
 import argparse
 import asyncio
@@ -19,8 +19,9 @@ from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, crea
 from ultraskelly.core.bot.sensory.pose_common import CocoKeypoint, locate_target
 from ultraskelly.core.pubsub.bot_topics import (
     FaceObservation,
-    FacesMessage,
-    FacesTopic,
+    HandObservation,
+    OakResultsMessage,
+    OakResultsTopic,
     FrameMessage,
     FrameTopic,
     PoseDataMessage,
@@ -104,11 +105,18 @@ def synthetic_people(count: int, seconds: float, order: np.ndarray) -> tuple[np.
 
 
 MESH = np.stack(np.meshgrid(np.linspace(-0.4, 0.4, 26), np.linspace(-0.45, 0.45, 18)), axis=-1).reshape(-1, 2)  # 468
+# An open right hand, fingers up: MediaPipe's 21 points as offsets in pixels from the wrist.
+HAND_SHAPE = np.array([
+    (0, 0), (-8, -6), (-14, -14), (-18, -22), (-21, -29),  # Wrist, thumb
+    (-6, -26), (-7, -36), (-7, -43), (-7, -49), (0, -27), (0, -38), (0, -46), (0, -52),  # Index, middle
+    (6, -25), (7, -35), (7, -42), (7, -47), (11, -21), (13, -29), (14, -34), (15, -38),  # Ring, pinky
+], np.float32)
 
 
-def synthetic_faces(keypoints: np.ndarray, scores: np.ndarray, number: int, seconds: float) -> FacesMessage:
-    """The faces the OAK would find on the synthetic people, best score first. As in the bot, head
-    pose and gaze are measured in every second frame and the largest face's landmarks too."""
+def synthetic_results(keypoints: np.ndarray, scores: np.ndarray, number: int, seconds: float) -> OakResultsMessage:
+    """What the OAK would find on the synthetic people, faces best score first. As in the bot, head
+    pose and gaze are measured in every second frame and the largest face's landmarks too, and
+    hands, one at each person's right wrist, are looked for in every sixth."""
     faces = []
     for row in np.argsort(-scores):
         person = keypoints[row]
@@ -127,13 +135,21 @@ def synthetic_faces(keypoints: np.ndarray, scores: np.ndarray, number: int, seco
             gaze=tuple(float(value) for value in gaze / np.linalg.norm(gaze)) if measured else None,
             mesh=None if mesh is None else mesh.astype(np.float32),
         ))
-    return FacesMessage(faces=faces, image_size=(640, 480), frame_number=number)
+    hands = None
+    if number % 6 == 0:
+        hands = []
+        for row in np.argsort(-scores):
+            wrist = keypoints[row, CocoKeypoint.RIGHT_WRIST, :2] + (0, -6)
+            points = np.column_stack([wrist + HAND_SHAPE, np.zeros(len(HAND_SHAPE))]).astype(np.float32)
+            palm = (float(wrist[0] - 14), float(wrist[1] - 30), float(wrist[0] + 14), float(wrist[1] + 2))
+            hands.append(HandObservation(palm_box=palm, palm_score=0.8, points=points, presence=0.95, handedness=0.5))
+    return OakResultsMessage(faces=faces, hands=hands, image_size=(640, 480), frame_number=number)
 
 
-async def synthetic_camera(bus: PubSubTopicManager, people: int, faces: dict[int, FacesMessage] | None = None) -> None:
+async def synthetic_camera(bus: PubSubTopicManager, people: int, results: dict[int, OakResultsMessage] | None = None) -> None:
     """Publish frames and the people found in them 30 times a second, as the OAK and pose nodes do,
-    with the people's rows in a new order each frame, as a detector's can be. With `faces`, also
-    their faces, kept there by frame number as the OAK node keeps them."""
+    with the people's rows in a new order each frame, as a detector's can be. With `results`, also
+    their faces and hands, kept there by frame number as the OAK node keeps them."""
     frame = np.zeros((480, 640, 3), np.uint8)  # Only its size travels; the stream sends SYNTHETIC_JPEG
     shuffle = np.random.default_rng(0)
     start = time.monotonic()
@@ -141,12 +157,12 @@ async def synthetic_camera(bus: PubSubTopicManager, people: int, faces: dict[int
         now = time.monotonic()
         camera_frame = FrameMessage(frame=frame, frame_number=number, timestamp=now)
         keypoints, scores = synthetic_people(people, now - start, shuffle.permutation(people))
-        if faces is not None:
-            found = synthetic_faces(keypoints, scores, number, now - start)
-            faces[number] = found
-            while len(faces) > 32:
-                del faces[min(faces)]
-            await bus.publish(FacesTopic, found)
+        if results is not None:
+            found = synthetic_results(keypoints, scores, number, now - start)
+            results[number] = found
+            while len(results) > 32:
+                del results[min(results)]
+            await bus.publish(OakResultsTopic, found)
         row, (x, y, angle) = locate_target(
             keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.5
         )
@@ -175,12 +191,12 @@ async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.
         ]
 
     camera = {}
-    faces: dict[int, FacesMessage] = {}
+    results: dict[int, OakResultsMessage] = {}
     if people:
         jpeg = SYNTHETIC_JPEG.read_bytes()
         camera = dict(cameras={SYNTHETIC_CAMERA: FrameTopic}, overlays={SYNTHETIC_CAMERA: TrackingOverlay()},
                       pose_camera=SYNTHETIC_CAMERA, encode_jpeg=lambda frame, quality: jpeg,
-                      faces_camera=SYNTHETIC_CAMERA, faces_for=faces.get)
+                      results_camera=SYNTHETIC_CAMERA, results_for=results.get)
     server = RuntimeServerNode.create(
         pubsub=bus,
         params=RuntimeServerParams(host=host, port=port),
@@ -193,7 +209,7 @@ async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.
     for node in (orientation, mouth, server):
         tasks[type(node).__name__] = asyncio.create_task(node.run())
     if people:
-        tasks["SyntheticCamera"] = asyncio.create_task(synthetic_camera(bus, people, faces))
+        tasks["SyntheticCamera"] = asyncio.create_task(synthetic_camera(bus, people, results))
     source = f"a synthetic camera with {people} people" if people else "scripted targets"
     print(f"Replay dashboard: http://{host}:{port} ({source}, simulated motor tests, no hardware). "
           "Ctrl+C to stop.", flush=True)

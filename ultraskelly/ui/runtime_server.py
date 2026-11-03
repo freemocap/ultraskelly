@@ -41,7 +41,7 @@ from ultraskelly.core.pubsub.bot_topics import (
     DepthFrameMessage,
     FaceLocationMessage,
     FaceLocationTopic,
-    FacesMessage,
+    OakResultsMessage,
     FrameMessage,
     ImuTopic,
     PoseDataMessage,
@@ -54,7 +54,7 @@ from ultraskelly.core.pubsub.bot_topics import (
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
 from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
-from ultraskelly.ui.face_stream import face_trackers
+from ultraskelly.ui.oak_stream import oak_trackers
 from ultraskelly.ui.imu_stream import encode_imu_batch
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
@@ -149,8 +149,8 @@ BODY = connection_group(
     "body", [(KEYPOINT_NAMES[start], KEYPOINT_NAMES[end]) for start, end in SKELETON_CONNECTIONS], "#3ddc84"
 )
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
-FACES_WAIT_SECONDS = 0.1  # A frame waits at most this long for the OAK's faces in it
-RECENT_FRAMES = 16  # Frames of the faces camera waiting for their faces, at most
+RESULTS_WAIT_SECONDS = 0.1  # A frame waits at most this long for what the OAK found in it
+RECENT_FRAMES = 16  # Frames of the results camera waiting for their results, at most
 
 
 def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
@@ -171,14 +171,14 @@ def encode_camera_frame(
     poses: PoseDataMessage | None,
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
-    faces: FacesMessage | None = None,
+    results: OakResultsMessage | None = None,
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
-    together, and each person's keypoints and face in pixels of the first image. Pure CPU
-    work, safe to run in a worker thread."""
+    together, and each person's keypoints, and the faces and hands the OAK found, in pixels of
+    the first image. Pure CPU work, safe to run in a worker thread."""
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
-    trackers = person_trackers(camera, (width, height), poses) + face_trackers(camera, faces)
+    trackers = person_trackers(camera, (width, height), poses) + oak_trackers(camera, results)
     images = [
         PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
         for camera, index, image in cameras
@@ -263,7 +263,7 @@ class CameraFeed:
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
-    # The faces camera's frames waiting for the OAK's faces in them, by frame number, with when they
+    # The results camera's frames waiting for what the OAK found in them, by frame number, with when they
     # arrived; the newest ready one becomes `pending`.
     waiting: dict[int, tuple[tuple, float]] = field(default_factory=dict)
 
@@ -300,8 +300,8 @@ class RuntimeServerNode(Node):
     imu_sequence: int = Field(default=0, exclude=True)
     state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
-    faces_camera: str | None = Field(default=None, description="Camera whose frames the OAK's face models read")
-    faces_for: SkipValidation[Callable[[int], FacesMessage | None]] = Field(default=lambda number: None, exclude=True)
+    results_camera: str | None = Field(default=None, description="Camera whose frames the OAK's own models read")
+    results_for: SkipValidation[Callable[[int], OakResultsMessage | None]] = Field(default=lambda number: None, exclude=True)
     oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
 
     @classmethod
@@ -320,15 +320,15 @@ class RuntimeServerNode(Node):
         motor_tests: MotorTester | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
-        faces_camera: str | None = None,
-        faces_for: Callable[[int], FacesMessage | None] | None = None,
+        results_camera: str | None = None,
+        results_for: Callable[[int], OakResultsMessage | None] | None = None,
         oak_status: Callable[[], dict] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
-        `pose_camera`'s frames travel with the poses detected in them, and `faces_camera`'s with
-        the faces the OAK found in them, which `faces_for` gives by frame number. With `motor_tests`,
+        `pose_camera`'s frames travel with the poses detected in them, and `results_camera`'s with
+        the faces and hands the OAK found in them, which `results_for` gives by frame number. With `motor_tests`,
         the dashboard can run motor tests
         through /api/motor-test. A stereo camera's two images travel together in one frame
         message, as cameras `<name>_left` and `<name>_right`; a depth frame's as
@@ -344,11 +344,11 @@ class RuntimeServerNode(Node):
             encode_jpeg=encode_jpeg,
             pose_camera=pose_camera,
             motor_tests=motor_tests,
-            faces_camera=faces_camera,
+            results_camera=results_camera,
             oak_status=oak_status,
         )
-        if faces_for is not None:
-            node.faces_for = faces_for
+        if results_for is not None:
+            node.results_for = results_for
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
         feeds += [(name, topic, (f"{name}_left", f"{name}_right")) for name, topic in (stereo_cameras or {}).items()]
@@ -492,18 +492,18 @@ class RuntimeServerNode(Node):
                     for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
                 ]
                 jpegs = JpegCache(self.encode_jpeg)  # A depth frame's colour image is encoded once for both messages
-                faces = None
+                results = None
                 if isinstance(camera_frame, FrameMessage):  # The camera's own JPEG, or one encoding for every consumer
                     jpegs = JpegCache(lambda image, quality, frame=camera_frame: frame.jpeg_bytes(quality, self.encode_jpeg))
-                    if feed.name == self.faces_camera:
-                        faces = self.faces_for(camera_frame.frame_number)
+                    if feed.name == self.results_camera:
+                        results = self.results_for(camera_frame.frame_number)
                 depth = isinstance(camera_frame, DepthFrameMessage)
                 if self.params.depth_previews or not depth:
                     message = await asyncio.to_thread(
                         encode_camera_frame, cameras,
                         frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
                         timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
-                        poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality, faces=faces,
+                        poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality, results=results,
                     )
                     feed.stream.publish(message)
                 if depth:  # The depth itself, for depth tiles and 3D views
@@ -517,10 +517,10 @@ class RuntimeServerNode(Node):
             feed.encoding = False
 
     def _hold(self, feed: CameraFeed, entry: tuple, now: float) -> None:
-        """Make a frame (with its poses) the feed's next to encode; the faces camera's frames first
-        wait for their faces."""
+        """Make a frame (with its poses) the feed's next to encode; the results camera's frames first
+        wait for what the OAK found in them."""
         number = entry[0].frame_number if isinstance(entry[0], FrameMessage) else None
-        if feed.name != self.faces_camera or number is None:
+        if feed.name != self.results_camera or number is None:
             feed.pending = entry
             return
         feed.waiting[number] = (entry, now)
@@ -528,13 +528,13 @@ class RuntimeServerNode(Node):
             del feed.waiting[min(feed.waiting)]
 
     def _release(self, feed: CameraFeed, now: float) -> None:
-        """The oldest waiting frame becomes pending once its faces are in or it has waited
-        FACES_WAIT_SECONDS; newer frames wait behind it, so a frame whose faces take longer is not
+        """The oldest waiting frame becomes pending once its results are in or it has waited
+        RESULTS_WAIT_SECONDS; newer frames wait behind it, so a frame whose results take longer is not
         skipped for a quicker one. One frame per pump: the encoder takes each in turn, unless it
         falls behind, when the newest pending one wins as for every feed."""
         number = min(feed.waiting)
         entry, since = feed.waiting[number]
-        if self.faces_for(number) is not None or now - since >= FACES_WAIT_SECONDS:
+        if self.results_for(number) is not None or now - since >= RESULTS_WAIT_SECONDS:
             del feed.waiting[number]
             feed.pending = entry
 

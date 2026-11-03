@@ -13,6 +13,8 @@ MODELS = {
     "head_pose": "luxonis/head-pose-estimation:60x60",
     "gaze": "luxonis/gaze-estimation-adas:60x60",
     "face_landmarks": "luxonis/mediapipe-face-landmarker:192x192",
+    "palm_detection": "luxonis/mediapipe-palm-detection:128x128",
+    "hand_landmarks": "luxonis/mediapipe-hand-landmarker:224x224",
 }
 
 

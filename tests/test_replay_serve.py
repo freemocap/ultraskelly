@@ -74,7 +74,7 @@ def test_serve_with_people_streams_several_people_with_the_followed_one_as_targe
                     await asyncio.sleep(0.05)
                     try:
                         async with session.ws_connect(f"ws://127.0.0.1:{port}/stream") as stream:
-                            while len(frames) < 12:
+                            while len(frames) < 18:
                                 message = cbor2.loads((await asyncio.wait_for(stream.receive(), timeout=2)).data)
                                 if message["kind"] == "frame" and message["trackers"]:
                                     frames.append(message)
@@ -88,12 +88,13 @@ def test_serve_with_people_streams_several_people_with_the_followed_one_as_targe
 
     frames = asyncio.run(scenario())
 
-    positions, measured = set(), 0
+    positions, measured, hands = set(), 0, 0
     for frame in frames:
         faces = [tracker for tracker in frame["trackers"] if tracker["tracker_id"].startswith("face-")]
         assert [face["tracker_id"] for face in faces] == ["face-0", "face-1", "face-2"]  # Each person's face, best first
         measured += any(channel["kind"] == "ultraskelly.head_pose" for channel in faces[0]["channels"])
-        ids = [tracker["tracker_id"] for tracker in frame["trackers"] if not tracker["tracker_id"].startswith("face-")]
+        hands += any(tracker["tracker_id"].startswith("hand-") for tracker in frame["trackers"])
+        ids = [tracker["tracker_id"] for tracker in frame["trackers"] if tracker["tracker_id"].split("-")[0] not in ("face", "hand")]
         assert len(ids) == 3 and ids.count("target") == 1
         target = frame["trackers"][ids.index("target")]
         nose = np.frombuffer(target["channels"][0]["data"], "<f4")[:2]
@@ -103,3 +104,4 @@ def test_serve_with_people_streams_several_people_with_the_followed_one_as_targe
         assert frame["cameras"][0]["id"] == "synthetic" and frame["image"][24 + 56:24 + 58] == b"\xff\xd8"
     assert len(positions) > 1  # The rows really were reordered
     assert 0 < measured < len(frames)  # Head pose in some frames, as the OAK measures every second one
+    assert 0 < hands < len(frames) / 2  # Hands in every sixth

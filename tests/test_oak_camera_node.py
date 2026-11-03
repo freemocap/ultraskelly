@@ -7,10 +7,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams, OakFaceParams
-from ultraskelly.core.bot.sensory.oak_faces import FaceAssembler
+from ultraskelly.core.bot.sensory.mediapipe_hands import palm_anchors
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams, OakModelParams
+from ultraskelly.core.bot.sensory.oak_results import ResultsAssembler
 from ultraskelly.core.bot.sensory.yunet import yunet_priors
-from ultraskelly.core.pubsub.bot_topics import FacesMessage, FacesTopic, FrameMessage, FrameTopic
+from ultraskelly.core.pubsub.bot_topics import OakResultsMessage, OakResultsTopic, FrameMessage, FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 
@@ -56,7 +57,12 @@ class Group(dict):
 
 
 class Detection(SimpleNamespace):
-    pass
+    def setBoundingBox(self, rect):
+        self.rect = rect
+
+
+def rotated_rect(center, size, angle):
+    return SimpleNamespace(center=center, size=size, angle=angle)
 
 
 class Detections:
@@ -64,7 +70,8 @@ class Detections:
         self.sequence = sequence
 
 
-dai = SimpleNamespace(MessageGroup=Group, ImgDetection=Detection, ImgDetections=Detections)
+dai = SimpleNamespace(MessageGroup=Group, ImgDetection=Detection, ImgDetections=Detections, RotatedRect=rotated_rect,
+                      Point2f=lambda x, y: (x, y), Size2f=lambda w, h: (w, h))
 
 
 class Loop:
@@ -75,9 +82,9 @@ class Loop:
 
 
 def node_with_faces():
-    node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(faces=OakFaceParams()))
+    node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(models=OakModelParams()))
     node.outbox = asyncio.Queue(maxsize=16)
-    node.faces = FaceAssembler((640, 480), max_faces=3)
+    node.assembler = ResultsAssembler((640, 480), max_faces=3)
     node.crop_requests = SimpleNamespace(sent=[])
     node.crop_requests.send = node.crop_requests.sent.append
     return node
@@ -125,7 +132,7 @@ def test_a_face_asks_the_oak_for_its_crops_and_is_published_once_measured():
     node._on_face_landmarks(dai, Tensors(7, mesh=np.zeros((1, 1, 1, 1404), np.float32)), 0.03, Loop())
 
     [(topic, message)] = published(node)
-    assert topic is FacesTopic and isinstance(message, FacesMessage)
+    assert topic is OakResultsTopic and isinstance(message, OakResultsMessage)
     assert (message.frame_number, message.timestamp, len(message.faces)) == (7, 2.5, 1)
     assert message.faces[0].head_pose == pytest.approx((12, -3, 1)) and message.faces[0].mesh.shape == (468, 3)
 
@@ -137,7 +144,7 @@ def test_a_frame_without_faces_is_published_at_once_and_asks_for_nothing():
 
     assert node.crop_requests.sent == []
     [(topic, message)] = published(node)
-    assert topic is FacesTopic and message.faces == [] and message.frame_number == 8
+    assert topic is OakResultsTopic and message.faces == [] and message.frame_number == 8
 
 
 def test_a_busy_event_loop_drops_the_oldest_waiting_message():
@@ -163,3 +170,32 @@ def test_status_reports_output_rates_and_the_chip():
     assert status["rates"]["face_detection"] == pytest.approx(20, abs=1)
     assert status["chip"] == {"leon_os_cpu": 0.25, "leon_rt_cpu": 0.5, "ddr_used_mib": 30.0, "ddr_total_mib": 333.0,
                               "temperature_c": 48.0}
+
+
+def test_a_palm_becomes_a_hand_crop_request_and_the_hand_joins_its_frame():
+    node = node_with_faces()
+    node.assembler = ResultsAssembler((640, 480), max_faces=3, mesh_every=None, hands_every=1)
+    node._on_face_detection(dai, yunet_outputs(9, face=False), 0.0, Loop())
+    [palm_request] = node.crop_requests.sent
+    assert [detection.label for detection in palm_request.detections] == [4]  # The whole frame, for the palm detector
+
+    anchors = palm_anchors(128)
+    regressors, scores = np.zeros((896, 18), np.float32), np.full((1, 896, 1), -10.0, np.float32)
+    row = int(np.argmin(np.abs(anchors[:, 0] - 0.5) + np.abs(anchors[:, 1] - 0.5)))
+    scores[0, row, 0] = 3.0
+    regressors[row, 2:4], regressors[row, 4:6], regressors[row, 8:10] = [16, 16], [0, 6], [0, -6]
+    node._on_palm_detection(dai, Tensors(9, regressors=regressors[None], classificators=scores), 0.01, Loop())
+    hand_request = node.crop_requests.sent[1]
+    [detection] = hand_request.detections
+    assert (detection.label, detection.confidence, hand_request.sequence) == (5, 0.0, 9)
+    (x, y), (width, height), angle = detection.rect.center, detection.rect.size, detection.rect.angle
+    assert x == pytest.approx(0.5, abs=0.04) and angle == pytest.approx(0.0)  # The anchor nearest the middle
+    assert width * 640 == pytest.approx(height * 480)  # A square in pixels, normalized per axis
+    assert published(node) == []
+
+    keypoints = np.full((1, 63), 112.0, np.float32)
+    node._on_hand_landmarks(dai, Tensors(9, keypoints=keypoints, score=np.array([[0.95]]), handedness=np.array([[0.7]])), 0.02, Loop())
+
+    [(topic, message)] = published(node)
+    [hand] = message.hands
+    assert topic is OakResultsTopic and (hand.presence, hand.handedness) == pytest.approx((0.95, 0.7))

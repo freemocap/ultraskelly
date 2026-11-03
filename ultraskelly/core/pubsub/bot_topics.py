@@ -131,9 +131,25 @@ class FaceObservation(BaseModel):
     )
 
 
-class FacesMessage(TopicMessageABC):
-    """The faces found in one OAK frame by the models on the OAK's own chip; empty when it saw none."""
+class HandObservation(BaseModel):
+    """One hand the OAK's own chip found in one of its frames. Pixels are the frame's."""
+    palm_box: tuple[float, float, float, float]  # x1, y1, x2, y2 of the palm the detector found
+    palm_score: float  # The palm detector's confidence, 0 to 1
+    points: np.ndarray  # (21, 3) MediaPipe hand landmarks: x, y and relative depth z, in pixels
+    presence: float  # The hand landmarker's confidence that a hand is there, 0 to 1
+    handedness: float  # The hand landmarker's handedness score, 0 to 1; above 0.5 it calls the hand a right one
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
+class OakResultsMessage(TopicMessageABC):
+    """What the models on the OAK's own chip found in one OAK frame: its faces, and on the frames
+    they are looked for in, its hands."""
     faces: list[FaceObservation]
+    hands: list[HandObservation] | None = None  # None: not looked for in this frame; []: none found
     image_size: tuple[int, int]  # (width, height) of the frame the pixels belong to
     frame_number: int | None = None  # The OAK frame's number, as in its FrameMessage
     timestamp: float | None = None  # That frame's capture time, on time.monotonic()'s clock
@@ -165,7 +181,7 @@ FrameTopic = create_topic(FrameMessage)
 StereoFrameTopic = create_topic(StereoFrameMessage)
 DepthFrameTopic = create_topic(DepthFrameMessage)
 FaceLocationTopic = create_topic(FaceLocationMessage)
-FacesTopic = create_topic(FacesMessage)
+OakResultsTopic = create_topic(OakResultsMessage)
 ImuTopic = create_topic(ImuMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)

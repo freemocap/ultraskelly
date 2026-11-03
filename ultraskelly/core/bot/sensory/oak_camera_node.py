@@ -2,16 +2,16 @@
 
 The OAK does its own image work: its ISP turns the image the right way up, its hardware
 encoder makes each frame's JPEG for the dashboard and the recorder, and a Sync node pairs
-the two on the chip, so the Pi neither flips nor encodes. With `faces`, the OAK's neural
+the two on the chip, so the Pi neither flips nor encodes. With `models`, the OAK's neural
 engines also run Luxonis Model Zoo models: YuNet face detection on every frame, then head
-pose, gaze and MediaPipe face landmarks on the faces it found, from crops the OAK cuts out
-itself (oak_script.py). The Pi only decodes YuNet's boxes and sends back which crops to cut
-(oak_faces.py). The skeleton stays on the Hailo-8, which runs a larger pose model than
-this chip can hold at camera rate beside the face models (docs/audit-2026.md, "The OAK's
-own chip").
+pose, gaze and MediaPipe face landmarks on the faces it found, and on some frames MediaPipe's
+palm detector and hand landmarker, from crops the OAK cuts out itself (oak_script.py). The Pi
+only decodes YuNet's boxes and the palms and sends back which crops to cut (oak_faces.py,
+oak_results.py). The skeleton stays on the Hailo-8, which runs a larger pose model than this
+chip can hold at camera rate beside the face models (docs/audit-2026.md, "The OAK's own chip").
 
 One thread reads every OAK output, waiting on whichever sends next instead of polling, and
-hands frames and faces to the event loop, where they are published.
+hands frames and results to the event loop, where they are published.
 """
 import asyncio
 import logging
@@ -24,11 +24,12 @@ from pathlib import Path
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
-from ultraskelly.core.bot.sensory.oak_faces import Crop, FaceAssembler
+from ultraskelly.core.bot.sensory.oak_faces import Crop, CropKind
 from ultraskelly.core.bot.sensory.oak_models import MODEL_CACHE, load_archive
-from ultraskelly.core.bot.sensory.oak_script import GAZE_ANGLES_INPUT, RESULT_LAYER, SCRIPT
+from ultraskelly.core.bot.sensory.oak_results import ResultsAssembler
+from ultraskelly.core.bot.sensory.oak_script import GAZE_ANGLES_INPUT, KEEP_FRAMES, RESULT_LAYER, SCRIPT
 from ultraskelly.core.bot.sensory.yunet import decode_yunet
-from ultraskelly.core.pubsub.bot_topics import FacesMessage, FacesTopic, FrameMessage, FrameTopic
+from ultraskelly.core.pubsub.bot_topics import OakResultsMessage, OakResultsTopic, FrameMessage, FrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -36,15 +37,17 @@ logger = logging.getLogger(__name__)
 
 YUNET_INPUT = (320, 240)
 RATE_WINDOW = 2.0  # Seconds of arrivals each reported rate counts
-RECENT_FACES = 32  # Frames whose faces faces_for still finds
-CROP_SIZES = {"head_pose": 60, "left_eye": 60, "right_eye": 60, "mesh": 192}  # Each crop's network input side
+RECENT_RESULTS = 32  # Frames whose results results_for still finds
+# Each crop's network input side
+CROP_SIZES = {"head_pose": 60, "left_eye": 60, "right_eye": 60, "mesh": 192, "palm": 128, "hand": 224}
 # Inference threads and SHAVEs per thread for each network. depthai's defaults starve the
-# chain; these held every network at 30 fps together on the robot's OAK-1 (audit).
-RESOURCES = {"face_detection": (1, 4), "head_pose": (1, 1), "gaze": (1, 1), "face_landmarks": (1, 2)}
+# chain; the face networks held 30 fps together with these on the robot's OAK-1 (audit).
+RESOURCES = {"face_detection": (1, 4), "head_pose": (1, 1), "gaze": (1, 1), "face_landmarks": (1, 2),
+             "palm_detection": (1, 3), "hand_landmarks": (1, 2)}
 
 
-class OakFaceParams(NodeParams):
-    """The face chain on the OAK's chip."""
+class OakModelParams(NodeParams):
+    """The models on the OAK's chip: faces on every frame, and what is measured on them and on hands."""
 
     fps: float = Field(default=30.0, gt=0.0, le=60.0, description="Frames per second YuNet looks for faces in")
     score_threshold: float = Field(default=0.6, ge=0.0, le=1.0, description="Least YuNet score kept as a face")
@@ -54,6 +57,11 @@ class OakFaceParams(NodeParams):
         default=2, ge=1,
         description="MediaPipe's 468 face landmarks, on the largest face, in one detection of this many; None: never",
     )
+    hands_every: int | None = Field(
+        default=6, ge=1, description="Look for hands in one face detection of this many (5 fps at 30); None: never",
+    )
+    max_hands: int = Field(default=2, ge=1, le=4, description="Most hands per frame measured")
+    hand_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Least hand landmarker presence kept as a hand")
     resources: dict[str, tuple[int, int]] = Field(
         default_factory=lambda: dict(RESOURCES), description="Inference threads and SHAVEs per thread, by network"
     )
@@ -74,31 +82,31 @@ class OakCameraNodeParams(NodeParams):
         default=80, ge=10, le=100,
         description="Quality of the JPEG the OAK's hardware encoder makes of each frame; None sends frames without one",
     )
-    faces: OakFaceParams | None = Field(default=None, description="Run the face chain on the OAK's chip; None runs none")
+    models: OakModelParams | None = Field(default=None, description="Run models on the OAK's chip; None runs none")
     frames_pool: int = Field(
-        default=10, ge=4, le=16,
-        description="Frames in each camera output's pool. Frames waiting in queues (the Script keeps 3 for their "
-                    "crop requests) hold pool frames, and a camera whose pool runs out stops every output",
+        default=14, ge=4, le=16,
+        description="Frames in each camera output's pool. Frames waiting in queues and the Script's own "
+                    f"{KEEP_FRAMES} hold pool frames, and a camera whose pool runs out stops every output",
     )
     system_log_hz: float = Field(default=1.0, gt=0.0, le=10.0, description="OAK CPU, memory and temperature reports per second")
 
 
 class OakCameraNode(Node):
-    """Streams the OAK's frames, each with its JPEG, and the faces its own chip finds in them."""
+    """Streams the OAK's frames, each with its JPEG, and the faces and hands its own chip finds in them."""
 
     params: OakCameraNodeParams
     pipeline: SkipValidation[object] = Field(default=None, exclude=True)
     queues: SkipValidation[dict] = Field(default_factory=dict, exclude=True)  # Output name: depthai MessageQueue
     crop_requests: SkipValidation[object] = Field(default=None, exclude=True)  # Input queue of the Script node
-    faces: SkipValidation[FaceAssembler | None] = Field(default=None, exclude=True)
+    assembler: SkipValidation[ResultsAssembler | None] = Field(default=None, exclude=True)
     outbox: SkipValidation[asyncio.Queue | None] = Field(default=None, exclude=True)
     reader_stop: SkipValidation[threading.Event] = Field(default_factory=threading.Event, exclude=True)
     # Recent arrival times of each OAK output, and of the faces published with each measurement.
     arrivals: SkipValidation[dict[str, deque]] = Field(default_factory=dict, exclude=True)
     arrivals_lock: SkipValidation[threading.Lock] = Field(default_factory=threading.Lock, exclude=True)
     chip: dict = Field(default_factory=dict, exclude=True)  # The newest SystemLogger report
-    # The faces of recent frames by frame number, for consumers that need every frame's (faces_for).
-    recent_faces: SkipValidation[dict[int, FacesMessage]] = Field(default_factory=dict, exclude=True)
+    # The results of recent frames by frame number, for consumers that need every frame's (results_for).
+    recent_results: SkipValidation[dict[int, OakResultsMessage]] = Field(default_factory=dict, exclude=True)
     dropped: int = Field(default=0, exclude=True)  # Messages the event loop was too busy to take
 
     @classmethod
@@ -135,21 +143,22 @@ class OakCameraNode(Node):
             encoder.out.link(sync.inputs["jpeg"])
             frames = sync.out
         self.queues["frames"] = frames.createOutputQueue(maxSize=4, blocking=False)
-        if params.faces is not None:
-            self._build_faces(dai, camera, params.faces)
+        if params.models is not None:
+            self._build_models(dai, camera, params.models)
         system = pipeline.create(dai.node.SystemLogger)
         system.setRate(params.system_log_hz)
         self.queues["system"] = system.out.createOutputQueue(maxSize=2, blocking=False)
 
-    def _build_faces(self, dai, camera, faces: OakFaceParams) -> None:
+    def _build_models(self, dai, camera, models: OakModelParams) -> None:
         """YuNet on its own small camera output; the Script node cuts the crops out of full-size frames,
         planar BGR like the networks take, so cropping converts nothing."""
         pipeline = self.pipeline
+        hands = models.hands_every is not None
 
         def network(name: str, image_inputs: list | None = None):
-            threads, shaves = faces.resources[name]
+            threads, shaves = models.resources[name]
             node = pipeline.create(dai.node.NeuralNetwork)
-            node.setNNArchive(load_archive(name, faces.model_cache), shaves)  # The SHAVE count picks the blob
+            node.setNNArchive(load_archive(name, models.model_cache), shaves)  # The SHAVE count picks the blob
             node.setNumInferenceThreads(threads)
             for port in image_inputs if image_inputs is not None else [node.input]:
                 port.setBlocking(True)  # Inside the chain nothing is dropped, so answers stay in step
@@ -157,23 +166,23 @@ class OakCameraNode(Node):
             return node
 
         detector = network("face_detection", image_inputs=[])
-        camera.requestOutput(YUNET_INPUT, dai.ImgFrame.Type.BGR888p, fps=faces.fps).link(detector.input)
+        camera.requestOutput(YUNET_INPUT, dai.ImgFrame.Type.BGR888p, fps=models.fps).link(detector.input)
         detector.input.setBlocking(False)  # The detector takes the newest frame
         detector.input.setMaxSize(1)
         self.queues["face_detection"] = detector.out.createOutputQueue(maxSize=2, blocking=False)
 
         script = pipeline.create(dai.node.Script)
-        script.setScript(SCRIPT, "face-chain")
+        script.setScript(SCRIPT, "crops")
         size = (self.params.width, self.params.height)
-        camera.requestOutput(size, dai.ImgFrame.Type.BGR888p, fps=faces.fps).link(script.inputs["frame"])
-        script.inputs["frame"].setBlocking(False)  # Recent frames wait here for their crop request
-        script.inputs["frame"].setMaxSize(3)
+        camera.requestOutput(size, dai.ImgFrame.Type.BGR888p, fps=models.fps).link(script.inputs["frame"])
+        script.inputs["frame"].setBlocking(False)  # Frames wait here, then among the Script's own, for crop requests
+        script.inputs["frame"].setMaxSize(2)
         script.inputs["crops"].setBlocking(False)
         script.inputs["crops"].setMaxSize(2)
         self.crop_requests = script.inputs["crops"].createInputQueue()
         manips = {}
         for crop, side in CROP_SIZES.items():
-            if crop == "mesh" and faces.mesh_every is None:
+            if (crop == "mesh" and models.mesh_every is None) or (crop in ("palm", "hand") and not hands):
                 continue
             manip = pipeline.create(dai.node.ImageManip)
             manip.inputConfig.setWaitForMessage(True)
@@ -201,24 +210,33 @@ class OakCameraNode(Node):
             script.inputs[name].setBlocking(True)
             script.inputs[name].setMaxSize(8)
         self.queues["face_results"] = script.outputs["results"].createOutputQueue(maxSize=4, blocking=False)
-        if faces.mesh_every is not None:
+        if models.mesh_every is not None:
             mesh = network("face_landmarks")
             manips["mesh"].out.link(mesh.input)
             self.queues["face_landmarks"] = mesh.out.createOutputQueue(maxSize=4, blocking=False)
-        self.faces = FaceAssembler(
-            (self.params.width, self.params.height), max_faces=faces.max_faces, every=faces.measure_every,
-            mesh_every=faces.mesh_every,
+        if hands:
+            palms = network("palm_detection")
+            manips["palm"].out.link(palms.input)
+            self.queues["palm_detection"] = palms.out.createOutputQueue(maxSize=4, blocking=False)
+            hand = network("hand_landmarks")
+            manips["hand"].out.link(hand.input)
+            self.queues["hand_landmarks"] = hand.out.createOutputQueue(maxSize=8, blocking=False)
+        self.assembler = ResultsAssembler(
+            (self.params.width, self.params.height), max_faces=models.max_faces, every=models.measure_every,
+            mesh_every=models.mesh_every, hands_every=models.hands_every, max_hands=models.max_hands,
+            hand_threshold=models.hand_threshold,
         )
 
-    def faces_for(self, frame_number: int) -> FacesMessage | None:
-        """The faces found in a recent frame, once its measurements are in; None before (or long after).
-        FacesTopic keeps only the newest message, and two can be published together."""
+    def results_for(self, frame_number: int) -> OakResultsMessage | None:
+        """What the chip found in a recent frame, once all of it is in; None before (or long after).
+        OakResultsTopic keeps only the newest message, and two can be published together."""
         with self.arrivals_lock:
-            return self.recent_faces.get(frame_number)
+            return self.recent_results.get(frame_number)
 
     def status(self) -> dict:
-        """For the dashboard: per second over the last RATE_WINDOW, frames, face detections and the
-        faces published with each measurement; and the chip's load and temperature."""
+        """For the dashboard: per second over the last RATE_WINDOW, frames, face detections, palm
+        detections, and the faces and hands published with each measurement; and the chip's load
+        and temperature."""
         now = time.monotonic()
         with self.arrivals_lock:
             rates = {name: round(sum(now - at <= RATE_WINDOW for at in times) / RATE_WINDOW, 1)
@@ -226,7 +244,7 @@ class OakCameraNode(Node):
         return {
             "rates": rates,
             "chip": dict(self.chip),
-            "faces_incomplete": 0 if self.faces is None else self.faces.incomplete,
+            "faces_incomplete": 0 if self.assembler is None else self.assembler.incomplete,
         }
 
     # The reader thread: everything below runs there, except _deliver, on the event loop.
@@ -239,12 +257,12 @@ class OakCameraNode(Node):
                 messages = dai.MessageQueue.getAny(self.queues, timedelta(seconds=0.25))
                 now = time.monotonic()
                 for name, message in messages.items():
-                    if name in ("frames", "face_detection"):
+                    if name in ("frames", "face_detection", "palm_detection"):
                         self._count(name, now)
                     getattr(self, f"_on_{name}")(dai, message, now, loop)
-                if self.faces is not None:
-                    for faces in self.faces.finished(now):
-                        self._post(loop, FacesTopic, faces)
+                if self.assembler is not None:
+                    for results in self.assembler.finished(now):
+                        self._post(loop, OakResultsTopic, results)
                 if not messages and not self.reader_stop.is_set() and not self.pipeline.isRunning():
                     raise RuntimeError("OAK pipeline stopped unexpectedly (camera unplugged?)")
         except Exception as error:
@@ -259,16 +277,17 @@ class OakCameraNode(Node):
                 times.popleft()
 
     def _post(self, loop: asyncio.AbstractEventLoop, topic: type[PubSubTopicABC] | None, message: object) -> None:
-        if isinstance(message, FacesMessage):
+        if isinstance(message, OakResultsMessage):
             now = time.monotonic()
             with self.arrivals_lock:
-                self.recent_faces[message.frame_number] = message
-                while len(self.recent_faces) > RECENT_FACES:
-                    del self.recent_faces[min(self.recent_faces)]
+                self.recent_results[message.frame_number] = message
+                while len(self.recent_results) > RECENT_RESULTS:
+                    del self.recent_results[min(self.recent_results)]
             for measurement, count in (
                 ("head_pose", sum(face.head_pose is not None for face in message.faces)),
                 ("gaze", sum(face.gaze is not None for face in message.faces)),
                 ("face_landmarks", sum(face.mesh is not None for face in message.faces)),
+                ("hand_landmarks", len(message.hands or [])),
             ):
                 self._count(measurement, now, count)
         loop.call_soon_threadsafe(self._deliver, topic, message)
@@ -292,22 +311,37 @@ class OakCameraNode(Node):
     def _on_face_detection(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
         faces = decode_yunet(
             message.getTensor("loc"), message.getTensor("conf"), message.getTensor("iou"),
-            input_size=YUNET_INPUT, score_threshold=self.params.faces.score_threshold,
+            input_size=YUNET_INPUT, score_threshold=self.params.models.score_threshold,
         )
         sequence = message.getSequenceNum()
-        crops, finished = self.faces.detected(sequence, message.getTimestamp().total_seconds(), faces, now)
+        crops, finished = self.assembler.detected(sequence, message.getTimestamp().total_seconds(), faces, now)
         if crops:
-            self.crop_requests.send(crop_request(dai, crops, sequence))
+            self.crop_requests.send(crop_request(dai, crops, sequence, self.params.width, self.params.height))
         for done in finished:
-            self._post(loop, FacesTopic, done)
+            self._post(loop, OakResultsTopic, done)
 
     def _on_face_results(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
-        for done in self.faces.answered(message.getSequenceNum(), now, results=message.getTensor(RESULT_LAYER)):
-            self._post(loop, FacesTopic, done)
+        for done in self.assembler.answered(message.getSequenceNum(), now, results=message.getTensor(RESULT_LAYER)):
+            self._post(loop, OakResultsTopic, done)
 
     def _on_face_landmarks(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
-        for done in self.faces.answered(message.getSequenceNum(), now, mesh=message.getFirstTensor()):
-            self._post(loop, FacesTopic, done)
+        for done in self.assembler.answered(message.getSequenceNum(), now, mesh=message.getFirstTensor()):
+            self._post(loop, OakResultsTopic, done)
+
+    def _on_palm_detection(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
+        sequence = message.getSequenceNum()
+        crops, finished = self.assembler.palms(
+            sequence, message.getTensor("regressors"), message.getTensor("classificators"), now,
+        )
+        if crops:  # A second request for the same frame: the Script still keeps it
+            self.crop_requests.send(crop_request(dai, crops, sequence, self.params.width, self.params.height))
+        for done in finished:
+            self._post(loop, OakResultsTopic, done)
+
+    def _on_hand_landmarks(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
+        presence, handedness = float(message.getTensor("score").ravel()[0]), float(message.getTensor("handedness").ravel()[0])
+        for done in self.assembler.hand(message.getSequenceNum(), message.getTensor("keypoints"), presence, handedness, now):
+            self._post(loop, OakResultsTopic, done)
 
     def _on_system(self, dai, message, now: float, loop: asyncio.AbstractEventLoop) -> None:
         self.chip = {
@@ -320,11 +354,12 @@ class OakCameraNode(Node):
 
     async def run(self) -> None:
         """Start the OAK and publish what it sends until stopped."""
-        faces = self.params.faces
+        models = self.params.models
         logger.info(
             f"Starting OakCameraNode [{self.params.width}x{self.params.height} @ {self.params.fps:g} fps, "
-            f"flip_camera={self.params.flip_camera}, jpeg_quality={self.params.jpeg_quality}, "
-            f"faces={'off' if faces is None else f'{faces.fps:g} fps, head pose 1 in {faces.measure_every}, mesh 1 in {faces.mesh_every}'}]"
+            f"flip_camera={self.params.flip_camera}, jpeg_quality={self.params.jpeg_quality}, models="
+            + ("off" if models is None else f"faces at {models.fps:g} fps, head pose 1 in {models.measure_every}, "
+               f"landmarks 1 in {models.mesh_every}, hands 1 in {models.hands_every}") + "]"
         )
         loop = asyncio.get_running_loop()
         self.outbox = asyncio.Queue(maxsize=16)
@@ -349,16 +384,23 @@ class OakCameraNode(Node):
             logger.info(f"OakCameraNode stopped ({self.dropped} messages dropped)")
 
 
-def crop_request(dai, crops: list[Crop], sequence: int):
+def crop_request(dai, crops: list[Crop], sequence: int, width: int, height: int):
     """The Script node's request for one frame: a detection per crop, its label the crop's kind and its
-    confidence the face's row, with the frame's sequence number."""
+    confidence the face's or hand's row, with the frame's sequence number. A hand's turned square
+    travels as the detection's rotated box, normalized to the `width` x `height` frame."""
     request = dai.ImgDetections()
     detections = []
     for crop in crops:
         detection = dai.ImgDetection()
-        detection.xmin, detection.ymin, detection.xmax, detection.ymax = crop.box
+        if crop.kind == CropKind.HAND:
+            hand = crop.hand
+            detection.setBoundingBox(dai.RotatedRect(
+                dai.Point2f(hand.center[0] / width, hand.center[1] / height),
+                dai.Size2f(hand.side / width, hand.side / height), hand.angle))
+        else:
+            detection.xmin, detection.ymin, detection.xmax, detection.ymax = crop.box
         detection.label = int(crop.kind)
-        detection.confidence = float(crop.face)
+        detection.confidence = float(crop.row)
         detections.append(detection)
     request.detections = detections
     request.setSequenceNum(sequence)
