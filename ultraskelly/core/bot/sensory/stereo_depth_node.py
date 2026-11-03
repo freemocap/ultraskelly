@@ -38,6 +38,7 @@ MAX_MILLIMETRES = np.iinfo(np.uint16).max
 # lies beyond it (the skull a few centimetres in front of the eyes), the matcher settles
 # at the limit. On a live VGA pair that pile-up was a fifth of the valid pixels.
 EDGE_MARGIN = 4
+REPORT_SECONDS = 30.0  # At most one logged failure this often
 
 
 class StereoDepthNodeParams(NodeParams):
@@ -47,7 +48,17 @@ class StereoDepthNodeParams(NodeParams):
         default="sgbm", description="sgbm: OpenCV on the CPU; stereonet: StereoNet on the Hailo-8",
     )
     stereonet_hef: str = Field(default=DEFAULT_HEF, description="StereoNet compiled for the installed HailoRT")
-    max_hz: float = Field(default=10.0, gt=0.0, le=30.0, description="Depth frames per second at most")
+    max_hz: float | None = Field(
+        default=None, gt=0.0, le=30.0,
+        description="Depth frames per second at most; None: 10 with sgbm, 1 with stereonet, which holds the "
+                    "Hailo-8 about 200 ms a frame while pose waits (pose falls to about 25 fps at 1 Hz)",
+    )
+
+    def rate(self) -> float:
+        """The depth frames per second aimed for."""
+        if self.max_hz is not None:
+            return self.max_hz
+        return 1.0 if self.matcher == "stereonet" else 10.0
     num_disparities: int = Field(
         default=64, ge=16, le=256,
         description="Disparities searched, in full-size eye pixels, a multiple of 16; 64 at VGA reaches 0.36 m",
@@ -200,21 +211,34 @@ class StereoDepthNode(Node):
 
     async def run(self) -> None:
         """Depth for the newest pair, then a pause so the rate stays under `max_hz`."""
+        rate = self.params.rate()
         logger.info(
             f"Starting StereoDepthNode [{self.matcher.name}, disparities up to {self.matcher.search_range:.0f} px, "
-            f"at most {self.params.max_hz:g} Hz]"
+            f"at most {rate:g} Hz]"
         )
+        computing: asyncio.Future | None = None
+        failures, reported_at = 0, -REPORT_SECONDS
         try:
             while not self.stop_event.is_set():
                 pair = await self.pairs.get()
                 started = time.monotonic()
-                depth = await asyncio.to_thread(self.compute, pair)
-                elapsed = time.monotonic() - started
-                await self.pubsub.topics[DepthFrameTopic].publish(depth)
-                self.frames_computed += 1
-                self.seconds_computing += elapsed
-                await asyncio.sleep(max(0.0, 1.0 / self.params.max_hz - elapsed))
+                # Shielded, so a cancelled run() still waits for the worker before the matcher is closed.
+                computing = asyncio.ensure_future(asyncio.to_thread(self.compute, pair))
+                try:
+                    depth = await asyncio.shield(computing)
+                except Exception:  # Depth is optional: a bad frame is logged, never the end of the bot
+                    failures += 1
+                    if time.monotonic() - reported_at >= REPORT_SECONDS:
+                        logger.exception(f"Depth failed ({failures} frames so far); carrying on")
+                        reported_at = time.monotonic()
+                else:
+                    await self.pubsub.topics[DepthFrameTopic].publish(depth)
+                    self.frames_computed += 1
+                    self.seconds_computing += time.monotonic() - started
+                await asyncio.sleep(max(0.0, 1.0 / rate - (time.monotonic() - started)))
         finally:
+            if computing is not None and not computing.done():
+                await asyncio.wait({computing})
             self.matcher.close()
             average = self.seconds_computing / max(self.frames_computed, 1)
             logger.info(f"StereoDepthNode stopped after {self.frames_computed} depth frames, {1000 * average:.0f} ms each")

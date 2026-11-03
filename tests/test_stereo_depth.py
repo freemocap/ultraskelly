@@ -151,3 +151,39 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
     depth = received["depth_frame"]
     assert (depth["frame_number"], depth["camera"]["fx"], depth["depth"]["step"]) == (4, 340.0, 1)
     assert depth["color"]["data"] == b"JPEG" and depth["camera_to_head"]["status"] == "nominal"
+
+
+def test_the_rate_suits_the_matcher_and_a_failed_frame_does_not_stop_the_node():
+    assert StereoDepthNodeParams().rate() == 10.0
+    assert StereoDepthNodeParams(matcher="stereonet").rate() == 1.0
+    assert StereoDepthNodeParams(matcher="stereonet", max_hz=2).rate() == 2.0
+
+    class FailingOnce(ConstantMatcher):
+        def disparity(self, left, right):
+            self.calls = getattr(self, "calls", 0) + 1
+            if self.calls == 1:
+                raise ValueError("a bad frame")
+            return super().disparity(left, right)
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        matcher = FailingOnce(ONE_METRE)
+        node = StereoDepthNode(
+            pubsub=bus, params=StereoDepthNodeParams(max_hz=30), rectifier=Rectifier(), matcher=matcher,
+            to_grey=lambda image: image[..., 0], pairs=bus.get_subscription(StereoFrameTopic),
+        )
+        depths = bus.get_subscription(DepthFrameTopic)
+        running = asyncio.create_task(node.run())
+        await bus.publish(StereoFrameTopic, pair(1))
+        await asyncio.sleep(0.1)
+        await bus.publish(StereoFrameTopic, pair(2))
+        depth = await asyncio.wait_for(depths.get(), timeout=5)
+        node.stop()
+        await bus.publish(StereoFrameTopic, pair(3))
+        await asyncio.wait_for(running, timeout=5)
+        bus.close()
+        return depth, matcher
+
+    depth, matcher = asyncio.run(scenario())
+
+    assert int(depth.depth[0, 0]) == 1000 and matcher.closed
