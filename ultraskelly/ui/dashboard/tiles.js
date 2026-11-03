@@ -55,15 +55,21 @@ function sizeCanvas(canvas, width, height) {
   return canvas.getContext('2d');
 }
 
-// One person's keypoints. The followed person (`target`) is drawn bold; everyone else thin and muted.
+// From coordinates in an image of `size` [width, height] to the canvas's pixels; no size, no scaling.
+function scaleFrom(ctx, size) {
+  return size?.[0] > 0 && size?.[1] > 0 ? [ctx.canvas.width / size[0], ctx.canvas.height / size[1]] : [1, 1];
+}
+
+// One person's keypoints, in the pixels of their channel's image_size. The followed person (`target`) is drawn
+// bold; everyone else thin and muted.
 function drawPerson(ctx, overlay, followed) {
   const column = name => overlay.columns.indexOf(name), width = overlay.columns.length;
-  const [x, y, visibility] = [column('x'), column('y'), column('visibility')];
+  const [x, y, visibility] = [column('x'), column('y'), column('visibility')], [sx, sy] = scaleFrom(ctx, overlay.imageSize);
   const point = row => {
     if (row == null) return null;
     const values = overlay.data.subarray(row * width, row * width + width);
     const seen = visibility < 0 || values[visibility] >= KEYPOINT_VISIBLE;
-    return seen && Number.isFinite(values[x]) && Number.isFinite(values[y]) ? [values[x], values[y]] : null;
+    return seen && Number.isFinite(values[x]) && Number.isFinite(values[y]) ? [values[x] * sx, values[y] * sy] : null;
   };
   const rowOf = new Map(overlay.names.map((name, row) => [name, row]));
   ctx.strokeStyle = followed ? COLORS.bone : COLORS.other; ctx.lineWidth = followed ? 3 : 1.5;
@@ -204,12 +210,15 @@ export class CameraTiles {
     counted(tile);
   }
 
-  // Aim point, jaw zone, people and the target ring, in the pixels of this camera's image. The ring
-  // is the target channel's row from the same frame; without one the head follows nobody.
+  // Aim point, jaw zone, people and the target ring over this camera's image. The ring is the target channel's row
+  // from the same frame; without one the head follows nobody. Each comes in its own pixels: the aim point and jaw
+  // zone in the camera's (robot_state.cameras), the keypoints and the ring in their channel's image_size. Each is
+  // scaled to the image as it arrived, which the server may send smaller than the camera's (docs/stream.md).
   drawGuides(ctx, cameraId, frame, guides = this.state?.overlays?.[cameraId]) {
     if (guides) {
-      const [aimX, aimY] = guides.aim, zone = guides.jaw_zone;
-      ctx.strokeStyle = COLORS.jaw; ctx.lineWidth = 1; ctx.strokeRect(aimX - zone, aimY - zone, 2 * zone, 2 * zone);
+      const camera = this.state?.cameras?.[cameraId], [sx, sy] = scaleFrom(ctx, camera && [camera.width, camera.height]);
+      const aimX = guides.aim[0] * sx, aimY = guides.aim[1] * sy, zoneX = guides.jaw_zone * sx, zoneY = guides.jaw_zone * sy;
+      ctx.strokeStyle = COLORS.jaw; ctx.lineWidth = 1; ctx.strokeRect(aimX - zoneX, aimY - zoneY, 2 * zoneX, 2 * zoneY);
       ctx.strokeStyle = COLORS.aim; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(aimX - 20, aimY); ctx.lineTo(aimX + 20, aimY); ctx.moveTo(aimX, aimY - 20); ctx.lineTo(aimX, aimY + 20); ctx.stroke();
     }
@@ -218,8 +227,9 @@ export class CameraTiles {
     for (const overlay of people) if (overlay.trackerId === 'target') drawPerson(ctx, overlay, true);  // On top
     const target = frame.target;
     if (target && target.cameraId === cameraId && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+      const [sx, sy] = scaleFrom(ctx, [target.width, target.height]);
       ctx.strokeStyle = COLORS.target; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(target.x, target.y, 20, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(target.x * sx, target.y * sy, 20, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
