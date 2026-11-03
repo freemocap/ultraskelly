@@ -8,6 +8,7 @@ import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
+from ultraskelly.core.bot.sensory.hailo_device import shared_vdevice
 from ultraskelly.core.bot.sensory.pose_common import CocoKeypoint, locate_target
 from ultraskelly.core.bot.sensory.yolov8_pose import Letterbox, PoseDetections, decode_yolov8_pose
 from ultraskelly.core.pubsub.bot_topics import (
@@ -88,10 +89,8 @@ class HailoPoseDetectorNode(DetectorNode):
         node.hailo_resources = contextlib.ExitStack()
 
         try:
-            device_params = hp.VDevice.create_params()
-            # The scheduler activates the model on demand and lets other processes share the chip.
-            device_params.scheduling_algorithm = hp.HailoSchedulingAlgorithm.ROUND_ROBIN
-            vdevice = node.hailo_resources.enter_context(hp.VDevice(device_params))
+            # The process's one device: its scheduler shares the chip with StereoNet's model.
+            vdevice = node.hailo_resources.enter_context(shared_vdevice())
 
             model = vdevice.create_infer_model(params.hef_path)
             model.set_batch_size(1)

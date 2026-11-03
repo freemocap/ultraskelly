@@ -128,6 +128,9 @@ class BotLauncher(BaseModel):
         if not self.config.tracking:
             self._create_zed_only_nodes()
             return
+        # The ZED first: an optional camera that fails to start stops the launch before
+        # the motors, the OAK or the Hailo are opened.
+        stereo_feeds = self._create_stereo_nodes()
 
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
@@ -185,7 +188,6 @@ class BotLauncher(BaseModel):
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
-        stereo_feeds = self._create_stereo_nodes()
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
         aim = self.config.orientation
         self.nodes.append(

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ultraskelly.core.bot.sensory.hailo_device import shared_vdevice
+
 DEFAULT_HEF = "/home/ultraskelly-rpi5-admin/ultraskelly-models/hailo8-v2.17/stereonet.hef"
 
 
@@ -47,7 +49,9 @@ class HailoStereoNetMatcher:
     name = "stereonet"
     color = True  # It matches RGB images
 
-    def __init__(self, hef_path: str, eye_size: tuple[int, int], centre_row: float) -> None:
+    def __init__(
+        self, hef_path: str, eye_size: tuple[int, int], centre_row: float, scheduler_priority: int | None = None,
+    ) -> None:
         import cv2
         import hailo_platform as hp
 
@@ -56,15 +60,16 @@ class HailoStereoNetMatcher:
         # Closing the stack releases the configured model before the device, the order HailoRT needs.
         self.resources = contextlib.ExitStack()
         try:
-            device_params = hp.VDevice.create_params()
-            device_params.scheduling_algorithm = hp.HailoSchedulingAlgorithm.ROUND_ROBIN
-            device = self.resources.enter_context(hp.VDevice(device_params))
+            # The process's one device: its scheduler shares the chip with the pose model.
+            device = self.resources.enter_context(shared_vdevice())
             model = device.create_infer_model(hef_path)
             model.set_batch_size(1)
             for stream in model.inputs:
                 stream.set_format_type(hp.FormatType.UINT8)
             model.output().set_format_type(hp.FormatType.FLOAT32)
             self.configured = self.resources.enter_context(model.configure())
+            if scheduler_priority is not None:  # HailoRT's default is 16; the scheduler serves higher first
+                self.configured.set_scheduler_priority(scheduler_priority)
             height, width, _ = model.inputs[0].shape
             # input_layer1 takes the left image, input_layer2 the right.
             self.inputs = [np.empty(model.input(name).shape, np.uint8) for name in sorted(model.input_names)]
