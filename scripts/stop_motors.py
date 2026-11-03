@@ -13,6 +13,7 @@ import logging
 import sys
 import time
 
+from ultraskelly.core.bot.motor.bridge_motor import BridgeMotor
 from ultraskelly.core.bot.motor.simulated_actuators import STOP_ATTEMPTS, stop_board_motors
 
 BOARD_ADDRESS = 0x60
@@ -27,7 +28,8 @@ def main() -> int:
     for attempt in range(1, STOP_ATTEMPTS + 1):
         try:
             kit = MotorKit(address=BOARD_ADDRESS)
-            motors = {f"motor{number}": getattr(kit, f"motor{number}") for number in (1, 2, 3, 4)}
+            # Each brake sets both bridge inputs in one transfer, so a failing bus cannot leave one on alone.
+            motors = {f"motor{number}": BridgeMotor.from_motorkit(kit, number) for number in (1, 2, 3, 4)}
             break
         except Exception as error:  # A disturbed I2C bus fails setup with OSError or, from blinka's reads, TypeError
             logging.warning(f"Motor board not reachable ({type(error).__name__}: {error}); attempt {attempt}")

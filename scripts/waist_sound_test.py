@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
+from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams
 from ultraskelly.core.bot.motor.simulated_actuators import (
@@ -398,7 +399,6 @@ def main() -> None:
         raise SystemExit(str(error))
     orientation, limits, recorder = OrientationNodeParams(), ActuatorLimits(), CommandRecorder()
 
-    from adafruit_motor import motor as dc_motor
     from adafruit_motorkit import MotorKit
     from adafruit_servokit import ServoKit
 
@@ -433,7 +433,7 @@ def main() -> None:
         camera.stop()
         raise
     kit = MotorKit(address=0x60, pwm_frequency=1600)
-    motors = {number: getattr(kit, f"motor{number}") for number in (1, 2, 3, 4)}
+    motors = {number: BridgeMotor.from_motorkit(kit, number) for number in (1, 2, 3, 4)}  # As the bot drives them
     raw_waist = motors[orientation.waist_motor_channel]
     waist = RecordingMotor(motor=raw_waist, name="waist", recorder=recorder, max_throttle=limits.waist_max_throttle)
     audio = Microphone(card, folder / "audio.wav", gain=args.gain)
@@ -445,18 +445,18 @@ def main() -> None:
         segments.append(dict(profile="idle", direction=0, start=began, drive_end=time.monotonic(), end=time.monotonic()))
         for name, profile in selected.items():
             kit._pca.frequency = profile.pwm_hz
-            raw_waist.decay_mode = dc_motor.SLOW_DECAY if profile.slow_decay else dc_motor.FAST_DECAY
+            raw_waist.decay_mode = SLOW_DECAY if profile.slow_decay else FAST_DECAY
             for direction in (+1, -1):
                 print(f"{name} {direction:+d}: {profile.description}", flush=True)
                 start, drive_end = drive(waist, profile, direction)
                 time.sleep(REST_SECONDS)
                 segments.append(dict(profile=name, direction=direction, start=start, drive_end=drive_end, end=time.monotonic()))
         kit._pca.frequency = 1600
-        raw_waist.decay_mode = dc_motor.FAST_DECAY
+        raw_waist.decay_mode = FAST_DECAY
         return_waist(waist, camera, began, args.offset)
     finally:
         stop_board_motors({f"motor{number}": motor for number, motor in motors.items()})
-        raw_waist.decay_mode = dc_motor.FAST_DECAY
+        raw_waist.decay_mode = FAST_DECAY
         kit._pca.frequency = 1600
         print("All DC motors stopped", flush=True)
         audio_start = audio.stop()

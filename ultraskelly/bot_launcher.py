@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
+from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
 from ultraskelly.core.bot.motor.simulated_actuators import (
@@ -98,6 +99,8 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    # Brakes the DC motors from its own thread if the control loop stalls; None until nodes are created.
+    motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(default=None, exclude=True)
     shutting_down: bool = Field(default=False, exclude=True)
 
     def healthy(self) -> bool:
@@ -133,6 +136,8 @@ class BotLauncher(BaseModel):
                 mouth.run_startup_test()  # After wrapping, so the limits apply
             self.nodes.extend([orientation, mouth])
         self.motor_tester = MotorTester(orientation=orientation, mouth=mouth, limits=self.config.motor_tests)
+        self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
+        orientation.motor_watchdog = self.motor_watchdog
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
@@ -243,6 +248,8 @@ class BotLauncher(BaseModel):
 
         # Wait for tasks to finish cancelling
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.motor_watchdog is not None:
+            self.motor_watchdog.stop()
         
         # Clear task list
         self.tasks.clear()
@@ -262,7 +269,9 @@ class BotLauncher(BaseModel):
     async def _start_nodes(self) -> None:
         """Start all nodes as async tasks."""
         logger.info("Starting nodes...")
-        
+        if self.motor_watchdog is not None:
+            self.motor_watchdog.start()  # Armed by the control loop's first tick
+
         for node in self.nodes:
             task = asyncio.create_task(node.run())
             self.tasks.append(task)

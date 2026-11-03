@@ -35,6 +35,7 @@ from ultraskelly.core.bot.base_abcs import NodeParams
 logger = logging.getLogger(__name__)
 
 MAX_STEP = 0.1  # Seconds; a stalled control loop does not jump a ramp further than this
+RESTART_AFTER = 0.5  # Seconds without an update: the motor watchdog has braked the waist, so start over
 
 
 class WaistDriveParams(NodeParams):
@@ -163,6 +164,9 @@ class WaistDrive:
         `pan_offset` is the head's pan angle minus neutral in degrees, or None without a valid target.
         """
         p = self.params
+        if self.last_update is not None and now - self.last_update > RESTART_AFTER and self.phase is not WaistState.IDLE:
+            logger.warning(f"No waist update for {now - self.last_update:.1f} s; the next move starts from rest")
+            self.phase, self.level, self.rate, self.extra, self.coasting = WaistState.IDLE, 0.0, 0.0, 0.0, False
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
         if self.phase is WaistState.TURNING and now - self.move_started >= p.max_move_duration:

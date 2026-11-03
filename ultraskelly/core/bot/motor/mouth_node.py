@@ -7,6 +7,7 @@ from typing import Callable
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import NodeParams, Node
+from ultraskelly.core.bot.motor.bridge_motor import BridgeMotor
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, ServoStateMessage
 from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
@@ -56,27 +57,11 @@ class MouthNode(Node):
 
         `pwm_frequency` is the motor board's, shared with the waist: pass the waist's.
         """
-        from adafruit_motor.motor import DCMotor
         from adafruit_motorkit import MotorKit
 
         motor_kit = MotorKit(address=0x60, pwm_frequency=pwm_frequency)
-
-        # Select motor channel
-        mouth_motor: DCMotor | None = None
-        match params.mouth_motor_channel:
-            case 1:
-                mouth_motor = motor_kit.motor1
-            case 2:
-                mouth_motor = motor_kit.motor2
-            case 3:
-                mouth_motor = motor_kit.motor3
-            case 4:
-                mouth_motor = motor_kit.motor4
-            case _:
-                raise ValueError(f"Invalid mouth motor channel: {params.mouth_motor_channel}")
-
-        if mouth_motor is None:
-            raise ValueError(f"Could not initialize mouth motor on channel {params.mouth_motor_channel}")
+        # Both bridge inputs set in one I2C transfer (see bridge_motor.py)
+        mouth_motor = BridgeMotor.from_motorkit(motor_kit, params.mouth_motor_channel)
 
         head_servo_subscription = pubsub.get_subscription(ServoStateTopic)
 
