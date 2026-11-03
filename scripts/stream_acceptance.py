@@ -147,7 +147,11 @@ async def run_checks(args: argparse.Namespace) -> dict:
             browser.wait(timeout=10)
         except subprocess.TimeoutExpired:
             browser.kill()
-        shutil.rmtree(profile, ignore_errors=True)
+        for _ in range(20):  # Chromium's helper processes can still be writing the profile
+            shutil.rmtree(profile, ignore_errors=True)
+            if not Path(profile).exists():
+                break
+            await asyncio.sleep(0.25)
         await runner.cleanup()
 
 
