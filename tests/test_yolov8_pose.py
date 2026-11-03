@@ -125,3 +125,30 @@ def test_results_are_mapped_back_through_the_letterbox():
 
     np.testing.assert_allclose(detections.boxes[0], [240, -8, 496, 312], atol=1e-3)
     np.testing.assert_allclose(detections.keypoints[0, 0, :2], [336, 88], atol=1e-3)
+
+
+def quantize(values: np.ndarray, low: float, high: float) -> tuple[np.ndarray, tuple[float, float]]:
+    """8-bit values and their (scale, zero point), as the Hailo-8 sends an output spanning low..high."""
+    scale = (high - low) / 255
+    zero_point = round(-low / scale)
+    return np.clip(np.round(values / scale + zero_point), 0, 255).astype(np.uint8), (scale, zero_point)
+
+
+def test_the_chips_8_bit_outputs_decode_to_the_same_people_as_real_values():
+    outputs = empty_outputs()
+    place_person(outputs, stride=8, cell=(40, 30), score=0.9, sides=(3, 5, 4, 6))
+    place_person(outputs, stride=32, cell=(5, 12), score=0.7, sides=(1, 2, 2, 1), keypoint_offset=(-0.5, 0.75))
+    ranges = {1: (0.0, 1.0), 4 * DFL_BINS: (-50.0, 50.0), NUM_KEYPOINTS * 3: (-1.0, 4.0)}
+    quantized = [quantize(output, *ranges[channels]) for (_, channels), output in outputs.items()]
+
+    expected = decode(outputs)
+    got = decode_yolov8_pose(
+        [raw for raw, _ in quantized], input_size=INPUT_SIZE, letterbox=NO_LETTERBOX, score_threshold=0.5,
+        iou_threshold=0.65, max_people=10, quantization=[parameters for _, parameters in quantized],
+    )
+
+    assert got.count == expected.count == 2
+    assert got.scores == pytest.approx(expected.scores, abs=1 / 255)
+    assert got.boxes == pytest.approx(expected.boxes)
+    step = 5.0 / 255  # Keypoint offsets come back within one step, doubled and scaled by the stride
+    assert got.keypoints[..., :2] == pytest.approx(expected.keypoints[..., :2], abs=2 * 32 * step)

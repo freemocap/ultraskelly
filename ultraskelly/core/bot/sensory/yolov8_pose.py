@@ -2,8 +2,10 @@
 
 For each stride (8, 16, 32) the model emits three tensors on an (input_size / stride)² grid:
 box side distances as 4 x 16 distribution bins, a person score (sigmoid already applied on
-the chip), and 17 COCO keypoints as raw (x, y, visibility logit). Pure NumPy, so it runs
-and is tested anywhere.
+the chip), and 17 COCO keypoints as raw (x, y, visibility logit). The chip sends them as
+8-bit integers with a scale and zero point each: only the scores and the cells above the
+threshold are turned into real values, not the 974k values of every cell. Pure NumPy, so it
+runs and is tested anywhere.
 """
 from dataclasses import dataclass
 
@@ -50,6 +52,18 @@ class PoseDetections:
         return len(self.scores)
 
 
+def real_values(output: np.ndarray, quantization: tuple[float, float] | None, rows: np.ndarray | None = None) -> np.ndarray:
+    """An output's values (rows of its cells, or all), as (cells, channels) real numbers:
+    (raw - zero point) x scale when it came quantized."""
+    values = output.reshape(-1, output.shape[-1])
+    if rows is not None:
+        values = values[rows]
+    if quantization is None:
+        return values
+    scale, zero_point = quantization
+    return (values.astype(np.float32) - np.float32(zero_point)) * np.float32(scale)
+
+
 def decode_yolov8_pose(
     outputs: list[np.ndarray],
     *,
@@ -58,6 +72,7 @@ def decode_yolov8_pose(
     score_threshold: float,
     iou_threshold: float,
     max_people: int,
+    quantization: list[tuple[float, float] | None] | None = None,
 ) -> PoseDetections:
     """Turn the nine raw output tensors into scored people with boxes and keypoints.
 
@@ -68,21 +83,25 @@ def decode_yolov8_pose(
         score_threshold: Minimum person confidence.
         iou_threshold: Overlap above which a lower-scoring box is dropped as a duplicate.
         max_people: Most people to return.
+        quantization: Per output, in the same order, (scale, zero point) of its integer values;
+            None, or None for an output, when it is already real-valued.
     """
-    by_shape = {(output.shape[0], output.shape[-1]): output for output in outputs}
+    quantization = quantization or [None] * len(outputs)
+    by_shape = {(output.shape[0], output.shape[-1]): (output, quantized)
+                for output, quantized in zip(outputs, quantization)}
     boxes: list[np.ndarray] = []
     scores: list[np.ndarray] = []
     keypoints: list[np.ndarray] = []
 
     for stride in STRIDES:
         grid = input_size // stride
-        cell_scores = by_shape[(grid, 1)].reshape(-1)
+        cell_scores = real_values(*by_shape[(grid, 1)]).reshape(-1)
         cells = np.flatnonzero(cell_scores >= score_threshold)
         if cells.size == 0:
             continue
 
-        box_bins = by_shape[(grid, 4 * DFL_BINS)].reshape(-1, 4, DFL_BINS)[cells]
-        raw_keypoints = by_shape[(grid, NUM_KEYPOINTS * 3)].reshape(-1, NUM_KEYPOINTS, 3)[cells]
+        box_bins = real_values(*by_shape[(grid, 4 * DFL_BINS)], rows=cells).reshape(-1, 4, DFL_BINS)
+        raw_keypoints = real_values(*by_shape[(grid, NUM_KEYPOINTS * 3)], rows=cells).reshape(-1, NUM_KEYPOINTS, 3)
         grid_x = (cells % grid).astype(np.float32)
         grid_y = (cells // grid).astype(np.float32)
 

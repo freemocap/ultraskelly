@@ -77,7 +77,10 @@ class HailoPoseDetectorNode(DetectorNode):
     bindings: SkipValidation[object] = Field(default=None, exclude=True)
     input_size: int = Field(default=640, exclude=True)
     input_buffer: SkipValidation[np.ndarray] = Field(default=None, exclude=True)
+    padded_for: tuple[int, int] | None = Field(default=None, exclude=True)  # Frame size the padding was filled for
     output_buffers: SkipValidation[dict[str, np.ndarray]] = Field(default_factory=dict, exclude=True)
+    # Each output's (scale, zero point): the chip sends 8-bit integers, decoded only where needed.
+    quantization: SkipValidation[dict[str, tuple[float, float]]] = Field(default_factory=dict, exclude=True)
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: HailoPoseDetectorParams) -> "HailoPoseDetectorNode":
@@ -96,14 +99,20 @@ class HailoPoseDetectorNode(DetectorNode):
             model.set_batch_size(1)
             model.input().set_format_type(hp.FormatType.UINT8)
             for output in model.outputs:
-                output.set_format_type(hp.FormatType.FLOAT32)
+                # The chip's own 8-bit values, in (grid, grid, channels) order: asking for FLOAT32 had
+                # HailoRT convert all 974k of them on the Pi for every frame.
+                output.set_format_type(hp.FormatType.UINT8)
+                output.set_format_order(hp.FormatOrder.NHWC)
             node.configured_model = node.hailo_resources.enter_context(model.configure())
 
             node.input_size = model.input().shape[1]  # Square input, (height, width, 3)
             node.input_buffer = np.empty(model.input().shape, dtype=np.uint8)
             node.output_buffers = {
-                name: np.empty(model.output(name).shape, dtype=np.float32) for name in model.output_names
+                name: np.empty(model.output(name).shape, dtype=np.uint8) for name in model.output_names
             }
+            for name in model.output_names:
+                quant = model.output(name).quant_infos[0]
+                node.quantization[name] = (float(quant.qp_scale), float(quant.qp_zp))
             node.bindings = node.configured_model.create_bindings()
             node.bindings.input().set_buffer(node.input_buffer)
             for name, buffer in node.output_buffers.items():
@@ -114,8 +123,9 @@ class HailoPoseDetectorNode(DetectorNode):
 
         return node
 
-    def _infer(self, frame: np.ndarray) -> PoseDetections:
-        """Letterbox an RGB frame into the model input, run the Hailo-8, and decode people."""
+    def _letterbox(self, frame: np.ndarray) -> Letterbox:
+        """Write an RGB frame into the model input. The padding around it is filled once per frame
+        size, since only the image region changes."""
         height, width = frame.shape[:2]
         letterbox = Letterbox.fit(width=width, height=height, size=self.input_size)
         rgb = frame[..., :3]
@@ -125,12 +135,18 @@ class HailoPoseDetectorNode(DetectorNode):
                 (letterbox.resized_width, letterbox.resized_height),
                 interpolation=cv2.INTER_LINEAR,
             )
-
-        self.input_buffer[:] = LETTERBOX_GRAY
+        if self.padded_for != (width, height):
+            self.input_buffer[:] = LETTERBOX_GRAY
+            self.padded_for = (width, height)
         self.input_buffer[
             letterbox.pad_y:letterbox.pad_y + letterbox.resized_height,
             letterbox.pad_x:letterbox.pad_x + letterbox.resized_width,
         ] = rgb
+        return letterbox
+
+    def _infer(self, frame: np.ndarray) -> PoseDetections:
+        """Letterbox an RGB frame into the model input, run the Hailo-8, and decode people."""
+        letterbox = self._letterbox(frame)
         self.configured_model.run([self.bindings], 1000)
 
         return decode_yolov8_pose(
@@ -140,6 +156,7 @@ class HailoPoseDetectorNode(DetectorNode):
             score_threshold=self.params.detection_threshold,
             iou_threshold=self.params.iou_threshold,
             max_people=self.params.max_people,
+            quantization=[self.quantization.get(name) for name in self.output_buffers],
         )
 
     def _locate_target(
