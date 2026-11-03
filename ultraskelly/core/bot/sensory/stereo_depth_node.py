@@ -7,7 +7,9 @@ VGA eyes, it makes a depth frame in about 15 ms of one core. `stereonet` runs th
 Model Zoo's StereoNet on the Hailo-8 instead, at full size; it needs the robot lock like
 every Hailo user and holds the chip for about 200 ms a frame, which pose has to wait for.
 The depth image is pixel-aligned with the rectified left image, which travels with it:
-together they are an RGB-D frame in the rectified left camera's frame.
+together they are an RGB-D frame in the rectified left camera's frame. The grey matcher
+takes each eye's Y bytes as the camera sent them; only the left eye is converted to
+colour, for that image (StereoNet, which matches colour, converts both).
 """
 import asyncio
 import logging
@@ -27,6 +29,7 @@ from ultraskelly.core.bot.sensory.stereo_rectification import (
     find_zed_serial,
     zed_rectifier,
 )
+from ultraskelly.core.bot.sensory.zed_camera_node import yuyv_to_rgb_with_opencv
 from ultraskelly.core.pubsub.bot_topics import DepthFrameMessage, DepthFrameTopic, StereoFrameMessage, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
@@ -156,18 +159,6 @@ def depth_millimetres(
     return np.where(known, np.minimum(np.rint(metres * 1000.0), MAX_MILLIMETRES), 0).astype(np.uint16)
 
 
-def rgb_to_grey_with_opencv(image: np.ndarray) -> np.ndarray:
-    import cv2
-
-    return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-
-def resize_with_opencv(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
-    import cv2
-
-    return cv2.resize(image, size, interpolation=cv2.INTER_AREA)
-
-
 class StereoDepthNode(Node):
     """Turns the newest stereo pair into depth, as often as `max_hz` allows."""
 
@@ -175,10 +166,7 @@ class StereoDepthNode(Node):
     rectifier: SkipValidation[StereoRectifier | None] = Field(default=None, exclude=True)
     view_mask: SkipValidation[ViewMask | None] = Field(default=None, exclude=True)
     matcher: SkipValidation[DisparityMatcher] = Field(exclude=True)
-    to_grey: SkipValidation[Callable[[np.ndarray], np.ndarray]] = Field(default=rgb_to_grey_with_opencv, exclude=True)
-    resize: SkipValidation[Callable[[np.ndarray, tuple[int, int]], np.ndarray]] = Field(
-        default=resize_with_opencv, exclude=True
-    )
+    to_rgb: SkipValidation[Callable[[np.ndarray], np.ndarray]] = Field(default=yuyv_to_rgb_with_opencv, exclude=True)
     pairs: SkipValidation[TopicSubscriptionQueue] = Field(exclude=True)
     frames_computed: int = Field(default=0, exclude=True)
     seconds_computing: float = Field(default=0.0, exclude=True)
@@ -244,21 +232,13 @@ class StereoDepthNode(Node):
             logger.info(f"StereoDepthNode stopped after {self.frames_computed} depth frames, {1000 * average:.0f} ms each")
 
     def compute(self, pair: StereoFrameMessage) -> DepthFrameMessage:
-        """Rectify (unless the pair already is), match and convert to millimetres. Runs in a worker thread."""
+        """Rectify, match and convert to millimetres. Runs in a worker thread."""
         rectification = self.rectifier.rectification
-        size = (rectification.width, rectification.height)
-        if pair.rectification is not None:  # Rectified already by the camera node, at full size
-            color, right = pair.left, pair.right
-            if (color.shape[1], color.shape[0]) != size:
-                color, right = self.resize(color, size), self.resize(right, size)
-        else:
-            color = self.rectifier.rectify_eye(0, pair.left)
-            # Grey before rectifying, when the matcher works in grey: a third of the remap work.
-            right = self.rectifier.rectify_eye(1, pair.right if self.matcher.color else self.to_grey(pair.right))
+        color = self.rectifier.rectify_eye(0, self.to_rgb(pair.eye(0)))
         if self.matcher.color:
-            disparity = self.matcher.disparity(color, right)
-        else:
-            left_grey, right_grey = self.to_grey(color), right if right.ndim == 2 else self.to_grey(right)
+            disparity = self.matcher.disparity(color, self.rectifier.rectify_eye(1, self.to_rgb(pair.eye(1))))
+        else:  # The Y bytes are the grey images: rectified as they are, a third of the colour remap's work
+            left_grey, right_grey = (self.rectifier.rectify_eye(eye, pair.grey(eye)) for eye in (0, 1))
             if self.view_mask is None:
                 disparity = self.matcher.disparity(left_grey, right_grey)
             else:  # Match only the window around the pixels both eyes see

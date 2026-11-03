@@ -50,10 +50,15 @@ class Rectifier:
         return image
 
 
-def pair(value: int, *, rectified: bool = False) -> StereoFrameMessage:
-    image = np.full((6, 8, 3), value, np.uint8)
-    return StereoFrameMessage(left=image, right=image.copy(), frame_number=12, timestamp=3.5,
-                              rectification=SHARED if rectified else None)
+def pair(value: int) -> StereoFrameMessage:
+    """Two 8x6 eyes side by side in YUYV, brightness `value`, no colour."""
+    yuyv = np.full((6, 16, 2), 128, np.uint8)
+    yuyv[..., 0] = value
+    return StereoFrameMessage(yuyv=yuyv, frame_number=12, timestamp=3.5)
+
+
+def luma_as_rgb(yuyv):
+    return np.repeat(yuyv[..., :1], 3, axis=2)
 
 
 def test_depth_is_whole_millimetres_and_zero_where_unknown_or_out_of_range():
@@ -79,8 +84,7 @@ def run_node(pairs: list[StereoFrameMessage], rectifier: Rectifier) -> list[Dept
         bus = PubSubTopicManager.create()
         node = StereoDepthNode(
             pubsub=bus, params=StereoDepthNodeParams(max_hz=30), rectifier=rectifier,
-            matcher=ConstantMatcher(ONE_METRE / 2), to_grey=lambda image: image[..., 0],
-            pairs=bus.get_subscription(StereoFrameTopic),
+            matcher=ConstantMatcher(ONE_METRE / 2), to_rgb=luma_as_rgb, pairs=bus.get_subscription(StereoFrameTopic),
         )
         depths = bus.get_subscription(DepthFrameTopic)
         running = asyncio.create_task(node.run())
@@ -99,13 +103,13 @@ def run_node(pairs: list[StereoFrameMessage], rectifier: Rectifier) -> list[Dept
 
 def test_the_node_turns_each_pair_into_depth_aligned_with_its_rectified_left_image():
     rectifier = Rectifier()
-    raw, already_rectified = run_node([pair(7), pair(9, rectified=True)], rectifier)
+    first, second = run_node([pair(7), pair(9)], rectifier)
 
-    assert raw.depth.shape == (6, 8) and int(raw.depth[0, 0]) == 2000
-    assert raw.color[0, 0, 0] == 7 and raw.rectification is SHARED and raw.method == "constant"
-    assert (raw.frame_number, raw.timestamp) == (12, 3.5)
-    assert already_rectified.color[0, 0, 0] == 9
-    assert rectifier.calls == 2  # Both eyes of the raw pair; the rectified pair is used as it is
+    assert first.depth.shape == (6, 8) and int(first.depth[0, 0]) == 2000
+    assert first.color.shape == (6, 8, 3) and first.color[0, 0, 0] == 7 and second.color[0, 0, 0] == 9
+    assert first.rectification is SHARED and first.method == "constant"
+    assert (first.frame_number, first.timestamp) == (12, 3.5)
+    assert rectifier.calls == 6  # Per pair: the left eye in colour, and both eyes' grey Y bytes
 
 
 @pytest.mark.parametrize("previews", [False, True])
@@ -176,7 +180,7 @@ def test_the_rate_suits_the_matcher_and_a_failed_frame_does_not_stop_the_node():
         matcher = FailingOnce(ONE_METRE)
         node = StereoDepthNode(
             pubsub=bus, params=StereoDepthNodeParams(max_hz=30), rectifier=Rectifier(), matcher=matcher,
-            to_grey=lambda image: image[..., 0], pairs=bus.get_subscription(StereoFrameTopic),
+            to_rgb=luma_as_rgb, pairs=bus.get_subscription(StereoFrameTopic),
         )
         depths = bus.get_subscription(DepthFrameTopic)
         running = asyncio.create_task(node.run())

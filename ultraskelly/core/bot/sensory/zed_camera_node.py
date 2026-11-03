@@ -5,8 +5,8 @@ frame holds both eyes side by side in YUYV, left eye first. The modes are fixed;
 names match the ZED SDK's and the sections of Stereolabs' factory calibration files.
 Frame times are the kernel's buffer timestamps, on time.monotonic()'s clock like the
 OAK's: when the frame's first USB packet arrived, one transfer time before it can be read.
-With `rectify`, each pair is rectified with the camera's factory calibration first, so a
-scene point appears on the same row in both eyes.
+Each frame is published as it came, YUYV, unconverted: each consumer converts only what it
+needs (StereoFrameMessage), so nothing is converted when nothing wants it.
 """
 import asyncio
 import logging
@@ -20,7 +20,6 @@ import numpy as np
 from pydantic import Field, SkipValidation, model_validator
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
-from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectifier, zed_rectifier
 from ultraskelly.core.pubsub.bot_topics import StereoFrameMessage, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -59,16 +58,6 @@ class ZedCameraNodeParams(NodeParams):
     resolution: ZedResolution = Field(default=ZedResolution.VGA, description="VGA is 672x376 per eye, HD720 1280x720")
     fps: int = Field(default=30, description="Frames per second; each resolution offers a fixed set")
     device: str | None = Field(default=None, description="V4L2 device such as /dev/video0; None finds the first ZED")
-    rectify: bool = Field(
-        default=False,
-        description="Rectify each pair with the camera's factory calibration before publishing it. "
-                    "Costs about 14% of a core at VGA; depth rectifies the pairs it uses either way.",
-    )
-    calibration: Path | None = Field(
-        default=None,
-        description="Stereolabs calibration file; None uses ultraskelly/calibration/zed/SN<serial>.conf "
-                    "for the serial number the camera reports",
-    )
 
     @model_validator(mode="after")
     def _check_mode(self) -> "ZedCameraNodeParams":
@@ -148,7 +137,7 @@ class OpenCvSideBySideSource:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         capture.set(cv2.CAP_PROP_FPS, fps)
-        capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # Raw YUYV: each eye is converted to RGB once
+        capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # Raw YUYV: consumers convert only what they need
         streaming = (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
         if streaming != size:
             capture.release()
@@ -169,14 +158,14 @@ class OpenCvSideBySideSource:
 
 
 def yuyv_to_rgb_with_opencv(yuyv: np.ndarray) -> np.ndarray:
-    """One eye's (height, width, 2) YUYV as a contiguous (height, width, 3) RGB image."""
+    """One eye's (height, width, 2) YUYV (`StereoFrameMessage.eye`) as a contiguous (height, width, 3) RGB image."""
     import cv2
 
     return cv2.cvtColor(yuyv, cv2.COLOR_YUV2RGB_YUYV)
 
 
 class ZedCameraNode(Node):
-    """Streams the ZED's left and right eyes as RGB pairs, reopening the camera if it stops.
+    """Streams the ZED's side-by-side frames, reopening the camera if it stops.
 
     A ZED that stops streaming does not stop the bot: the node retries once a second.
     """
@@ -184,10 +173,6 @@ class ZedCameraNode(Node):
     params: ZedCameraNodeParams
     open_source: SkipValidation[Callable[[], SideBySideSource]] = Field(exclude=True)
     source: SkipValidation[SideBySideSource | None] = Field(default=None, exclude=True)
-    to_rgb: SkipValidation[Callable[[np.ndarray], np.ndarray]] = Field(
-        default=yuyv_to_rgb_with_opencv, exclude=True
-    )
-    rectifier: SkipValidation[StereoRectifier | None] = Field(default=None, exclude=True)
     # Held while a worker thread reads, so the camera is never closed under a read.
     source_lock: SkipValidation[threading.Lock] = Field(default_factory=threading.Lock, exclude=True)
     frames_published: int = Field(default=0, exclude=True)
@@ -195,9 +180,8 @@ class ZedCameraNode(Node):
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: ZedCameraNodeParams) -> "ZedCameraNode":
-        """Factory method: finds the ZED, opens its side-by-side stream in the configured mode
-        and prepares the rectification maps for its factory calibration."""
-        width, height = size = ZED_MODES[params.resolution][0]
+        """Factory method: finds the ZED and opens its side-by-side stream in the configured mode."""
+        size = ZED_MODES[params.resolution][0]
 
         def open_source() -> SideBySideSource:
             device = params.device or find_zed_device()  # Searched again on reopening: the number can change
@@ -205,19 +189,12 @@ class ZedCameraNode(Node):
                 raise RuntimeError(NOT_FOUND)
             return OpenCvSideBySideSource.open(device, size, params.fps)
 
-        rectifier = zed_rectifier((width // 2, height), params.calibration) if params.rectify else None
-        if rectifier is not None:
-            shared = rectifier.rectification
-            logger.info(
-                f"Rectifying each pair: focal length {shared.focal_length:.1f} px, "
-                f"centre ({shared.cx:.1f}, {shared.cy:.1f}), baseline {1000 * shared.baseline:.1f} mm"
-            )
-        node = cls(pubsub=pubsub, params=params, open_source=open_source, rectifier=rectifier)
+        node = cls(pubsub=pubsub, params=params, open_source=open_source)
         node.source = open_source()  # Fails at startup, not mid-run, if the camera cannot stream this mode
         return node
 
     async def run(self) -> None:
-        """Main camera loop: reading and conversion run in a worker thread, publishing on the event loop."""
+        """Main camera loop: reading runs in a worker thread, publishing on the event loop."""
         width, height = ZED_MODES[self.params.resolution][0]
         logger.info(f"Starting ZedCameraNode [{width // 2}x{height} per eye @ {self.params.fps} fps]")
         counter = FramePeriodCounter(self.params.fps)
@@ -243,8 +220,8 @@ class ZedCameraNode(Node):
             logger.info(f"ZedCameraNode stopped after {self.frames_published} frames ({self.frames_lost} lost)")
 
     def _capture(self, counter: FramePeriodCounter) -> StereoFrameMessage | None:
-        """Read until a whole frame arrives, split it into RGB eyes and rectify them; None once
-        the camera stopped or the node is stopping. Runs in a worker thread."""
+        """Read until a whole frame arrives; None once the camera stopped or the node is
+        stopping. Runs in a worker thread."""
         with self.source_lock:
             while self.source is not None and not self.stop_event.is_set():
                 read = self.source.read()
@@ -255,17 +232,7 @@ class ZedCameraNode(Node):
                 if has_lost_rows(yuyv):
                     self.frames_lost += 1
                     continue
-                half = yuyv.shape[1] // 2
-                left, right = self.to_rgb(yuyv[:, :half]), self.to_rgb(yuyv[:, half:])
-                if self.rectifier is not None:
-                    left, right = self.rectifier.rectify(left, right)
-                return StereoFrameMessage(
-                    left=left,
-                    right=right,
-                    frame_number=frame_number,
-                    timestamp=timestamp,
-                    rectification=None if self.rectifier is None else self.rectifier.rectification,
-                )
+                return StereoFrameMessage(yuyv=yuyv, frame_number=frame_number, timestamp=timestamp)
         return None
 
     def _close(self) -> None:
