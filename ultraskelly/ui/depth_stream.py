@@ -3,7 +3,7 @@
 FreeMoCap's image payload carries only JPEGs, so 16-bit depth travels as an
 application message kind of its own on `/stream`, beside the frame messages. Each
 message holds everything a viewer needs to draw a depth image, a point cloud or a mesh:
-the depth in millimetres (zlib-compressed little-endian uint16, every `step`th pixel),
+the depth in millimetres (zlib-compressed little-endian uint16, optionally every `step`th pixel),
 the rectified left image it belongs to, that image's pinhole intrinsics, and the
 camera's pose in the head frame. docs/depth-stream.md describes it for consumers.
 """
@@ -42,7 +42,7 @@ def encode_depth_frame(
     *,
     color_jpeg: bytes,
     sequence: int,
-    step: int = 2,
+    step: int = 1,
     compression_level: int = 1,
     camera_to_head: dict | None = None,
 ) -> bytes:

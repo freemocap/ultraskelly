@@ -149,5 +149,5 @@ def test_a_depth_frame_streams_as_its_rectified_image_and_its_depth():
     assert struct.unpack_from("<i", frame["image"], 16)[0] == 2  # Two images in the payload
     assert encoded[:2] == [("uint8", (6, 8, 3)), ("uint16", (6, 8))]  # The JPEG encoder colours the depth
     depth = received["depth_frame"]
-    assert (depth["frame_number"], depth["camera"]["fx"], depth["depth"]["step"]) == (4, 340.0, 2)
+    assert (depth["frame_number"], depth["camera"]["fx"], depth["depth"]["step"]) == (4, 340.0, 1)
     assert depth["color"]["data"] == b"JPEG" and depth["camera_to_head"]["status"] == "nominal"
