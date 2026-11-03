@@ -19,8 +19,11 @@ from ultraskelly.core.pubsub.bot_topics import (
     FrameTopic,
     ImuMessage,
     ImuTopic,
+    PoseDataMessage,
+    PoseDataTopic,
     StereoFrameMessage,
     StereoFrameTopic,
+    TargetLocationMessage,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.runtime_server import (
@@ -333,17 +336,38 @@ def test_an_enlarged_eye_or_a_viewer_without_sizes_gets_the_camera_size():
     assert enlarged == unsized == nearly_whole == [{"zed_left": EYES, "zed_right": EYES}]
 
 
-def test_the_oak_keeps_its_pixels_for_its_guides_and_poses():
+def test_the_oak_shrinks_while_its_keypoints_and_target_stay_in_camera_pixels():
     async def scenario(bus, server, client, encoder):
         viewer = await connect(client, server, {"oak": (160, 120)})
-        await bus.publish(FrameTopic, FrameMessage(frame=np.full((480, 640, 3), 10, np.uint8)))
+        camera_frame = FrameMessage(frame=np.full((480, 640, 3), 10, np.uint8), frame_number=5)
+        await bus.publish(FrameTopic, camera_frame)
+        keypoints = np.zeros((1, 17, 3), np.float32)
+        keypoints[0, 0] = [330, 200, 0.9]
+        await bus.publish(PoseDataTopic, PoseDataMessage(
+            keypoints=keypoints, scores=np.array([0.9]), frame=camera_frame,
+            target=TargetLocationMessage(x=330, y=200, angle=85.0), target_person=0))
+        await until(lambda: any(message["trackers"] for message in viewer.messages if message["kind"] == "frame"))
+        await viewer.close()
+        return next(m for m in viewer.messages if m["kind"] == "frame" and m["trackers"]), encoder.sizes
+
+    posed, encoded = run(scenario, overlays={"oak": TrackingOverlay()}, pose_camera="oak")
+
+    assert posed["cameras"][0]["image_size"] == [160, 120] and (160, 120) in encoded  # A sixteenth of the pixels
+    keypoint_channel, target_channel = posed["trackers"][0]["channels"]
+    assert keypoint_channel["image_size"] == target_channel["image_size"] == [640, 480]  # The camera's, as before
+    assert np.frombuffer(keypoint_channel["data"], "<f4").reshape(17, 3)[0].tolist() == pytest.approx([330, 200, 0.9])
+
+
+def test_a_cameras_own_jpeg_goes_out_whole_even_when_drawn_small():
+    async def scenario(bus, server, client, encoder):
+        viewer = await connect(client, server, {"oak": (160, 120)})
+        await bus.publish(FrameTopic, FrameMessage(frame=np.full((480, 640, 3), 10, np.uint8), jpeg=b"from the camera"))
         await until(lambda: ("oak",) in viewer.frames())
         await viewer.close()
-        return sent_sizes(viewer), encoder.sizes
+        sent = next(message for message in viewer.messages if message["kind"] == "frame")
+        return sent["cameras"][0]["image_size"], read_jpeg(sent["image"]), encoder.images
 
-    sent, encoded = run(scenario, overlays={"oak": TrackingOverlay()}, pose_camera="oak")
-
-    assert sent == [{"oak": (640, 480)}] and encoded == [(640, 480)]  # Aim point and keypoints are in these pixels
+    assert run(scenario) == ([640, 480], b"from the camera", [])  # Shrinking it would mean decoding it
 
 
 def test_the_resize_averages_colour_and_keeps_depth_values_exact():

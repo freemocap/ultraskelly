@@ -194,15 +194,15 @@ def encode_camera_frame(
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
     together, shrunk by `scale` when it is below 1, and each person's keypoints in pixels
-    of the first image (so frames with poses keep their size). Pure CPU work, safe to run
-    in a worker thread."""
+    of the first image as the camera took it, which their channels' image_size gives. Pure
+    CPU work, safe to run in a worker thread."""
+    camera, _, image = cameras[0]
+    height, width = image.shape[:2]
+    trackers = person_trackers(camera, (width, height), poses)
     if scale < 1:
         cameras = [(camera, index, resize(image, (max(1, round(image.shape[1] * scale)),
                                                   max(1, round(image.shape[0] * scale)))))
                    for camera, index, image in cameras]
-    camera, _, image = cameras[0]
-    height, width = image.shape[:2]
-    trackers = person_trackers(camera, (width, height), poses)
     images = [
         PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
         for camera, index, image in cameras
@@ -579,12 +579,14 @@ class RuntimeServerNode(Node):
         frames = (self.params.depth_previews or not depth) and self._shown(feed.views)
         return frames, depth and self._shown(kind=DEPTH_KIND)
 
-    def _scale(self, feed: CameraFeed, size: tuple[int, int]) -> float:
-        """How small the viewers that draw the feed draw its images of `size` (width, height), as a
-        fraction of it; 1 sends them as they are. A viewer that gives no size gets them whole, and
-        a feed with guides or poses keeps its camera's pixels, which those are drawn in."""
-        if feed.overlay is not None or feed.name == self.pose_camera:
+    def _scale(self, feed: CameraFeed, camera_frame: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> float:
+        """How small the viewers that draw the feed draw this frame's images, as a fraction of their
+        size; 1 sends them as they are. A viewer that gives no size gets them whole, and so does a
+        frame that came as the camera's own JPEG, which would have to be decoded to shrink."""
+        if isinstance(camera_frame, FrameMessage) and camera_frame.jpeg is not None:
             return 1.0
+        height, width = camera_images(camera_frame)[0].shape[:2]
+        size = (width, height)
         needed = 0.0
         for viewer in self.viewers:
             if viewer.display is None:
@@ -633,7 +635,7 @@ class RuntimeServerNode(Node):
                                       else feed.encoded),
                         timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                         poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
-                        scale=self._scale(feed, (images[0].shape[1], images[0].shape[0])), resize=self.resize,
+                        scale=self._scale(feed, camera_frame), resize=self.resize,
                     )
                     feed.stream.publish(message)
                 if depth_shown:  # The depth itself, for depth tiles and 3D views

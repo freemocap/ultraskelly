@@ -277,12 +277,12 @@ on localhost only, with the Pi's full-screen Chromium as the viewer: 30 s sample
 | Bot with no viewer | 0.66 cores | 0.68 cores |
 
 The dashboard asked for the OAK at 640×480, both eyes at 317×178 and `depth_frame`; the
-eyes went out at 318×178. The OAK keeps its pixels because the dashboard draws the aim
-point and jaw zone in them, from `robot_state.overlays`; it could shrink too once the
-dashboard scales those. Single samples; earlier samples of main with the dashboard
-differed by up to 0.06 cores. `robot_state`'s unchanging fields (overlays, the node list,
-the motor-test limits) are 570 of its 1443 bytes, but encoding them costs 36 µs a message,
-0.07% of a core at 20 Hz, so they still travel in every message.
+eyes went out at 318×178. The OAK was drawn at full size, so it went out at full size; on
+smaller screens it shrinks too, now that the dashboard scales its guides and keypoints to
+the image it receives (w3-dashboard 4240359). Single samples; earlier samples of main with
+the dashboard differed by up to 0.06 cores. `robot_state`'s unchanging fields (overlays,
+the node list, the motor-test limits) are 570 of its 1443 bytes, but encoding them costs
+36 µs a message, 0.07% of a core at 20 Hz, so they still travel in every message.
 
 ### Hailo-8 driver warning storm and reset (2026-11-02)
 

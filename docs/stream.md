@@ -58,7 +58,8 @@ people. Find people by `tracker_id`, never by their position in the array.
 
 Each person has an `OVERLAY_2D` channel: columns `x`, `y`, `visibility`; 17 rows named by
 COCO keypoint (`nose` ... `right_ankle`); `camera_id` and `image_size` give the image its
-pixels belong to.
+pixels belong to: the camera's, also when the image goes out smaller (see "What a viewer
+draws").
 
 ### The target: `ultraskelly.target`
 
@@ -198,9 +199,11 @@ The sizes set how large the images go out. When every viewer that draws a feed d
 most three quarters of its camera's size, its images are encoded at the largest drawn size
 instead (each image's `image_size` says which): the Pi's dashboard draws the ZED eyes at
 317×178, so they go out at 318×178, 4.5 times fewer pixels. An enlarged tile reports its
-large size, and a viewer that gives no size gets the camera size. The OAK keeps its pixels
-whatever the size, because its keypoints and the guides in `robot_state.overlays` are in
-them. `depth_frame` and `robot_state.cameras` always describe the camera's own size.
+large size, and a viewer that gives no size gets the camera size. Keypoints, the target and
+the guides in `robot_state.overlays` stay in the camera's pixels, which each channel's
+`image_size` and `robot_state.cameras` give, so a viewer scales them to the image it got.
+A frame that came as the camera's own JPEG goes out as it came. `depth_frame` and
+`robot_state.cameras` always describe the camera's own size.
 
 ## Checking a stream
 
