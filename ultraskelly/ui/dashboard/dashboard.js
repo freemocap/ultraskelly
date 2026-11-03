@@ -28,7 +28,7 @@ for (const button of document.querySelectorAll('.layers button')) button.onclick
   const on = button.getAttribute('aria-pressed') !== 'true', layer = button.dataset.layer;
   button.setAttribute('aria-pressed', String(on));
   if (layer === 'gaze') scene?.gaze.setVisible(on);
-  else scene?.depth.setVisible({[layer]: on});
+  else { scene?.depth.setVisible({[layer]: on}); sendViews(); }
 };
 
 // Camera tiles; any tile enlarges over the 3D scene, which stops rendering while covered.
@@ -184,7 +184,7 @@ stream.subscribeToKind('robot_state', state => {
   latestState = state; lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
   // The tracking tile shows the camera the head steers by: the OAK, or replay's synthetic camera.
   const tracking = Object.keys(state.overlays ?? {})[0] ?? 'oak';
-  if (tracking !== tiles.trackingId) { tiles.trackingId = tracking; $('tracking-name').textContent = cameraName(tracking); }
+  if (tracking !== tiles.trackingId) { tiles.trackingId = tracking; $('tracking-name').textContent = cameraName(tracking); sendViews(); }
   scene?.update(state);
   tiles.showTargetWithoutVideo(state);
   showCommands(state); showTarget(state); showFace(state); showHealth(state); showTests(state);
@@ -216,7 +216,25 @@ stream.subscribeToImages((buffer, frameNumber) => {
   tiles.handle(buffer, frame.frameNumber === frameNumber ? frame : noFrame);
 });
 stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol error', problem); error(`Stream error: ${problem?.message ?? problem}`); });
-stream.on('open', () => error(''));
+stream.on('open', () => { error(''); sentViews = ''; sendViews(); });  // Each connection starts wanting everything
+
+// Tell the server what this page draws (docs/stream.md), so the Pi encodes only the feeds someone shows:
+// each shown camera with its drawn size, and depth while the heat map or the 3D depth is shown.
+let sentViews = '', viewsTimer = null;
+function sendViews() {
+  clearTimeout(viewsTimer);
+  viewsTimer = setTimeout(() => {
+    const shown = scene?.depth.shown ?? {}, displayImageSizes = tiles.displayImageSizes();
+    const depthShown = !document.hidden && (tiles.visible.has('depth_heat') || tiles.enlargedId === 'depth_heat' || shown.cloud || shown.mesh);
+    const kinds = depthShown ? ['depth_frame'] : [], key = JSON.stringify([displayImageSizes, kinds]);
+    if (key === sentViews || stream.getState() !== 'CONNECTED') return;  // Sent again on the next connect
+    sentViews = key;
+    stream.send({frameNumber: tiles.lastFrameNumber, displayImageSizes, kinds});
+  }, 250);
+}
+tiles.onChange = sendViews;
+document.addEventListener('visibilitychange', sendViews);
+addEventListener('resize', sendViews);
 stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
 stream.connect();
 window.ultraskelly = {scene, tiles, depth, series, stream, motorTest, get state() { return latestState; }};  // For DevTools

@@ -18,6 +18,17 @@ function percentiles(mm) {
   return {near: at(0.02), far: Math.max(at(0.98), at(0.02) + 200), valid};
 }
 
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
+// The depth as millimetres. The bytes are this worker's own (inflated or copied), so on a little-endian
+// machine, which every current browser runs on, they are viewed in place rather than copied value by value.
+function millimetres(bytes, count) {
+  if (LITTLE_ENDIAN && bytes.byteOffset % 2 === 0) return new Uint16Array(bytes.buffer, bytes.byteOffset, count);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), mm = new Uint16Array(count);
+  for (let i = 0; i < count; i++) mm[i] = view.getUint16(2 * i, true);
+  return mm;
+}
+
 async function inflate(bytes) {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -28,9 +39,7 @@ self.onmessage = async ({data: job}) => {
     const {width, height} = job;
     const bytes = job.compression === 'zlib' ? await inflate(job.bytes) : job.bytes;
     if (bytes.byteLength < width * height * 2) throw new Error(`depth has ${bytes.byteLength} bytes for ${width}x${height}`);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const mm = new Uint16Array(width * height);
-    for (let i = 0; i < mm.length; i++) mm[i] = view.getUint16(2 * i, true);
+    const mm = millimetres(bytes, width * height);
     const found = percentiles(mm);
     if (found) {
       range = range ? {near: range.near + .3 * (found.near - range.near), far: range.far + .3 * (found.far - range.far)} : found;
