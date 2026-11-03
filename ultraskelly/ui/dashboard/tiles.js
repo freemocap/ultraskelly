@@ -65,8 +65,7 @@ export class CameraTiles {
     this.slots = new Map();    // Source key -> {busy, waiting}
     this.unknown = new Set();
     this.visible = new Set();
-    this.onChange = null;      // Called when what the page shows changes (wanted views, docs/stream.md)
-    this.lastFrameNumber = 0;
+    this.onChange = null;      // Called when what the page shows changes (its views, docs/stream.md)
     const watch = new IntersectionObserver(entries => {
       for (const entry of entries) this.visible[entry.isIntersecting ? 'add' : 'delete'](entry.target.dataset.camera);
       this.onChange?.();
@@ -92,7 +91,6 @@ export class CameraTiles {
     try { payload = readImagePayload(buffer); }
     catch (problem) { console.error('Unreadable image payload', problem); return; }
     const ids = payload.images.map(image => image.cameraId);
-    this.lastFrameNumber = payload.frameNumber;
     for (const id of ids) {
       if (this.keyOf(id) == null && !IGNORED.has(id) && !this.unknown.has(id)) { this.unknown.add(id); console.warn(`No dashboard tile for camera ${id}`); }
     }
