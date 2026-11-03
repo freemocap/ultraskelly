@@ -8,7 +8,7 @@ CBOR messages, encoded on the Pi with `freemocap-stream` and decoded in the brow
 
 - **No handshake.** Every message decodes on its own. A viewer that connects or reconnects
   mid-stream draws the next frame without earlier messages.
-- **Newest wins.** `robot_state` and each camera have their own latest-value slot, so a slow
+- **Newest wins.** `robot_state`, each camera and the depth have their own latest-value slot, so a slow
   viewer receives fewer, newer messages and the bot never waits for it. Nothing is
   encoded while no viewer is connected.
 - **Heartbeat.** A text `ping` gets a text `pong`; the client SDK sends it.
@@ -22,11 +22,25 @@ time the camera reports, in seconds on the Pi's `time.monotonic()` clock, not wh
 message was encoded or sent; a camera that reports none gets the encoding time.
 
 - `cameras`: one uncalibrated entry per image, with its ID (`oak`), index and `image_size`
-  `[width, height]`.
+  `[width, height]`. Images captured together travel in one message, one camera each (the
+  ZED below).
 - `image`: the SkellyCam image payload with each camera's JPEG.
 - `trackers`: on the camera the pose detector reads (the OAK), one observation per person
   found in that very image. Frames travel without trackers while the detector is stalled
   (no pose message for 0.5 s).
+
+### The ZED Mini (`--zed`)
+
+The stereo camera in the eye sockets sends its two eyes together: one frame message with
+cameras `zed_left` and `zed_right`, indices after the OAK's, at 30 per second, without
+trackers. They are the raw eyes, 672×376 each, as the camera sees them. Their frame
+number counts camera frame periods, so a frame lost in USB transfer skips a number, and
+the timestamp is when the frame's first USB packet arrived (the kernel's buffer time).
+
+With `--depth`, each depth frame also travels as a frame message with cameras
+`zed_rectified`, the rectified left eye, and `zed_depth`, the same view's depth drawn in
+colour (red at 0.3 m to blue at 5 m and beyond, black unknown), up to 10 per second, for
+the video panels. The depth itself is the `depth_frame` message below.
 
 ### People
 
@@ -70,18 +84,34 @@ values are the commands sent, not measured positions.
 | `motors` | `simulated`, and `commands` with `value` and `age` (seconds) for `pan`, `tilt` (servo degrees), `waist`, `mouth` (throttle -1 to 1) |
 | `servo_state` | the head controller's `pan`, `tilt`, `roll`, `locked_x`, `locked_y`, `age` |
 | `target` | the controllers' latest target `x`, `y`, `angle`, `age`; not paired with any image |
-| `cameras` | per camera ID: `fps`, `age` of the newest frame, `width`, `height` |
+| `cameras` | per camera ID (`oak`; with the ZED also `zed_left`, `zed_right`, and with depth `zed_rectified`, `zed_depth`): `fps`, `age` of the newest frame, `width`, `height` |
 | `overlays` | per camera: the `aim` pixel the head steers the target to, and the `jaw_zone` half-width |
 | `rates` | message rates in Hz: `servo_state`, `target`, `pose` |
 | `nodes` | each node's `name` and `state` (starting, running, stopped, crashed), with `error` when crashed |
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
 
+## `depth_frame` messages
+
+UltraSkelly's application kind for ZED depth, version 0, with `--depth`: up to 10 per
+second, about 22 KiB each. Each message holds one depth frame complete: uint16 millimetres
+(little-endian, zlib-compressed, 0 = unknown), the rectified left image it belongs to
+(JPEG), that image's pinhole intrinsics (`fx`, `fy`, `cx`, `cy`, `baseline_m`), the camera
+axes, `frame_number` (the `zed_left`/`zed_right` frame it came from), `method`, and
+`camera_to_head`, the camera's pose in the head frame (nominal until the camera bracket is
+measured). [The depth message's own page](depth-stream.md) gives every field, how to turn
+pixels into points, and a browser decoding example; `scripts/depth_frame_samples.py`
+writes sample messages to build against.
+
 ## Reading it in a browser
 
 The dashboard imports the vendored bundle (`/vendor/freemocap-client.js`):
 
-- Register `robot_state` as an application kind when you construct `TransportService`;
-  registrations are fixed at construction.
+- Register `robot_state` (and `depth_frame`, to draw depth) as application kinds when you
+  construct `TransportService`; registrations are fixed at construction. Byte strings
+  arrive as `Uint8Array`; inflate `depth_frame`'s depth with `DecompressionStream('deflate')`.
+- Keep one newest-wins decode slot per image source, keyed by the camera IDs in the payload
+  (`readImagePayload` first, decode after): with the OAK and the ZED both streaming, a single
+  slot lets one camera's frames displace the other's.
 - `subscribeToOverlay` delivers each person's keypoints just before the image of the same
   frame: pair them by frame number and camera ID, and tell people apart by `trackerId`.
 - `subscribeToChannels` delivers every channel of each frame, including

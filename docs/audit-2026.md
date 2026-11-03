@@ -732,6 +732,13 @@ blanks depth outside the mask and matches only the mask's bounding box. It belon
 one mounting; redo it whenever the ZED is re-seated. No mask is committed yet: today's
 mounting is about to change.
 
+A failed depth frame is logged and skipped rather than stopping the bot, and StereoNet
+defaults to one frame a second. What streaming stereo and depth needed from FreeMoCap's
+SDK is recorded on its `sfn26-ultraskelly` branch, in
+[depth-for-other-applications.md](https://github.com/freemocap/freemocap/blob/a7518c96/current-work-plans/03-transport/depth-for-other-applications.md):
+a lossless depth block in the frame message, a calibrated-camera helper, a named camera
+optical frame, and per-source decoding in the client.
+
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 
 FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
