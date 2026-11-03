@@ -27,9 +27,11 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .stage-head p{margin:2px 0 0;font-size:12px;color:var(--muted)}
 .dashboard .stage-foot{position:absolute;left:12px;right:12px;bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;gap:8px;pointer-events:none;z-index:1}
 .dashboard .stage-foot .hint{font-size:11px;color:var(--muted)}
-.dashboard .views{display:flex;gap:4px;pointer-events:auto}
-.dashboard .views button{padding:4px 11px;border-radius:13px}
+.dashboard .foot-left{display:flex;align-items:center;gap:12px}
+.dashboard .views,.dashboard .layers{display:flex;gap:4px;pointer-events:auto}
+.dashboard .views button,.dashboard .layers button{padding:4px 11px;border-radius:13px}
 .dashboard .views button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+.dashboard .layers button[aria-pressed=true]{border-color:#8a7fd8;color:#b8b0f0}
 .dashboard .enlarged{grid-area:stage;z-index:3;display:flex;flex-direction:column;min-width:0;min-height:0;background:#0b1318;border:1px solid var(--line);border-radius:5px;overflow:hidden}
 .dashboard .enlarged canvas{flex:1;min-height:0;width:100%;object-fit:contain;cursor:zoom-out}
 .dashboard .enlarged-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;font-size:13px}
@@ -58,7 +60,9 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .target-row{height:24px;display:flex;align-items:center;gap:10px;font:12px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden}
 .dashboard .badge{font:600 11px system-ui,sans-serif;padding:2px 8px;border-radius:9px;background:#243138;color:var(--muted)}
 .dashboard .badge.tracking{background:#1c3a31;color:var(--accent)}
-.dashboard .depth-legend{height:22px;display:flex;align-items:center;font-size:11px;color:var(--muted)}
+.dashboard .depth-legend{height:22px;display:flex;align-items:center;gap:6px;font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap}
+.dashboard .depth-legend i{flex:0 1 150px;height:7px;border-radius:4px;background:#243138}
+.dashboard #depth-info{margin-left:auto;font-family:system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis}
 
 /* Readout strip. */
 .dashboard .strip{grid-area:strip;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;min-height:0}

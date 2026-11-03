@@ -22,7 +22,12 @@
     <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
     <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p></div>
     <div class="stage-foot">
-      <span class="hint">Drag to orbit · scroll to zoom</span>
+      <div class="foot-left">
+        <div class="layers" role="group" aria-label="Depth layers" title="The ZED's depth on the skeleton's head">
+          <button data-layer="cloud" aria-pressed="true">Cloud</button><button data-layer="mesh" aria-pressed="false">Mesh</button>
+        </div>
+        <span class="hint">Drag to orbit · scroll to zoom</span>
+      </div>
       <div class="views" role="group" aria-label="Camera view">
         <button data-view="orbit" aria-pressed="true">Orbit</button><button data-view="behind">Behind head</button><button data-view="side">Side</button><button data-view="top">Top</button>
       </div>
@@ -55,7 +60,9 @@
         <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty">No depth yet</p></figure>
         <figure class="tile" data-camera="depth_raw" data-label="Raw depth" title="Click to enlarge"><canvas aria-label="Raw depth"></canvas><figcaption>Raw depth</figcaption><p class="empty">No depth yet</p></figure>
       </div>
-      <div class="depth-legend" id="depth-legend">Depth aligned to the left eye</div>
+      <div class="depth-legend" title="Depth is aligned to the left eye. Hover a depth tile to read the distance.">
+        <span id="depth-near">near</span><i id="depth-ramp"></i><span id="depth-far">far</span><span id="depth-info">Depth aligned to the left eye</span>
+      </div>
     </section>
   </div>
   <div class="strip">

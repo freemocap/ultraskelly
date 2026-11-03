@@ -133,6 +133,15 @@ export class CameraTiles {
     tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
   }
 
+  // A bitmap made elsewhere (the depth views) into a tile; the caller closes the bitmap.
+  showBitmap(key, bitmap) {
+    const tile = this.tiles.get(key);
+    if (!tile) return;
+    for (const canvas of this.canvasesFor(key)) sizeCanvas(canvas, bitmap.width, bitmap.height).drawImage(bitmap, 0, 0);
+    tile.drawn += 1; tile.lastAt = performance.now();
+    tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
+  }
+
   // Aim point, jaw zone, people and the target ring, in the pixels of this camera's image. The ring
   // is the target channel's row from the same frame; without one the head follows nobody.
   drawGuides(ctx, cameraId, frame, guides = this.state?.overlays?.[cameraId]) {

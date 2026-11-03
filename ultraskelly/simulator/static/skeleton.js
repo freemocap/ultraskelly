@@ -61,5 +61,5 @@ export function buildSkeleton(scene) {
   const target=ball(scene,0,2,2.5,.09,targetMat);
   const ring=mesh(target,new THREE.TorusGeometry(.15,.009,8,40),targetMat);ring.rotation.x=.3;
   const targetLine=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:0x735b45}));scene.add(targetLine);
-  return {root, waist, pan, tilt, jaw, jawZone, target, targetLine};
+  return {root, waist, pan, tilt, jaw, jawZone, target, targetLine, frustum, gaze};
 }

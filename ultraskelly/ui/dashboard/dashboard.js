@@ -5,6 +5,7 @@ import { TransportService } from '/vendor/freemocap-client.js';
 import { MotorTestPanel } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
+import { DepthViews } from '/depth.js';
 
 const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
@@ -21,6 +22,11 @@ const viewButtons = [...document.querySelectorAll('.views button')];
 for (const button of viewButtons) button.onclick = () => {
   for (const other of viewButtons) other.setAttribute('aria-pressed', String(other === button));
   scene?.setView(button.dataset.view);
+};
+for (const button of document.querySelectorAll('.layers button')) button.onclick = () => {
+  const on = button.getAttribute('aria-pressed') !== 'true';
+  button.setAttribute('aria-pressed', String(on));
+  scene?.depth.setVisible({[button.dataset.layer]: on});
 };
 
 // Camera tiles; any tile enlarges over the 3D scene, which stops rendering while covered.
@@ -147,7 +153,17 @@ const RobotState = {parse(message) {
   if (typeof message?.motors !== 'object' || !Array.isArray(message?.nodes)) throw new Error('robot_state without motors or nodes');
   return message;
 }};
-const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`, kinds: {robot_state: RobotState}});
+const DepthFrame = {parse(message) {  // docs/depth-stream.md
+  if (message?.depth?.encoding !== 'uint16le' || !(message.depth.data instanceof Uint8Array) || typeof message?.camera?.fx !== 'number') {
+    throw new Error('depth_frame without uint16le depth or intrinsics');
+  }
+  return message;
+}};
+const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`,
+                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame}});
+const depth = new DepthViews({tiles, layer: scene?.depth ?? null,
+                              legend: {near: $('depth-near'), ramp: $('depth-ramp'), far: $('depth-far'), info: $('depth-info')}});
+stream.subscribeToKind('depth_frame', frame => depth.handle(frame));
 let latestState = null, lastSnapshotAt = 0, snapshotsThisSecond = 0;
 stream.subscribeToKind('robot_state', state => {
   latestState = state; lastSnapshotAt = performance.now(); snapshotsThisSecond += 1;
@@ -182,7 +198,7 @@ stream.subscribeToProtocolErrors(problem => { console.error('Stream protocol err
 stream.on('open', () => error(''));
 stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
 stream.connect();
-window.ultraskelly = {scene, tiles, stream, motorTest, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {scene, tiles, depth, stream, motorTest, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness and frame rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
@@ -194,5 +210,7 @@ setInterval(() => {
   $('snapshot-age').classList.toggle('stale', stale);
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
   $('oak-rate').textContent = rateText(drawn.oak, cameras[tiles.trackingId]);
-  $('zed-rate').textContent = rateText(drawn.zed_left, cameras.zed_left);
+  const depthShown = depth.tick();
+  scene?.depth.tick();  // Hides depth that stopped arriving
+  $('zed-rate').textContent = rateText(drawn.zed_left, cameras.zed_left) + (depthShown ? ` · depth ${depthShown}/s` : '');
 }, 1000);
