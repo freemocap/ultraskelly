@@ -336,6 +336,18 @@ fix_venv() (
   "$uv" sync --locked --extra hardware --python /usr/bin/python3
 )
 
+# The OAK's Model Zoo models: downloaded once into ~/ultraskelly-models/oak-zoo, then loaded
+# from there without the internet. A missing one stops the bot at startup.
+check_oak_models() {
+  local python=$repo/.venv/bin/python report status
+  [[ -x $python ]] || { echo "no .venv to read the model list with"; return 1; }
+  report=$(cd "$repo" && "$python" -m scripts.fetch_oak_models --check 2>/dev/null)
+  status=$?
+  echo "${report:-the model check fails in .venv}"
+  return $status
+}
+fix_oak_models() (cd "$repo" && .venv/bin/python -m scripts.fetch_oak_models)
+
 check_services() {
   "$repo/scripts/install-services.sh" --check >/dev/null 2>&1 || { echo "not installed for $repo"; return 1; }
   local bot dashboard options
@@ -478,6 +490,7 @@ setting "Screen blanking" check_blanking fix_blanking
 setting "Services at boot" check_linger fix_linger
 setting "uv" check_uv fix_uv
 setting "Python environment" check_venv fix_venv
+setting "OAK models" check_oak_models fix_oak_models
 setting "Robot services" check_services fix_services
 observe "Last stop" check_last_stop
 observe "Power" check_power
