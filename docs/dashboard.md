@@ -27,9 +27,9 @@ camera rate on the Pi 5.
   motors are simulated or real.
 - **3D scene:** the schematic skeleton driven by the commanded head pan and tilt, the
   waist drive arrow and the jaw. These are commands, not measured positions, and the
-  scene says so. View buttons: orbit, behind the head, side, top. The gaze ray to the
-  face point and the ZED point cloud and mesh, centered on the head, arrive with their
-  own layer toggles.
+  scene says so. View buttons: orbit, behind the head, side, top. The ZED's point cloud
+  and mesh ride on the head, each with a layer toggle (see Depth); the gaze ray to the
+  face point comes next.
 - **Tracking camera (OAK):** the video with the poses found in each frame, the aim
   crosshair, jaw zone and target ring, drawn in the browser. The row under it shows the
   target state, pixel, body angle, head lock and target age, and the face distance once
@@ -71,4 +71,26 @@ page is one scrolling column: 3D scene, OAK, ZED tiles, then the cards.
 
 The OAK video is drawn one to one. Each image source has its own newest-wins decode slot,
 so the ZED pair never starves the OAK. One depth image feeds the heat map, the raw view
-and the 3D point cloud on the GPU. Covered or hidden tiles skip decoding.
+and the 3D point cloud on the GPU. Covered or hidden tiles skip decoding. The 3D scene
+draws only when a command, the depth or the view changed.
+
+## Depth
+
+The ZED's `depth_frame` messages ([the depth stream](depth-stream.md)) are decoded in a
+worker (`depth-worker.js`): it inflates the millimetres, colours the two depth tiles and
+decodes the rectified colour image, so the page itself only copies bytes out of the stream
+and draws. Newest wins: while the worker is busy, only the newest frame waits.
+
+- **Heat map:** each frame from its 2nd to its 98th percentile, red near and blue far, the
+  range eased between frames. The legend under the tiles gives that range in metres, the
+  share of pixels with depth and the matcher (`sgbm` or `stereonet`).
+- **Raw depth:** 0.36 to 8 m in grey, near bright, unknown black.
+- Hover either tile to read the depth under the cursor.
+- **In 3D:** the scene is in metres, with the schematic skeleton drawn at the robot's estimated
+  eye height of 1.88 m (skellycad's UltraSkelly mock-up). The vertex shaders unproject the
+  16-bit depth with the message's intrinsics and place it on the head through
+  `camera_to_head`, whose head frame starts midway between the eye sockets. The depth turns
+  with the commanded pan and tilt; the waist angle is not measured, so where it points in the
+  room is an estimate. **Cloud** shows every depth pixel and **Mesh** joins every second one,
+  dropping triangles at unknown pixels and at depth jumps over 6%. The ZED's view cone reaches
+  1.5 m. Depth that stops arriving disappears after 3 s.

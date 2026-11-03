@@ -719,6 +719,23 @@ Hailo-8; ZED not started), with the dashboard in the full-screen Chromium window
 cores, with `throttled=0x0`. The old layout's figures in the table above are 1.09, 0.73 and
 47%. One sample; the eye tiles were not exercised on the Pi.
 
+### Depth views (2026-11-02)
+
+The dashboard draws the ZED's `depth_frame` as heat-map and raw tiles and as a point cloud
+and mesh on the skeleton's head ([how](dashboard.md#depth)). Checked on Windows against
+W2's synthetic sample, whose geometry is known: every depth pixel fell on the wall, the floor
+or the ball within 0.5 mm, and the ball's centre landed at (-0.168, 1.880, 1.131) m in the
+scene, as the camera-to-head pose and the skeleton's 1.88 m eye height predict. Drawing
+only on change cut the scene from about 60 to 6.7 renders a second with depth flowing.
+
+On the Pi's monitor, fed by a fake stream on the Pi that replays W2's samples (no robot
+hardware; OAK-sized frames with a moving person, ZED-sized pairs, both at 30 fps, and depth
+5 times a second, with the head following the person): the OAK and ZED tiles drew 30 frames a
+second each, the depth 5, and the cloud turned with the commanded head. Over 20 s Chromium used
+0.99 cores with the synthetic sample (every pixel known) and 1.05 with the live one (20%
+known); the whole Pi was at 27% and 28% of 4 cores, with `throttled=0x0`. One sample each;
+live depth with the real matcher running on the same Pi is not measured yet.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
