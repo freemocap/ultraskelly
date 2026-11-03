@@ -141,7 +141,10 @@ service that runs `scripts/run-bot.sh`, and `ultraskelly-dashboard`, the desktop
 service that opens the dashboard full screen once the bot answers. After any exit or
 crash, systemd starts the bot again after 2 s, then waits longer each time, up to a
 minute. If the bot's event loop stalls for 30 s, systemd kills it with SIGUSR1, which
-first logs every thread's Python traceback. Re-run the script after moving the checkout.
+first logs every thread's Python traceback. After every exit, crashes and kills
+included, the service brakes the DC motors with `scripts/stop_motors.py`, giving up
+after 10 s; it leaves them alone when the bot never started because another program
+holds the robot lock. Re-run the script after moving the checkout.
 Extra bot options go in `/etc/default/ultraskelly-bot`, for example while the motor
 boards are disconnected:
 
