@@ -553,8 +553,9 @@ adapter in software with the waist at rest.
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK
 needs CUDA. `ZedCameraNode` finds its V4L2 capture node by the name the camera
-reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread, converts
-each eye to RGB and publishes both on `StereoFrameTopic`. Frame times are the kernel
+reports, reads raw side-by-side YUYV frames with OpenCV in a worker thread and
+publishes them on `StereoFrameTopic` as they came (until 2026-11-03 it converted each
+eye to RGB first; see "One conversion per eye" below). Frame times are the kernel
 buffer timestamps, which uvcvideo takes on CLOCK_MONOTONIC: the clock of
 `time.monotonic()` and of the OAK's depthai timestamps. They mark the arrival of a
 frame's first USB packet, one transfer time (19 ms at VGA, 30 ms at HD720) before the
@@ -623,8 +624,9 @@ in the small region both eyes see; repeat the check once the ZED is re-seated.
 Remapping is the expensive step. In OpenCV 5.0 on the Pi, one 672×376 colour image
 takes 2.4 ms with float tables and 4.3 ms with fixed-point ones (OpenCV 4.10: 4.6 and
 4.3 ms); a grey image 1.3 ms. Rectifying every pair at 30 fps would cost about 14% of
-a core at VGA, and HD720 fell behind. So the node publishes raw pairs (`rectify` is
-off by default), and depth rectifies only the pairs it uses, at its own rate.
+a core at VGA, and HD720 fell behind. So the node publishes raw pairs, and depth
+rectifies only the pairs it uses, at its own rate. (The node's own `rectify` option, off
+by default and used by nothing, was removed on 2026-11-03.)
 
 **Depth, CPU baseline.** `StereoDepthNode` (`--depth` with `--zed` or `--zed-only`)
 takes the newest pair at most 5 times a second, rectifies the left eye in colour and
@@ -795,6 +797,31 @@ NumPy's OpenBLAS thread pool spins after each call, like OpenCV's: the IMU node 
 6.3% of a core with the default pool and 2.6% with one thread. `python -m ultraskelly` now
 sets `OPENBLAS_NUM_THREADS=1` before NumPy loads. Its effect on the whole bot is not
 measured yet: the robot was in use by the other workstreams.
+
+**One conversion per eye (2026-11-03).** The ZED node used to convert both eyes from YUYV
+to RGB 30 times a second, whether anything used them or not. The stream then converted
+each to BGR for its JPEG encoder, and depth converted them again to grey. Now
+`StereoFrameMessage` carries the camera's YUYV as it came, and each consumer converts
+what it needs once. The stream goes from YUYV straight to BGR in its encoding thread.
+Depth matches the two eyes' Y bytes as they are, with no colour conversion, and converts
+only the left eye to colour, for the image the depth belongs to (StereoNet, which matches
+colour, converts both). The face locator and the recorder are untouched: they read depth
+and the OAK's frames, whose contracts are unchanged. Timed on the Pi, which was busy,
+for both eyes at 30 frames a second with depth at 10 a second:
+
+| Path | Old | New |
+| --- | --- | --- |
+| With a viewer | 102-110 ms a second | 94-96 ms |
+| With no viewer | 71-78 ms | 39-40 ms |
+
+Depth's own share rose from 2.5 to 3.9-4.0 ms a frame: it now converts the left eye
+itself and remaps that eye's grey apart from its colour. Rectifying the left eye's
+chroma and converting at the small size instead took 5.1 ms, in part because building
+its chroma planes in NumPy is slow, so it was not kept. The larger cost on this path is
+JPEG-encoding both full-size eyes for a dashboard that draws them at 317×178: 4.8 ms a
+pair, 145 ms a second at 30 frames, against 2.2 ms (66 ms a second) for eyes halved
+first. Acting on the size a viewer reports it draws ("What a viewer draws" in
+`docs/stream.md`) would save that.
 
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 
