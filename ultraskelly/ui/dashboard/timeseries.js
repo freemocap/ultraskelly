@@ -1,11 +1,13 @@
 // Strip charts of the last 30 seconds on one canvas. Motor values are the commands sent: the servos have
 // no position feedback and the DC motors no encoders, so no motor position exists to plot. The target's
 // offset is the controllers' input, the face distance comes from the Pi's face locator, and the ZED's
-// accelerometer and gyroscope are measured. Times are the Pi's (robot_state.time). The canvas redraws at
-// most 10 times a second and only when something new arrived, at one point per pixel column (the first,
-// lowest, highest and last value that falls in it), so a long window or a fast sensor costs little.
+// accelerometer and gyroscope are measured, in the IMU's own axes, which are not the head's. Times are the
+// Pi's clock (robot_state.time, the IMU's start_time). The canvas redraws in the page's frame (frameclock.js),
+// at most 4 times a second and only when something new arrived, at one point per pixel column (the first,
+// lowest, highest and last value that falls in it), so a long window costs little. The IMU's 794 samples a
+// second come in batches of about 53, each kept as its lowest and highest value per trace.
 const WINDOW_S = 30;
-const DRAW_MS = 100;
+const DRAW_MS = 250;
 const CAPACITY = 4096;  // Samples kept per trace: 30 s at up to about 130 a second
 
 export const LANES = [
@@ -13,16 +15,16 @@ export const LANES = [
   {id: 'drive', title: 'Waist and jaw drive, commanded', unit: '', digits: 2, traces: [['waist', '#ffb269'], ['jaw', '#f08fb8']], fixed: [-1, 1]},
   {id: 'target', title: 'Target from the aim point', unit: ' px', digits: 0, traces: [['x', '#8de3c2'], ['y', '#b8b0f0']], symmetric: 60},
   {id: 'face', title: 'Face distance, from depth', unit: ' m', digits: 2, traces: [['distance', '#ffb269']], fromZero: 2},
-  {id: 'accel', title: 'ZED accelerometer, measured', unit: ' m/s²', digits: 2, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 2,
+  {id: 'accel', title: 'ZED accel m/s², sensor axes', unit: '', digits: 2, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 2,
    waiting: 'Waiting for the ZED IMU'},
-  {id: 'gyro', title: 'ZED gyroscope, measured', unit: ' °/s', digits: 1, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 10,
+  {id: 'gyro', title: 'ZED gyro °/s, sensor axes', unit: '', digits: 1, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 10,
    waiting: 'Waiting for the ZED IMU'},
 ];
 
 class Ring {
-  constructor() { this.t = new Float64Array(CAPACITY); this.v = new Float32Array(CAPACITY); this.n = 0; this.next = 0; }
-  push(t, v) {
-    this.t[this.next] = t; this.v[this.next] = v;
+  constructor() { this.t = new Float64Array(CAPACITY); this.v = new Float32Array(CAPACITY); this.n = 0; this.next = 0; this.newest = NaN; }
+  push(t, v, newest = v) {
+    this.t[this.next] = t; this.v[this.next] = v; this.newest = newest;
     this.next = (this.next + 1) % CAPACITY; this.n = Math.min(this.n + 1, CAPACITY);
   }
   // Oldest first, from the first sample at or after `since`.
@@ -31,17 +33,23 @@ class Ring {
       if (this.t[i] >= since) visit(this.t[i], this.v[i]);
     }
   }
-  last() { return this.n ? this.v[(this.next - 1 + CAPACITY) % CAPACITY] : NaN; }
+  last() { return this.newest; }  // The newest value, for the header
 }
 
 export class TimeSeries {
-  constructor(canvas) {
-    this.canvas = canvas;
+  // canvas: the strip's canvas; clock: the page's FrameClock.
+  constructor(canvas, clock) {
+    this.canvas = canvas; this.clock = clock;
     this.rings = new Map(LANES.map(lane => [lane.id, lane.traces.map(() => new Ring())]));
     this.now = null;   // Newest time seen, seconds on the Pi's clock
+    this.dirty = true; this.drawnAt = -Infinity; this.timer = 0;
+    new ResizeObserver(() => this.changed()).observe(canvas);
+    clock.add(now => this.frame(now));
+  }
+
+  changed() {
     this.dirty = true;
-    new ResizeObserver(() => { this.dirty = true; }).observe(canvas);
-    setInterval(() => { if (this.dirty && !document.hidden) this.draw(); }, DRAW_MS);
+    this.clock.changed();
   }
 
   // values: one per trace of the lane, null or NaN for a gap.
@@ -50,7 +58,36 @@ export class TimeSeries {
     if (!rings || !Number.isFinite(t)) return;
     values.forEach((value, i) => rings[i].push(t, value ?? NaN));
     this.now = Math.max(this.now ?? t, t);
-    this.dirty = true;
+    this.changed();
+  }
+
+  // A batch of samples for one lane: times, and one array of values per trace. Each trace keeps the batch's
+  // lowest and highest value, in the order they came, so a pixel column still spans every sample in it; the
+  // header shows the newest. gap: the batch does not follow the previous one, so the line breaks before it.
+  pushBatch(laneId, times, traces, gap = false) {
+    const rings = this.rings.get(laneId), n = times.length;
+    if (!rings || !n) return;
+    traces.forEach((values, i) => {
+      let low = 0, high = 0;
+      for (let k = 1; k < n; k++) { if (values[k] < values[low]) low = k; if (values[k] > values[high]) high = k; }
+      if (gap) rings[i].push(times[0], NaN);
+      for (const k of low === high ? [low] : low < high ? [low, high] : [high, low]) rings[i].push(times[k], values[k], values[n - 1]);
+    });
+    this.now = Math.max(this.now ?? times[n - 1], times[n - 1]);
+    this.changed();
+  }
+
+  // The strip's part of the page's frame: at most every DRAW_MS, and only when something new arrived.
+  frame(now) {
+    if (!this.dirty || document.hidden) return false;
+    const wait = this.drawnAt + DRAW_MS - now;
+    if (wait > 0) {
+      this.timer ||= setTimeout(() => { this.timer = 0; this.clock.changed(); }, wait);
+      return false;
+    }
+    this.drawnAt = now;
+    this.draw();
+    return false;
   }
 
   draw() {

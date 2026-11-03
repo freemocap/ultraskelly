@@ -1,7 +1,7 @@
 // The dashboard's 3D scene, in metres: the simulator's schematic skeleton driven by the live motor
 // commands, with the ZED's depth on its head (depth3d.js). Motor values are the commands sent to the
 // boards, not measured positions; the waist has no angle sensor, so its drive shows as an arrow.
-// The scene draws only when something changed, at most once per tracking-camera frame, so the Pi's GPU
+// The scene draws in the page's frame (frameclock.js), only when something in it changed, so the Pi's GPU
 // idles between updates.
 import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
@@ -37,7 +37,41 @@ function antialiasWanted() {
   return !/V3D|VideoCore|llvmpipe|SwiftShader/i.test(name);
 }
 
-export function createScene(viewport) {
+// The skeleton as one mesh per moving part and material. buildSkeleton makes about 60 meshes, each a draw call
+// every render, which costs the Pi's GPU driver and Three.js far more than their few triangles. Each merged
+// mesh stays in the group that moves it, so the waist, pan, tilt and jaw turn exactly as before.
+function mergeMeshes(group) {
+  const byMaterial = new Map();
+  for (const child of [...group.children]) {
+    if (!child.visible) continue;
+    if (!child.isMesh || child.children.length) { mergeMeshes(child); continue; }
+    if (!child.geometry.index) continue;
+    if (!byMaterial.has(child.material)) byMaterial.set(child.material, []);
+    byMaterial.get(child.material).push(child);
+  }
+  for (const [material, meshes] of byMaterial) {
+    if (meshes.length < 2) continue;
+    const parts = meshes.map(mesh => { mesh.updateMatrix(); return mesh.geometry.clone().applyMatrix4(mesh.matrix); });
+    const vertices = parts.reduce((count, part) => count + part.attributes.position.count, 0);
+    const position = new Float32Array(vertices * 3), normal = new Float32Array(vertices * 3), index = [];
+    let offset = 0;
+    for (const part of parts) {
+      position.set(part.attributes.position.array, offset * 3); normal.set(part.attributes.normal.array, offset * 3);
+      for (const i of part.index.array) index.push(i + offset);
+      offset += part.attributes.position.count;
+      part.dispose();
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(position, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+    merged.setIndex(index);
+    for (const mesh of meshes) { group.remove(mesh); mesh.geometry.dispose(); }
+    group.add(new THREE.Mesh(merged, material));
+  }
+}
+
+// clock: the page's FrameClock; the scene draws as one of its parts.
+export function createScene(viewport, clock) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#111b21');
   scene.fog = new THREE.Fog('#111b21', 9, 22);
@@ -46,38 +80,26 @@ export function createScene(viewport) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   viewport.appendChild(renderer.domElement);
 
-  // Drawing on demand. Whatever changes the picture calls invalidate(): the gaze with each tracking frame, the
-  // pose with robot_state (20 a second), the depth (10 a second). They arrive unsynchronised, so the next
-  // render waits until a tracking-camera frame period after the last one and draws all of them together;
-  // nothing runs while nothing changes.
-  let dirty = true, paused = false, inFrame = false, frameRequest = 0, waitTimer = 0;
-  let renderedAt = -Infinity, frameMs = 1000 / 30;  // The OAK's 30 frames a second, until it reports its rate
-  const EARLY_MS = 4;   // A render may come this much before its time, to land on the nearest display frame
-  const WAKE_MS = 12;   // The wait's timer ends this long before then; the display frame after it renders
+  // Whatever changes the picture calls invalidate(): the gaze with each tracking frame, the pose with robot_state,
+  // the depth, the view. The scene then draws in the page's next frame, all of them together.
+  let dirty = true, paused = false, inFrame = false;
   function invalidate() {
     dirty = true;
-    if (!inFrame) schedule();
-  }
-  function schedule() {
-    if (frameRequest || waitTimer || paused) return;
-    const wait = renderedAt + frameMs - WAKE_MS - performance.now();
-    if (wait > 1) waitTimer = setTimeout(() => { waitTimer = 0; frameRequest = requestAnimationFrame(frame); }, wait);
-    else frameRequest = requestAnimationFrame(frame);
+    if (!inFrame && !paused) clock.changed();
   }
   const orbit = new OrbitControls(camera, renderer.domElement);
   orbit.enableDamping = true; orbit.minDistance = 0.5; orbit.maxDistance = 14;
-  // OrbitControls damps by a share per update, so the share grows with the time between renders: the camera
-  // coasts to rest in the same time as at 60 updates a second.
-  const DAMPING = orbit.dampingFactor;
-  const pace = () => { orbit.dampingFactor = 1 - (1 - DAMPING) ** (frameMs / (1000 / 60)); };
-  pace();
+  // OrbitControls damps by a share per update, so the share follows the time since the last one: the camera
+  // coasts to rest in the same time as at 60 updates a second, however often the scene draws.
+  const DAMPING = orbit.dampingFactor, DISPLAY_MS = 1000 / 60;
+  let orbitAt = 0;
   orbit.addEventListener('change', invalidate);
   new ResizeObserver(() => {
     const {clientWidth: width, clientHeight: height} = viewport;
     if (!width || !height) return;
     camera.aspect = width / height; camera.updateProjectionMatrix();
     renderer.setSize(width, height);  // Clears the canvas, so draw again before it is shown
-    if (!paused) { renderer.render(scene, camera); renderedAt = performance.now(); }
+    if (!paused) renderer.render(scene, camera);
   }).observe(viewport);
 
   const skeleton = buildSkeleton(scene);
@@ -86,6 +108,7 @@ export function createScene(viewport) {
   // its 120-degree camera cone and fixed gaze arrow are too: the depth and gaze layers draw the ZED's and
   // the OAK's own.
   for (const part of [skeleton.target, skeleton.targetLine, skeleton.jawZone, skeleton.frustum, skeleton.gaze]) part.visible = false;
+  mergeMeshes(skeleton.root);
   // Commanded waist drive: a solid arrow in front of the pelvis, pointing where its front is being turned.
   const driveMaterial = new THREE.MeshStandardMaterial({color: 0xffb269, emissive: 0xd76a23, emissiveIntensity: .6});
   const waistArrow = new THREE.Group();
@@ -126,18 +149,22 @@ export function createScene(viewport) {
     return jawShown !== jawGoal;
   }
 
-  function frame(now) {
-    frameRequest = 0;
-    if (paused) return;  // Covered by an enlarged camera view
-    if (now - renderedAt < frameMs - EARLY_MS) { frameRequest = requestAnimationFrame(frame); return; }  // Too soon
+  // The scene's part of the page's frame; true while the jaw eases or the camera settles.
+  function draw(now) {
+    if (paused) return false;  // Covered by an enlarged camera view
     inFrame = true;
     let again = easeJaw(now);
     if (view === 'behind') { if (dirty) placeBehindHead(); }
-    else if (orbit.update()) again = true;  // The camera is still moving or settling
+    else {
+      orbit.dampingFactor = 1 - (1 - DAMPING) ** (Math.min(Math.max(now - orbitAt, DISPLAY_MS), 100) / DISPLAY_MS);
+      orbitAt = now;
+      if (orbit.update()) again = true;  // The camera is still moving or settling
+    }
     inFrame = false;
-    if (dirty) { dirty = false; renderedAt = now; renderer.render(scene, camera); }
-    if (again) schedule();
+    if (dirty) { dirty = false; renderer.render(scene, camera); }
+    return again;
   }
+  clock.add(draw);
 
   // Pose the skeleton from one robot_state message; draw again only when a command changed.
   let posed = '';
@@ -160,13 +187,7 @@ export function createScene(viewport) {
     invalidate();
   }
 
-  // The tracking camera's measured frame rate sets how often the scene may draw.
-  function setFrameRate(fps) {
-    frameMs = 1000 / Math.min(60, Math.max(10, fps || 30));
-    pace();
-  }
-
-  return {scene, camera, renderer, skeleton, waistArrow, depth, gaze, update, setView, invalidate, setFrameRate,
+  return {scene, camera, renderer, skeleton, waistArrow, depth, gaze, update, setView, invalidate,
           antialias: renderer.getContextAttributes().antialias,
           setPaused: value => { paused = value; if (!value) invalidate(); }};
 }

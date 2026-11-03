@@ -1,12 +1,14 @@
 // Live dashboard, laid out as docs/dashboard.md describes. One FreeMoCap stream from /stream drives
 // it: `robot_state` messages carry the bot's snapshot (motor commands, target, rates, node health);
-// FreeMoCap `frame` messages carry camera JPEGs with the poses found in that very image.
+// FreeMoCap `frame` messages carry camera JPEGs with the poses found in that very image. Everything the
+// page shows changes in one frame per tracking-camera frame (frameclock.js).
 import { TransportService } from '/vendor/freemocap-client.js';
 import { MotorTestPanel } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
+import { FrameClock } from '/frameclock.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -16,9 +18,11 @@ const ago = seconds => seconds == null ? '—' : seconds < 1 ? `${Math.round(sec
 const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
 
+const clock = new FrameClock();
+
 // 3D scene. Without WebGL the readouts and video still work.
 let scene = null;
-try { scene = createScene($('viewport')); }
+try { scene = createScene($('viewport'), clock); }
 catch (problem) { console.error(problem); error('The 3D view needs WebGL2. Enable browser graphics acceleration and reload.'); }
 const viewButtons = [...document.querySelectorAll('.views button')];
 for (const button of viewButtons) button.onclick = () => {
@@ -33,7 +37,7 @@ for (const button of document.querySelectorAll('.layers button')) button.onclick
 };
 
 // Camera tiles; any tile enlarges over the 3D scene, which stops rendering while covered.
-const tiles = new CameraTiles(document, {element: $('enlarged'), canvas: $('enlarged').querySelector('canvas'), label: $('enlarged-label')});
+const tiles = new CameraTiles(document, {element: $('enlarged'), canvas: $('enlarged').querySelector('canvas'), label: $('enlarged-label')}, clock);
 function enlarge(cameraId) {
   tiles.enlarge(cameraId);
   scene?.setPaused(tiles.enlargedId != null);
@@ -87,10 +91,11 @@ function showTests(state) {
   } else showTestStatus('Ready');
 }
 
-// Readouts, written only where their text changes (dom.js). Motor values are commands; the time series keeps
-// the last 30 s of them, of the controllers' input and of the face distance, on the Pi's clock.
-const series = new TimeSeries($('series'));
-function showCommands(state) {
+// Readouts, written in the page's frame and only where their text changes (dom.js). Motor values are commands;
+// the time series keeps the last 30 s of them, of the controllers' input, of the face distance and of the
+// ZED's IMU, on the Pi's clock.
+const series = new TimeSeries($('series'), clock);
+function pushSeries(state) {
   const command = name => state.motors?.commands?.[name]?.value ?? null, t = state.time;
   series.push('head', t, [command('pan'), command('tilt')]);
   series.push('drive', t, [command('waist'), command('mouth')]);
@@ -98,6 +103,8 @@ function showCommands(state) {
   series.push('target', t, hasTarget(state) && aim ? [state.target.x - aim[0], state.target.y - aim[1]] : [NaN, NaN]);
   const face = state.face;
   series.push('face', t, [face?.distance != null && face.age < FACE_FRESH ? face.distance : NaN]);
+}
+function showMode(state) {
   const mode = $('motor-mode');
   setText(mode, state.motors?.simulated ? 'Simulated motors' : 'Real motors');
   mode.classList.toggle('real', !state.motors?.simulated);
@@ -108,10 +115,13 @@ function showCommands(state) {
 const FACE_FRESH = 0.5;  // Seconds; an older face is no longer drawn
 let gazeTarget = null, facePoint = null;
 const metres = value => `${value >= 0 ? '' : '−'}${Math.abs(value).toFixed(2)} m`;
-function showFace(state) {
-  const face = state.face, fresh = face?.position_head && face.age < FACE_FRESH;
-  facePoint = fresh ? face.position_head : null;
+const faceFresh = face => Boolean(face?.position_head && face.age < FACE_FRESH);
+function placeFace(state) {
+  facePoint = faceFresh(state.face) ? state.face.position_head : null;
   scene?.gaze.update(gazeTarget, facePoint);
+}
+function showFace(state) {
+  const face = state.face, fresh = faceFresh(face);
   const nominal = face?.alignment === 'nominal' ? ' (nominal)' : '';
   setText($('target-face'), fresh ? `face ${face.distance.toFixed(2)} m${nominal}` : '');
   setText($('face-distance'), fresh ? `${face.distance.toFixed(2)} m` : '—');
@@ -182,9 +192,16 @@ const DepthFrame = {parse(message) {  // docs/depth-stream.md
   }
   return message;
 }};
+const Imu = {parse(message) {  // docs/stream.md
+  const samples = message?.samples;
+  if (typeof message?.start_time !== 'number' || !(samples?.data instanceof Uint8Array) || !Array.isArray(samples?.columns)) {
+    throw new Error('imu without start_time or samples');
+  }
+  return message;
+}};
 const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`,
-                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame}});
-const depth = new DepthViews({tiles, layer: scene?.depth ?? null,
+                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu}});
+const depth = new DepthViews({tiles, layer: scene?.depth ?? null, clock,
                               legend: {near: $('depth-near'), ramp: $('depth-ramp'), far: $('depth-far'), info: $('depth-info')}});
 stream.subscribeToKind('depth_frame', frame => depth.handle(frame));
 let latestState = null, lastSnapshotAt = 0, snapshotsThisSecond = 0;
@@ -193,10 +210,41 @@ stream.subscribeToKind('robot_state', state => {
   // The tracking tile shows the camera the head steers by: the OAK, or replay's synthetic camera.
   const tracking = Object.keys(state.overlays ?? {})[0] ?? 'oak';
   if (tracking !== tiles.trackingId) { tiles.trackingId = tracking; $('tracking-name').textContent = cameraName(tracking); sendViews(); }
+  tiles.state = state;  // The aim point and jaw zone drawn over the video
   scene?.update(state);
+  placeFace(state);
+  pushSeries(state);
+  clock.changed();
+});
+// The readouts' part of the page's frame: the newest robot_state's text, once per state.
+let stateShown = null;
+clock.add(() => {
+  const state = latestState;
+  if (!state || state === stateShown) return false;
+  stateShown = state;
   tiles.showTargetWithoutVideo(state);
-  showCommands(state); showTarget(state); showFace(state); showTests(state);
+  showMode(state); showTarget(state); showFace(state); showTests(state);
   motorTest.update(state);
+  return false;
+});
+// The ZED IMU's batches (docs/stream.md), in its sensor axes. The bytes are copied out of the decoder's
+// storage before they are read as rows of float32: time after start_time, ax, ay, az (m/s²), gx, gy, gz (°/s).
+let imuNext = null;  // The sample number the next batch starts at, unless batches were missed
+stream.subscribeToKind('imu', batch => {
+  const {columns} = batch.samples, width = columns.length, bytes = batch.samples.data.slice();
+  const rows = new Float32Array(bytes.buffer, 0, Math.floor(bytes.byteLength / 4)), n = Math.floor(rows.length / width);
+  if (!n || columns.indexOf('time') < 0) return;
+  const column = name => {
+    const c = columns.indexOf(name), out = new Float64Array(n);
+    for (let k = 0; k < n; k++) out[k] = c < 0 ? NaN : rows[k * width + c];
+    return out;
+  };
+  const times = column('time');
+  for (let k = 0; k < n; k++) times[k] += batch.start_time;
+  const gap = imuNext != null && batch.first_sample !== imuNext;
+  imuNext = batch.first_sample + n;
+  series.pushBatch('accel', times, [column('ax'), column('ay'), column('az')], gap);
+  series.pushBatch('gyro', times, [column('gx'), column('gy'), column('gz')], gap);
 });
 // The SDK delivers each frame message's channels, then its overlays, then its image, so what arrives
 // between a channels call and the image belongs to that image. Values are copied out of the decoder's
@@ -245,7 +293,7 @@ document.addEventListener('visibilitychange', sendViews);
 addEventListener('resize', sendViews);
 stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
 stream.connect();
-window.ultraskelly = {scene, tiles, depth, series, stream, motorTest, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness, frame rates, node health and message rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
@@ -256,7 +304,7 @@ setInterval(() => {
   setProperty($('connection'), 'title', lastSnapshotAt ? `Newest robot_state ${ago(age)} ago` : '');
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
   setText($('oak-rate'), rateText(drawn.oak, cameras[tiles.trackingId]));
-  scene?.setFrameRate(cameras[tiles.trackingId]?.fps);  // The 3D scene draws at most once per tracking frame
+  clock.setFrameRate(cameras[tiles.trackingId]?.fps);  // The page draws at most once per tracking frame
   const depthShown = depth.tick();
   scene?.depth.tick();  // Hides depth that stopped arriving
   setText($('zed-rate'), rateText(drawn.zed_left, cameras.zed_left) + (depthShown ? ` · depth ${depthShown}/s` : ''));

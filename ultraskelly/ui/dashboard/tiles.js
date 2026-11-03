@@ -2,7 +2,8 @@
 // (data-camera="oak") shows whichever camera the head steers by. Each image source, the set of camera
 // IDs one frame message carries, has its own newest-wins decode slot: while one of its frames decodes,
 // only its newest arrival waits, and no source holds up another. Frames whose tiles cannot be seen are
-// not decoded at all. People are drawn by tracker ID (docs/stream.md): `target` is the person the head
+// not decoded at all. A decoded picture waits for the page's frame (frameclock.js), which a tracking-camera
+// picture asks for at once. People are drawn by tracker ID (docs/stream.md): `target` is the person the head
 // follows, and its ring comes from that frame's `ultraskelly.target` channel.
 import { readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
 
@@ -15,6 +16,26 @@ const COLORS = {bone: 'rgb(0,255,255)', head: 'rgb(255,0,0)', arm: 'rgb(0,255,0)
 const IGNORED = new Set(['zed_rectified', 'zed_depth']);  // ZED previews: depth_frame carries both
 
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
+
+// JPEG decoding. WebCodecs' ImageDecoder, where the page may use it (a secure context such as localhost on the
+// Pi), decodes the bytes as they are, in about half the time of the SDK's createImageBitmap on a Blob, which also
+// sends them through the browser process; elsewhere the SDK decodes. Either way each picture has the size its
+// header gives and is closed once drawn or replaced.
+const WEBCODECS = typeof ImageDecoder === 'function';
+async function decodePictures(payload) {
+  if (!WEBCODECS) return (await decodeImageBitmaps(payload)).map(image => ({...image, picture: image.bitmap}));
+  const decoded = await Promise.allSettled(payload.images.map(async image => {
+    const decoder = new ImageDecoder({data: image.jpeg, type: 'image/jpeg'});
+    try { return (await decoder.decode()).image; } finally { decoder.close(); }
+  }));
+  const wrong = decoded.findIndex(({status, value}, i) =>
+    status === 'rejected' || value.displayWidth !== payload.images[i].width || value.displayHeight !== payload.images[i].height);
+  if (wrong >= 0) {
+    for (const {value} of decoded) value?.close();
+    throw decoded[wrong].reason ?? new Error(`JPEG dimensions disagree with the image header for ${payload.images[wrong].cameraId}`);
+  }
+  return payload.images.map((image, i) => ({...image, picture: decoded[i].value}));
+}
 
 // A tile that just drew: counted for its rate, live and not stale. A forced toggle leaves an unchanged class
 // alone, where add and remove would write it again with every frame.
@@ -59,8 +80,8 @@ function drawPerson(ctx, overlay, followed) {
 }
 
 export class CameraTiles {
-  // root holds the tiles; enlarged = {element, canvas, label} shows one camera large.
-  constructor(root, enlarged) {
+  // root holds the tiles; enlarged = {element, canvas, label} shows one camera large; clock: the page's FrameClock.
+  constructor(root, enlarged, clock) {
     this.tiles = new Map();
     for (const figure of root.querySelectorAll('.tile[data-camera]')) {
       this.tiles.set(figure.dataset.camera, {figure, canvas: figure.querySelector('canvas'), label: figure.dataset.label, drawn: 0, lastAt: 0});
@@ -70,6 +91,9 @@ export class CameraTiles {
     this.trackingId = 'oak';   // Camera the head steers by: the one robot_state.overlays describes
     this.state = null;         // Latest robot_state: aim point, jaw zone and target
     this.slots = new Map();    // Source key -> {busy, waiting}
+    this.pending = new Map();  // Tile key -> {image, frame}: decoded, waiting for the page's frame
+    this.clock = clock;
+    clock.add(() => this.present());
     this.unknown = new Set();
     this.visible = new Set();
     this.onChange = null;      // Called when what the page shows changes (wanted views, docs/stream.md)
@@ -116,9 +140,7 @@ export class CameraTiles {
     slot.busy = true;
     try {
       for (let next = job; next; next = slot.waiting, slot.waiting = null) {
-        const images = await decodeImageBitmaps(next.payload);
-        try { for (const image of images) this.draw(image, next.frame); }
-        finally { for (const image of images) image.bitmap.close(); }
+        for (const image of await decodePictures(next.payload)) this.hold(image, next.frame);
       }
     } catch (problem) {
       console.error('Could not show a camera frame', problem);
@@ -132,12 +154,36 @@ export class CameraTiles {
     return this.enlargedId === key ? [tile.canvas, this.enlarged.canvas] : [tile.canvas];
   }
 
+  // A decoded picture waits for the page's next frame. When a newer one for the same tile comes first, the
+  // older is drawn at once rather than lost.
+  hold(image, frame) {
+    const key = this.keyOf(image.cameraId);
+    if (key == null) { image.picture.close(); return; }
+    const older = this.pending.get(key);
+    if (older) this.show(older);
+    this.pending.set(key, {image, frame});
+    if (image.cameraId === this.trackingId) this.clock.tracked();
+    else this.clock.changed();
+  }
+
+  show({image, frame}) {
+    try { this.draw(image, frame); }
+    finally { image.picture.close(); }
+  }
+
+  // The tiles' part of the page's frame: every picture that arrived since the last one.
+  present() {
+    for (const held of this.pending.values()) this.show(held);
+    this.pending.clear();
+    return false;
+  }
+
   draw(image, frame) {
     const key = this.keyOf(image.cameraId), tile = this.tiles.get(key);
     if (!tile) return;
     for (const canvas of this.canvasesFor(key)) {
       const ctx = sizeCanvas(canvas, image.width, image.height);
-      ctx.drawImage(image.bitmap, 0, 0);
+      ctx.drawImage(image.picture, 0, 0);
       this.drawGuides(ctx, image.cameraId, frame);
     }
     counted(tile);
