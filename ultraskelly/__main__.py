@@ -23,9 +23,12 @@ def main() -> None:
         help="With --hardware: run the cameras but record motor commands instead of moving the motors.",
     )
     parser.add_argument(
-        "--no-window", action="store_true",
-        help="With --hardware: skip the OpenCV camera window (the dashboard still runs).",
+        "--window", action="store_true",
+        help="With --hardware: also show the camera in an OpenCV window (needs a desktop session); "
+             "the dashboard runs either way.",
     )
+    # The window used to be on unless this was given; still accepted, so older commands run unchanged.
+    parser.add_argument("--no-window", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--record", action="store_true",
         help="With --hardware: save the camera video, detections and motor commands under ~/ultraskelly-recordings/.",
@@ -59,8 +62,10 @@ def main() -> None:
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    if (args.simulate_motors or args.no_window or args.record or args.zed) and not args.hardware:
-        parser.error("--simulate-motors, --no-window, --record and --zed are used together with --hardware")
+    if (args.simulate_motors or args.window or args.record or args.zed) and not args.hardware:
+        parser.error("--simulate-motors, --window, --record and --zed are used together with --hardware")
+    if args.window and args.no_window:
+        parser.error("--window and --no-window contradict each other")
     if args.microphone and not args.record:
         parser.error("--microphone is used together with --record")
     if args.zed_only and args.hardware:
@@ -86,7 +91,7 @@ def main() -> None:
         # hears READY only once the robot is up. Watchdog pings then follow while the event
         # loop runs, until the bot starts shutting down.
         launcher = BotLauncher.from_config(launch_config(
-            simulate_motors=args.simulate_motors, show_window=not args.no_window,
+            simulate_motors=args.simulate_motors, show_window=args.window,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
             port=args.port,

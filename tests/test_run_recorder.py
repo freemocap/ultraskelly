@@ -23,24 +23,35 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 
 class FakeVideo:
-    """Keeps the frames a video writer was given."""
+    """Keeps the JPEG bytes a video writer was given."""
 
-    def __init__(self, path, size, fps, quality, gate=None):
+    def __init__(self, path, size, fps, gate=None):
         self.path, self.size, self.frames, self.released, self.gate = path, size, [], False, gate
 
-    def write(self, frame):
+    def write(self, jpeg):
         if self.gate is not None:
             self.gate.wait()  # A disk that has stalled
-        self.frames.append(frame.copy())
+        self.frames.append(jpeg)
 
     def release(self):
         self.released = True
 
 
-def frame(number):
+class FakeEncoder:
+    """Stands in for the stream's JPEG encoder: names the frame number it was given, counting calls."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, image, quality):
+        self.calls.append((int(image[0, 0, 0]), quality))
+        return b"JPEG%d@%d" % (int(image[0, 0, 0]), quality)
+
+
+def frame(number, **fields):
     image = np.zeros((4, 6, 3), dtype=np.uint8)
     image[..., 0] = number  # The red channel carries the frame number
-    return FrameMessage(frame=image, frame_number=number, timestamp=100.0 + number)
+    return FrameMessage(frame=image, frame_number=number, timestamp=100.0 + number, **fields)
 
 
 def rows(path):
@@ -48,17 +59,19 @@ def rows(path):
         return list(csv.DictReader(file))
 
 
-def make_recorder(bus, tmp_path, commands, videos, *, gate=None, queue_size=60):
+def make_recorder(bus, tmp_path, commands, videos, *, gate=None, queue_size=60, encoder=None, **params):
     def open_writer(*args):
         videos.append(FakeVideo(*args, gate=gate))
         return videos[-1]
 
     return RunRecorderNode.create(
         pubsub=bus,
-        params=RunRecorderParams(folder=tmp_path, queue_size=queue_size),
+        params=RunRecorderParams(folder=tmp_path, queue_size=queue_size, **params),
         camera="oak",
         frame_topic=FrameTopic,
         commands=commands,
+        encode_jpeg=encoder or FakeEncoder(),
+        stream_jpeg_quality=80,
         configuration={"note": "test run"},
         open_writer=open_writer,
     )
@@ -97,8 +110,7 @@ def test_a_run_is_saved_with_its_frames_detections_and_commands(tmp_path):
 
     [video] = videos
     assert video.path == folder / "oak.avi" and video.size == (6, 4) and video.released
-    assert [int(image[0, 0, 2]) for image in video.frames] == [5, 6, 8]  # Written as BGR
-    assert int(video.frames[0][0, 0, 0]) == 0
+    assert video.frames == [b"JPEG5@80", b"JPEG6@80", b"JPEG8@80"]  # At the stream's quality
     assert [(r["index"], r["frame_number"], r["captured"]) for r in rows(folder / "oak_frames.csv")] == [
         ("0", "5", "105.0"), ("1", "6", "106.0"), ("2", "8", "108.0"),
     ]
@@ -111,6 +123,45 @@ def test_a_run_is_saved_with_its_frames_detections_and_commands(tmp_path):
     run = json.loads((folder / "run.json").read_text())
     assert run["written"]["frame"] == 3 and run["dropped"] == {} and run["frames_missed"] == 1
     assert run["configuration"] == {"note": "test run"} and run["camera"] == "oak"
+
+
+def record_frames(tmp_path, frames, **options):
+    """Publish `frames` to a recorder and return its video and encoder once it has stopped."""
+    videos, encoder = [], options.pop("encoder", FakeEncoder())
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = make_recorder(bus, tmp_path, None, videos, encoder=encoder, **options)
+        task = asyncio.create_task(node.run())
+        await asyncio.sleep(0.02)
+        for message in frames:
+            await bus.publish(FrameTopic, message)
+            await asyncio.sleep(0.02)
+        node.stop()
+        await task
+        bus.close()
+
+    asyncio.run(scenario())
+    return videos[0], encoder
+
+
+def test_a_frame_the_stream_already_encoded_is_not_encoded_again(tmp_path):
+    encoder = FakeEncoder()
+    shown = frame(5)
+    shown.jpeg_bytes(80, encoder)  # As the stream does for a watching dashboard
+    video, _ = record_frames(tmp_path, [shown, frame(6)], encoder=encoder)
+    assert video.frames == [b"JPEG5@80", b"JPEG6@80"]
+    assert encoder.calls == [(5, 80), (6, 80)]  # Frame 5 once, for both
+
+
+def test_a_cameras_own_jpeg_is_recorded_as_it_came(tmp_path):
+    video, encoder = record_frames(tmp_path, [frame(5, jpeg=b"from the camera")])
+    assert video.frames == [b"from the camera"] and encoder.calls == []
+
+
+def test_a_recording_quality_of_its_own_encodes_separately(tmp_path):
+    video, encoder = record_frames(tmp_path, [frame(5)], jpeg_quality=95)
+    assert video.frames == [b"JPEG5@95"]
 
 
 def imu_batch(first_sample, count=4):
@@ -178,7 +229,7 @@ def test_a_failed_recording_never_stops_or_hangs_the_run(tmp_path):
         bus = PubSubTopicManager.create()
         node = RunRecorderNode.create(
             pubsub=bus, params=RunRecorderParams(folder=tmp_path, queue_size=2), camera="oak",
-            frame_topic=FrameTopic, commands=None, open_writer=broken_writer,
+            frame_topic=FrameTopic, commands=None, encode_jpeg=FakeEncoder(), open_writer=broken_writer,
         )
         task = asyncio.create_task(node.run())
         for number in range(10):

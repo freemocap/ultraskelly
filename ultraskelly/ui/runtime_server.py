@@ -6,11 +6,15 @@ very image (a stereo camera's two images travel together in one message);
 `robot_state` messages carry the bot's snapshot. The browser decodes them
 with @freemocap/client and draws the poses and guides itself. The stream is read-only
 and newest-wins: a slow browser receives fewer, newer messages and never blocks the
-bot's event loop. Motor values are the commands sent, not measured positions.
+bot's event loop. A viewer may say what it draws (display feedback); it then receives
+only that, and a feed nobody draws is not encoded (docs/stream.md). Motor values are the
+commands sent, not measured positions.
 Dashboard motor tests are separate commands with their own replies; see motor_test_routes.
 """
 import asyncio
+import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,6 +151,20 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
     return jpeg.tobytes()
 
 
+def resize_with_opencv(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """`image` at `size` (width, height), averaging pixels. A YUYV image comes back as RGB, since
+    its interleaved colour cannot be averaged; a uint16 depth image keeps exact values."""
+    import cv2
+
+    if image.ndim == 3 and image.shape[2] == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_YUV2RGB_YUYV)
+    nearest = image.ndim == 2 and image.dtype == np.uint16
+    return cv2.resize(image, size, interpolation=cv2.INTER_NEAREST if nearest else cv2.INTER_AREA)
+
+
+SHRINK_BELOW = 0.75  # Viewers that all draw a feed at most this fraction of its size get it shrunk
+
+
 POSE_TRACKER = "yolov8_pose"
 KEYPOINT_NAMES = tuple(keypoint.name.lower() for keypoint in CocoKeypoint)
 KEYPOINT_COLUMNS = ("x", "y", "visibility")
@@ -174,10 +192,17 @@ def encode_camera_frame(
     poses: PoseDataMessage | None,
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
+    scale: float = 1.0,
+    resize: Callable[[np.ndarray, tuple[int, int]], np.ndarray] = resize_with_opencv,
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
-    together, and each person's keypoints in pixels of the first image. Pure CPU work,
-    safe to run in a worker thread."""
+    together, shrunk by `scale` when it is below 1, and each person's keypoints in pixels
+    of the first image (so frames with poses keep their size). Pure CPU work, safe to run
+    in a worker thread."""
+    if scale < 1:
+        cameras = [(camera, index, resize(image, (max(1, round(image.shape[1] * scale)),
+                                                  max(1, round(image.shape[0] * scale)))))
+                   for camera, index, image in cameras]
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
     trackers = person_trackers(camera, (width, height), poses)
@@ -224,14 +249,72 @@ def person_trackers(camera: str, image_size: tuple[int, int], poses: PoseDataMes
     return trackers
 
 
-class JpegCache:
-    """Encodes each image once, however many messages carry it."""
+STATE_KIND, DEPTH_KIND, IMU_KIND = "robot_state", "depth_frame", "imu"
 
-    def __init__(self, encode_jpeg: Callable[[np.ndarray, int], bytes]) -> None:
+
+@dataclass(frozen=True)
+class Display:
+    """What a viewer draws, from its display feedback: each camera ID with the size it draws
+    it at (None when it gave none usable), and the application kinds it wants."""
+
+    sizes: dict[str, tuple[int, int] | None]
+    kinds: frozenset[str]
+
+
+def display_feedback(text: str) -> Display | None:
+    """What a viewer's display feedback says it draws (docs/stream.md, "What a viewer draws");
+    None for any other text, which changes nothing."""
+    try:
+        message = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or not isinstance(message.get("displayImageSizes"), dict):
+        return None
+
+    def size(drawn: object) -> tuple[int, int] | None:
+        if not isinstance(drawn, dict):
+            return None
+        width, height = drawn.get("width"), drawn.get("height")
+        usable = all(isinstance(side, (int, float)) and math.isfinite(side) and side >= 1 for side in (width, height))
+        return (round(width), round(height)) if usable else None
+
+    kinds = message.get("kinds")
+    return Display(
+        sizes={camera: size(drawn) for camera, drawn in message["displayImageSizes"].items()},
+        kinds=frozenset(kind for kind in kinds if isinstance(kind, str)) if isinstance(kinds, list) else frozenset(),
+    )
+
+
+@dataclass(eq=False)
+class Viewer:
+    """One /stream connection and what it draws: None until it says, which is everything."""
+
+    connection: StreamConnection
+    display: Display | None = None
+
+    def wants(self, cameras: tuple[str, ...] = (), kind: str | None = None) -> bool:
+        """Whether the viewer draws one of `cameras` or wants `kind` messages; robot_state always."""
+        if self.display is None or kind == STATE_KIND or kind in self.display.kinds:
+            return True
+        return any(camera in self.display.sizes for camera in cameras)
+
+
+class JpegCache:
+    """Encodes each image once, however many messages carry it. A camera frame's own image is
+    encoded through FrameMessage.jpeg_bytes, so the recorder keeps the same JPEG."""
+
+    def __init__(
+        self,
+        encode_jpeg: Callable[[np.ndarray, int], bytes],
+        frame: FrameMessage | StereoFrameMessage | DepthFrameMessage | None = None,
+    ) -> None:
         self.encode_jpeg = encode_jpeg
+        self.frame = frame if isinstance(frame, FrameMessage) else None
         self.encoded: dict[int, tuple[np.ndarray, bytes]] = {}
 
     def encode(self, image: np.ndarray, quality: int) -> bytes:
+        if self.frame is not None and image is self.frame.frame:
+            return self.frame.jpeg_bytes(quality, self.encode_jpeg)
         if id(image) not in self.encoded:
             self.encoded[id(image)] = (image, self.encode_jpeg(image, quality))  # Holding the image keeps its id
         return self.encoded[id(image)][1]
@@ -262,7 +345,7 @@ class CameraFeed:
     stream: Latest = field(default_factory=Latest)
     # The newest frame (with the poses found in it) waiting to be encoded, newest-wins.
     pending: tuple[FrameMessage | StereoFrameMessage | DepthFrameMessage, PoseDataMessage | None] | None = None
-    encoding: bool = False
+    encoder: asyncio.Task | None = None  # The task encoding this feed's frames, while one runs
     encoded: int = 0
     last_pose_at: float | None = None
 
@@ -289,16 +372,25 @@ class RuntimeServerNode(Node):
     encode_jpeg: SkipValidation[Callable[[np.ndarray, int], bytes]] = Field(
         default=encode_jpeg_with_opencv, exclude=True
     )
+    resize: SkipValidation[Callable[[np.ndarray, tuple[int, int]], np.ndarray]] = Field(
+        default=resize_with_opencv, exclude=True
+    )
     pose_camera: str | None = Field(default=None, description="Camera whose frames the pose detector reads")
     state_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)
-    clients: int = Field(default=0, exclude=True)
+    viewers: SkipValidation[list[Viewer]] = Field(default_factory=list, exclude=True)
+    # Set while any viewer is connected
+    watched: SkipValidation[asyncio.Event] = Field(default_factory=asyncio.Event, exclude=True)
     state_sequence: int = Field(default=0, exclude=True)
     depth_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # depth_frame messages
     depth_sequence: int = Field(default=0, exclude=True)
     imu_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # imu messages
     imu_sequence: int = Field(default=0, exclude=True)
-    state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+
+    @property
+    def clients(self) -> int:
+        """How many viewers are connected."""
+        return len(self.viewers)
 
     @classmethod
     def create(
@@ -435,29 +527,86 @@ class RuntimeServerNode(Node):
         )
 
     async def _stream(self, request: web.Request) -> web.WebSocketResponse:
-        """One client of the CBOR stream: robot state and every camera's newest frame."""
-        websocket = web.WebSocketResponse(heartbeat=10)
+        """One viewer of the CBOR stream: robot state, and the newest frame of each view it shows."""
+        # No permessage-deflate: JPEG and zlib data do not shrink, so deflating them would only cost the Pi
+        websocket = web.WebSocketResponse(heartbeat=10, compress=False)
         await websocket.prepare(request)
-        connection = StreamConnection(websocket.send_bytes, websocket.send_str)
-        self.clients += 1
-        sending = asyncio.create_task(
-            connection.follow(
-                self.state_stream, self.depth_stream, self.imu_stream, *(feed.stream for feed in self.feeds.values())
-            )
-        )
+        viewer = Viewer(StreamConnection(websocket.send_bytes, websocket.send_str))
+        self.viewers.append(viewer)
+        self.watched.set()
+        streams = [
+            (self.state_stream, (), STATE_KIND), (self.imu_stream, (), IMU_KIND), (self.depth_stream, (), DEPTH_KIND),
+            *((feed.stream, feed.views, None) for feed in self.feeds.values()),
+        ]
+        sending = [asyncio.create_task(self._send(viewer, stream, cameras, kind)) for stream, cameras, kind in streams]
+        self._kick_all()
         try:
             async for message in websocket:
                 if message.type == WSMsgType.TEXT:
-                    await connection.receive_text(message.data)  # Answers the client's ping
+                    text = await viewer.connection.receive_text(message.data)  # Answers the client's ping
+                    if text is not None and (display := display_feedback(text)) is not None:
+                        viewer.display = display
+                        self._kick_all()  # A camera just asked for need not wait for its next frame
                 elif message.type == WSMsgType.ERROR:
                     break
         except ConnectionResetError:
             pass
         finally:
-            self.clients -= 1
-            sending.cancel()
-            await asyncio.gather(sending, return_exceptions=True)
+            self.viewers.remove(viewer)
+            if not self.viewers:
+                self.watched.clear()
+            for task in sending:
+                task.cancel()
+            await asyncio.gather(*sending, return_exceptions=True)
         return websocket
+
+    @staticmethod
+    async def _send(viewer: Viewer, stream: Latest, cameras: tuple[str, ...], kind: str | None) -> None:
+        """Send the stream's newest message, now and whenever it changes, while the viewer draws one
+        of its `cameras` or wants its `kind`. New feedback applies from the next message, so no send
+        is cut short."""
+        version = 0
+        while True:
+            version, message = await stream.after(version)
+            if viewer.wants(cameras, kind):
+                await viewer.connection.send(message)
+
+    def _shown(self, cameras: tuple[str, ...] = (), kind: str | None = None) -> bool:
+        """Whether any viewer draws one of `cameras` or wants `kind` messages."""
+        return any(viewer.wants(cameras, kind) for viewer in self.viewers)
+
+    def _wanted(self, feed: CameraFeed) -> tuple[bool, bool]:
+        """Whether any viewer shows the feed's pending frame as a frame message, and as a depth_frame.
+        A depth frame travels as a frame message only with depth_previews."""
+        depth = isinstance(feed.pending[0], DepthFrameMessage)
+        frames = (self.params.depth_previews or not depth) and self._shown(feed.views)
+        return frames, depth and self._shown(kind=DEPTH_KIND)
+
+    def _scale(self, feed: CameraFeed, size: tuple[int, int]) -> float:
+        """How small the viewers that draw the feed draw its images of `size` (width, height), as a
+        fraction of it; 1 sends them as they are. A viewer that gives no size gets them whole, and
+        a feed with guides or poses keeps its camera's pixels, which those are drawn in."""
+        if feed.overlay is not None or feed.name == self.pose_camera:
+            return 1.0
+        needed = 0.0
+        for viewer in self.viewers:
+            if viewer.display is None:
+                return 1.0
+            for camera in feed.views:
+                if camera in viewer.display.sizes:
+                    if (drawn := viewer.display.sizes[camera]) is None:
+                        return 1.0
+                    needed = max(needed, drawn[0] / size[0], drawn[1] / size[1])
+        return needed if needed <= SHRINK_BELOW else 1.0
+
+    def _kick(self, feed: CameraFeed) -> None:
+        """Start encoding the feed's pending frame, unless that is under way or nobody shows it."""
+        if feed.pending is not None and feed.encoder is None and any(self._wanted(feed)):
+            feed.encoder = asyncio.create_task(self._encode(feed))
+
+    def _kick_all(self) -> None:
+        for feed in self.feeds.values():
+            self._kick(feed)
 
     def _encode_depth_frame(self, frame: DepthFrameMessage, sequence: int, jpegs: "JpegCache") -> bytes:
         """The `depth_frame` message for a depth frame (docs/depth-stream.md). Runs in a worker thread."""
@@ -467,27 +616,30 @@ class RuntimeServerNode(Node):
         )
 
     async def _encode(self, feed: CameraFeed) -> None:
-        """Encode the newest pending frame message, repeating while newer ones arrive."""
-        feed.encoding = True
+        """Encode the newest pending frame as each viewer draws it, repeating while newer ones arrive."""
         try:
-            while feed.pending is not None and self.clients > 0:
+            while feed.pending is not None and any(wanted := self._wanted(feed)):
+                frames_shown, depth_shown = wanted
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
-                cameras = [
-                    (camera, feed.index + offset, image)
-                    for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
-                ]
-                jpegs = JpegCache(self.encode_jpeg)  # A depth frame's colour image is encoded once for both messages
-                depth = isinstance(camera_frame, DepthFrameMessage)
-                if self.params.depth_previews or not depth:
+                # Each image once: a depth frame's colour for both its messages, a camera frame's for the recorder too
+                jpegs = JpegCache(self.encode_jpeg, camera_frame)
+                if frames_shown:
+                    images = camera_images(camera_frame)
+                    cameras = [
+                        (camera, feed.index + offset, image)
+                        for offset, (camera, image) in enumerate(zip(feed.views, images))
+                    ]
                     message = await asyncio.to_thread(
                         encode_camera_frame, cameras,
-                        frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
+                        frame_number=(camera_frame.frame_number if camera_frame.frame_number is not None
+                                      else feed.encoded),
                         timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
                         poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
+                        scale=self._scale(feed, (images[0].shape[1], images[0].shape[0])), resize=self.resize,
                     )
                     feed.stream.publish(message)
-                if depth:  # The depth itself, for depth tiles and 3D views
+                if depth_shown:  # The depth itself, for depth tiles and 3D views
                     self.depth_sequence += 1
                     self.depth_stream.publish(
                         await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence, jpegs)
@@ -495,47 +647,72 @@ class RuntimeServerNode(Node):
         except Exception:
             logger.exception("Frame encoding failed")
         finally:
-            feed.encoding = False
+            feed.encoder = None
+
+    async def _take(self, name: str, subscription: TopicSubscriptionQueue) -> None:
+        """Keep a topic's newest message and its rate; a pose also offers the frame it was found in."""
+        while True:
+            message = await subscription.get()
+            now = time.monotonic()
+            previous = self.latest.get(name)
+            self.latest[name] = Received(message=message, at=now)
+            if previous is not None and now > previous.at:
+                rate = self.rates.get(name, 0.0)
+                self.rates[name] = rate + 0.1 * (1 / (now - previous.at) - rate)
+            if name == "imu" and self._shown(kind=IMU_KIND):  # Every batch, for time series
+                self.imu_sequence += 1
+                self.imu_stream.publish(encode_imu_batch(message, sequence=self.imu_sequence))
+            if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
+                posed = self.feeds[self.pose_camera]
+                posed.last_pose_at = now
+                posed.pending = (message.frame, message)
+                self._kick(posed)
+
+    async def _take_frames(self, feed: CameraFeed) -> None:
+        """Count a camera's frames and offer each one for encoding."""
+        while True:
+            camera_frame = await feed.subscription.get()
+            now = time.monotonic()
+            if feed.last_frame_at is not None and now > feed.last_frame_at:
+                feed.fps += 0.1 * (1 / (now - feed.last_frame_at) - feed.fps)
+            feed.last_frame_at, feed.shape = now, camera_images(camera_frame)[0].shape
+            feed.frames_seen += 1
+            # A posed camera's frames come with their poses, unless the detector has stalled.
+            poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
+            if feed.name != self.pose_camera or not poses_flowing:
+                feed.pending = (camera_frame, None)
+                self._kick(feed)
+
+    async def _publish_state(self) -> None:
+        """Publish robot state at state_hz while anyone watches."""
+        while True:
+            await self.watched.wait()
+            now = time.monotonic()
+            self.state_sequence += 1
+            self.state_stream.publish(
+                encode_message(STATE_KIND, self.robot_state(), timestamp=now, sequence=self.state_sequence)
+            )
+            await asyncio.sleep(1 / self.params.state_hz)
 
     async def pump(self) -> None:
-        """Drain subscriptions into the latest state; while anyone watches, encode the
-        newest frames and publish robot state."""
-        while not self.stop_event.is_set():
-            now = time.monotonic()
-            for name, subscription in self.subscriptions.items():
-                while not subscription.empty():
-                    message = subscription.get_nowait()
-                    previous = self.latest.get(name)
-                    self.latest[name] = Received(message=message, at=now)
-                    if previous is not None and now > previous.at:
-                        rate = self.rates.get(name, 0.0)
-                        self.rates[name] = rate + 0.1 * (1 / (now - previous.at) - rate)
-                    if name == "imu" and self.clients > 0:  # Every batch, for time series
-                        self.imu_sequence += 1
-                        self.imu_stream.publish(encode_imu_batch(message, sequence=self.imu_sequence))
-                    if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
-                        posed = self.feeds[self.pose_camera]
-                        posed.last_pose_at = now
-                        posed.pending = (message.frame, message)
-            for feed in self.feeds.values():
-                while not feed.subscription.empty():
-                    camera_frame = feed.subscription.get_nowait()
-                    if feed.last_frame_at is not None and now > feed.last_frame_at:
-                        feed.fps += 0.1 * (1 / (now - feed.last_frame_at) - feed.fps)
-                    feed.last_frame_at, feed.shape = now, camera_images(camera_frame)[0].shape
-                    feed.frames_seen += 1
-                    # A posed camera's frames come with their poses, unless the detector has stalled.
-                    poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
-                    if feed.name != self.pose_camera or not poses_flowing:
-                        feed.pending = (camera_frame, None)
-                if feed.pending is not None and self.clients > 0 and not feed.encoding:
-                    asyncio.create_task(self._encode(feed))
-            if self.clients > 0 and now - self.state_published_at >= 1 / self.params.state_hz:
-                self.state_published_at, self.state_sequence = now, self.state_sequence + 1
-                self.state_stream.publish(
-                    encode_message("robot_state", self.robot_state(), timestamp=now, sequence=self.state_sequence)
-                )
-            await asyncio.sleep(0.005)
+        """Take each topic's messages as they arrive into the latest state; while anyone watches,
+        encode the newest frames someone shows and publish robot state. Runs until stopped; a
+        part that fails stops it with its error."""
+        parts = [
+            *(asyncio.create_task(self._take(name, subscription)) for name, subscription in self.subscriptions.items()),
+            *(asyncio.create_task(self._take_frames(feed)) for feed in self.feeds.values()),
+            asyncio.create_task(self._publish_state()),
+        ]
+        stopped = asyncio.create_task(self.stop_event.wait())
+        try:
+            done, _ = await asyncio.wait([stopped, *parts], return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        finally:
+            tasks = [stopped, *parts, *(feed.encoder for feed in self.feeds.values() if feed.encoder is not None)]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run(self) -> None:
         """Serve until stopped."""

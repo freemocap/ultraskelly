@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def launch_config(
-    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
     port: int = 8080,
 ) -> LaunchConfig:
@@ -86,7 +86,7 @@ def launch_config(
 
 
 async def main(
-    *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
+    *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
     port: int = 8080,
 ) -> None:

@@ -99,9 +99,9 @@ available. Both center the head when they start; the full-power jaw test runs on
 `MouthNodeParams.startup_test`. Every servo angle and motor throttle is clamped to
 `LaunchConfig.limits` before it reaches a board.
 Add `--simulate-motors` to run the cameras and controllers while recording motor
-commands in memory instead of driving the motor boards. Run directly without
-`--no-window`, the bot also shows an OpenCV window, which needs a graphical session.
-While the bot runs, port
+commands in memory instead of driving the motor boards. Add `--window` to also show the
+camera in an OpenCV window, which needs a graphical session; `--no-window` is accepted
+and does nothing, since the window is off by default. While the bot runs, port
 8080 serves the live dashboard to the network. One read-only WebSocket, `/stream`,
 carries FreeMoCap's self-describing CBOR messages: `frame` messages with each OAK image
 and the poses found in it, and `robot_state` messages with motor commands, target, rates
@@ -129,8 +129,9 @@ without stopping its motors, for example when killed, the motor board keeps its 
 command: `.venv/bin/python -m scripts.stop_motors` brakes them all.
 
 Add `--zed` to also capture the ZED Mini stereo camera in the skull's eye sockets: its
-left and right images (672×376 each at 30 fps) travel together in one `frame` message,
-as cameras `zed_left` and `zed_right`, and appear as two more video panels. Its IMU
+left and right images (672×376 each at 30 fps, sent at the size the dashboard draws them)
+travel together in one `frame` message, as cameras `zed_left` and `zed_right`, and appear
+as two more video panels. Its IMU
 (accelerometer and gyroscope, 794 samples a second) streams as `imu` messages for display
 and `--record`, never for control; `scripts/setup-pi.sh` installs the udev rule that lets
 the bot read it.
