@@ -697,6 +697,28 @@ context; the dashboard's WebGL view needed `--use-angle=swiftshader
 needs `--password-store=basic` and a throwaway profile, or it asks for the keyring
 password on the robot's screen.
 
+## Dashboard layout rebuild (2026-11-02)
+
+The dashboard now follows [the approved layout](dashboard.md): the 3D scene as the main
+panel, the tracking camera and the ZED eye and depth tiles in a column beside it, and the
+readouts and motor tests in a strip below. Each image source has its own newest-wins decode
+slot, so the ZED pair cannot hold up the OAK. People are drawn by tracker ID, and the target
+ring comes from that frame's `ultraskelly.target` channel. The tracking tile shows whichever
+camera `robot_state.overlays` describes, so `replay --serve --people N` shows there too.
+
+Checked on Windows in headless Chrome against a synthetic stream (OAK frames with keypoints and
+ZED pairs in one message, both at 30 fps): at 1920×1080, 1920×950, 1366×657 and 390×844 every
+panel had its specified size, nothing overflowed, both sources drew 30 of 30 frames a second,
+and the console stayed clean. Against `replay --serve --people 3`, all 156 frames in 5 s
+carried the target channel and a `target` person.
+
+On the Pi, the bot from the branch ran with `--hardware --simulate-motors --no-window` (OAK and
+Hailo-8; ZED not started), with the dashboard in the full-screen Chromium window of
+`ultraskelly-dashboard` and nobody in view. The OAK tile drew 30 frames a second from a
+30.2 fps camera. Over 20 s Chromium used 1.02 cores, the bot 0.74 and the whole Pi 45.5% of 4
+cores, with `throttled=0x0`. The old layout's figures in the table above are 1.09, 0.73 and
+47%. One sample; the eye tiles were not exercised on the Pi.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
