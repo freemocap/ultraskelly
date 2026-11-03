@@ -21,6 +21,9 @@ WorkingDirectory=@REPO@
 # while the motor boards are disconnected, or --record to save every run.
 EnvironmentFile=-/etc/default/ultraskelly-bot
 ExecStart=@REPO@/scripts/run-bot.sh $ULTRASKELLY_BOT_OPTIONS
+# After every exit, including crashes and watchdog kills that skip the bot's own stop
+# commands, brake the DC motors (scripts/stop_motors.py), within 10 s.
+ExecStopPost=-@REPO@/scripts/stop-motors-after-bot.sh
 Environment=PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
 # Start again after any exit, crash or watchdog kill: after 2 s at first, then
 # longer each time, up to a minute.
