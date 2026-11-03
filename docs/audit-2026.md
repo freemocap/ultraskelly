@@ -413,7 +413,11 @@ deferred, not cancelled), its shape follows published guidance and round 1's dat
   would need the bridge's PWM pin driven by the Pi's own hardware PWM, a rewiring.
   Adafruit's guide recommends 50-100 Hz for low-speed torque but warns of chatter, and
   ripple grows as the frequency falls. A lower frequency is the first thing to try once
-  the microphone is back.
+  the microphone is back: `LaunchConfig.motor_pwm_hz` sets it for both motor factories,
+  which must agree because the board has one PWM clock (the jaw's factory used to reset
+  it). A 2025 scratch test (`scratch/motor_pwm_test.py`) listed 5-25 kHz, beyond the
+  chip, and kept only 1600 Hz; it ran the jaw at full drive, where nothing switches, so it
+  says nothing about the whine.
 - *S-curve ramps.* Jerk-limited profiles spread each change of acceleration over time and
   inject less vibration, and so less noise, than linear ramps with corners
   ([PMD](https://info.pmdcorp.com/hubfs/Resources/Articles%20and%20Papers/s-curve-motion-profiles-are-vital-PMDCORP.pdf),

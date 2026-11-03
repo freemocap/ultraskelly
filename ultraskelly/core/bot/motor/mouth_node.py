@@ -51,12 +51,15 @@ class MouthNode(Node):
     manual: bool = Field(default=False, description="True while a motor test drives the actuators; the jaw controller commands nothing")
 
     @classmethod
-    def create(cls, *, pubsub: PubSubTopicManager, params: MouthNodeParams) -> "MouthNode":
-        """Factory method to create and initialize MouthNode."""
+    def create(cls, *, pubsub: PubSubTopicManager, params: MouthNodeParams, pwm_frequency: float = 1600.0) -> "MouthNode":
+        """Factory method to create and initialize MouthNode.
+
+        `pwm_frequency` is the motor board's, shared with the waist: pass the waist's.
+        """
         from adafruit_motor.motor import DCMotor
         from adafruit_motorkit import MotorKit
 
-        motor_kit = MotorKit(address=0x60, pwm_frequency=1600)
+        motor_kit = MotorKit(address=0x60, pwm_frequency=pwm_frequency)
 
         # Select motor channel
         mouth_motor: DCMotor | None = None

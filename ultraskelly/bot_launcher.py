@@ -74,6 +74,10 @@ class LaunchConfig(NodeParams):
         default_factory=MotorTestLimits,
         description="What the dashboard's motor tests may do, within the hard limits",
     )
+    motor_pwm_hz: float = Field(
+        default=1600.0, ge=24.0, le=1600.0,
+        description="PWM frequency of the DC motor board, one clock for the waist and jaw; 1600 asks for its highest, about 1.5 kHz",
+    )
     recording: RunRecorderParams | None = Field(
         default=None,
         description="Save the run's camera video, detections and motor commands to disk; None saves nothing",
@@ -119,8 +123,9 @@ class BotLauncher(BaseModel):
             )
             self.nodes.extend([orientation, mouth])
         else:
-            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation)
-            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth)
+            pwm = self.config.motor_pwm_hz
+            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation, pwm_frequency=pwm)
+            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth, pwm_frequency=pwm)
             record_hardware_commands(
                 orientation=orientation, mouth=mouth, recorder=self.command_recorder, limits=self.config.limits,
             )

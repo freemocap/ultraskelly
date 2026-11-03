@@ -95,9 +95,14 @@ class OrientationNode(Node):
         cls,
         *,
         pubsub: PubSubTopicManager,
-        params: OrientationNodeParams
+        params: OrientationNodeParams,
+        pwm_frequency: float = 1600.0,
     ) -> "OrientationNode":
-        """Factory method to create and initialize OrientationNode."""
+        """Factory method to create and initialize OrientationNode.
+
+        `pwm_frequency` is the motor board's; the jaw's factory must be given the same, as the
+        board has one PWM clock for all its motors.
+        """
         from adafruit_motor import motor as dc_motor
         from adafruit_motorkit import MotorKit
         from adafruit_servokit import ServoKit
@@ -110,7 +115,7 @@ class OrientationNode(Node):
         node.servo_kit.servo[params.tilt_channel].angle = node.tilt_angle
         
         # Initialize motor kit
-        node.motor_kit = MotorKit(address=0x60, pwm_frequency=1600)
+        node.motor_kit = MotorKit(address=0x60, pwm_frequency=pwm_frequency)
         
         # Select waist motor channel
         match params.waist_motor_channel:
