@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
 from ultraskelly.replay import create_controllers, replay
 
@@ -31,7 +33,8 @@ def test_waist_drives_continuously_while_the_head_is_turned():
             now[0] += 0.01
         assert all(-0.8 <= command < 0 for command in commands)
         assert commands[0] == -node.params.waist.start_throttle
-        assert commands[-1] == -node.params.waist.max_throttle
+        # The head never comes back here, so the drive rises to its breakaway ceiling.
+        assert commands[-1] == pytest.approx(-node.params.waist.breakaway_throttle)
         bus.close()
     asyncio.run(scenario())
 

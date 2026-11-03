@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>UltraSkelly stream acceptance</title>
+  <style>
+    body { margin: 16px; background: #111b21; color: #d8e2e6; font: 13px/1.4 system-ui, sans-serif; }
+    canvas { display: block; margin: 8px 0; border: 1px solid #304953; max-width: 100%; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>UltraSkelly stream acceptance</h1>
+  <p>FreeMoCap's consumer checks against this page's <code>?stream=</code> (see <code>scripts/stream_acceptance.py</code>).</p>
+  <canvas id="view" width="640" height="480" aria-label="The newest camera frame with the people drawn over it"></canvas>
+  <pre id="report">Running…</pre>
+  <script type="module" src="/stream_acceptance.js"></script>
+</body>
+</html>

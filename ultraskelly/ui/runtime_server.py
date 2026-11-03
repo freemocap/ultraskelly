@@ -40,6 +40,7 @@ from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoK
 from ultraskelly.core.pubsub.bot_topics import (
     DepthFrameMessage,
     FrameMessage,
+    PoseDataMessage,
     PoseDataTopic,
     ServoStateMessage,
     ServoStateTopic,
@@ -133,7 +134,7 @@ def encode_camera_frame(
     *,
     frame_number: int,
     timestamp: float,
-    poses: np.ndarray | None,
+    poses: PoseDataMessage | None,
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
 ) -> bytes:
@@ -142,15 +143,7 @@ def encode_camera_frame(
     safe to run in a worker thread."""
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
-    trackers = [
-        tracker_observation(
-            POSE_TRACKER,
-            [channel_block(OVERLAY_2D, KEYPOINT_COLUMNS, person, names=KEYPOINT_NAMES,
-                           camera_id=camera, image_size=(width, height))],
-            connection_groups=[BODY],
-        )
-        for person in (poses if poses is not None else ())
-    ]
+    trackers = person_trackers(camera, (width, height), poses)
     images = [
         PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
         for camera, index, image in cameras
@@ -163,6 +156,35 @@ def encode_camera_frame(
         trackers=trackers,
         image=encode_image_payload(frame_number, images),
     )
+
+
+FOLLOWED = "target"  # Tracker ID of the person the head follows; the others are person-<row>
+TARGET_CHANNEL = "ultraskelly.target"
+TARGET_COLUMNS = ("x", "y", "body_angle_deg")
+
+
+def person_trackers(camera: str, image_size: tuple[int, int], poses: PoseDataMessage | None) -> list[dict]:
+    """One tracker observation per person, with their keypoints in pixels of `camera`'s image.
+
+    The person the head follows is `target` and also carries the target it steers toward, as an
+    `ultraskelly.target` channel; everyone else is `person-<row>` by their row in this frame's
+    detections. The IDs name roles in this frame only: YOLOv8 pose does not track people.
+    """
+    if poses is None or poses.keypoints is None:
+        return []
+    target = poses.target
+    trackers = []
+    for row, person in enumerate(poses.keypoints):
+        channels = [channel_block(OVERLAY_2D, KEYPOINT_COLUMNS, person, names=KEYPOINT_NAMES,
+                                  camera_id=camera, image_size=image_size)]
+        followed = row == poses.target_person and target is not None and None not in (target.x, target.y)
+        if followed:
+            angle = np.nan if target.angle is None else target.angle  # NaN marks a missing value
+            channels.append(channel_block(TARGET_CHANNEL, TARGET_COLUMNS, [[target.x, target.y, angle]],
+                                          names=["target"], camera_id=camera, image_size=image_size))
+        trackers.append(tracker_observation(FOLLOWED if followed else f"person-{row}", channels,
+                                            detector_type=POSE_TRACKER, connection_groups=[BODY]))
+    return trackers
 
 
 @dataclass(frozen=True)
@@ -189,7 +211,7 @@ class CameraFeed:
     shape: tuple[int, ...] | None = None
     stream: Latest = field(default_factory=Latest)
     # The newest frame (with the poses found in it) waiting to be encoded, newest-wins.
-    pending: tuple[FrameMessage | StereoFrameMessage | DepthFrameMessage, np.ndarray | None] | None = None
+    pending: tuple[FrameMessage | StereoFrameMessage | DepthFrameMessage, PoseDataMessage | None] | None = None
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
@@ -420,7 +442,7 @@ class RuntimeServerNode(Node):
                     if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
                         posed = self.feeds[self.pose_camera]
                         posed.last_pose_at = now
-                        posed.pending = (message.frame, message.keypoints)
+                        posed.pending = (message.frame, message)
             for feed in self.feeds.values():
                 while not feed.subscription.empty():
                     camera_frame = feed.subscription.get_nowait()

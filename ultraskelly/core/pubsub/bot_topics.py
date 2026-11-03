@@ -74,6 +74,8 @@ class PoseDataMessage(TopicMessageABC):
     scores: np.ndarray | None = None  # Shape: (num_people,)
     boxes: list[np.ndarray] | None = None
     frame: FrameMessage | None = None  # The camera frame these poses were detected in, so viewers can pair them
+    target: TargetLocationMessage | None = None  # The target published from these same detections
+    target_person: int | None = None  # Row of `keypoints` the head follows; None when it follows nobody
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,

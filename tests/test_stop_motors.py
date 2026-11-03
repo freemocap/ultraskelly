@@ -1,20 +1,27 @@
+import struct
 import sys
 import types
 
 from scripts import stop_motors
 
 
-class Motor:
+class Device:
+    """The board's I2C device: keeps each transfer."""
+
     def __init__(self):
-        self.written = []
+        self.transfers = []
 
-    @property
-    def throttle(self):
-        raise AssertionError("throttle was read back from the board")
+    def __enter__(self):
+        return self
 
-    @throttle.setter
-    def throttle(self, value):
-        self.written.append(value)
+    def __exit__(self, *exception):
+        return False
+
+    def write(self, buffer, *, start=0, end=None):
+        self.transfers.append(bytes(buffer[start:end]))
+
+
+BRAKE = struct.pack("<HHHH", 0x1000, 0, 0x1000, 0)  # Both bridge inputs fully on
 
 
 def fake_board(monkeypatch, failures: int) -> list:
@@ -26,7 +33,11 @@ def fake_board(monkeypatch, failures: int) -> list:
             if remaining[0]:
                 remaining[0] -= 1
                 raise TypeError("'NoneType' object is not subscriptable")  # How blinka reports a lost read
-            self.motor1, self.motor2, self.motor3, self.motor4 = Motor(), Motor(), Motor(), Motor()
+            self._pca = types.SimpleNamespace(i2c_device=Device())
+            for number, positive in ((1, 9), (2, 11), (3, 3), (4, 5)):  # adafruit_motorkit's bridge inputs
+                setattr(self, f"motor{number}", types.SimpleNamespace(
+                    _positive=types.SimpleNamespace(_index=positive), _negative=types.SimpleNamespace(_index=positive + 1),
+                ))
             kits.append(self)
 
     monkeypatch.setitem(sys.modules, "adafruit_motorkit", types.SimpleNamespace(MotorKit=MotorKit))
@@ -37,7 +48,8 @@ def fake_board(monkeypatch, failures: int) -> list:
 def test_every_motor_is_braked_once_the_board_answers(monkeypatch):
     kits = fake_board(monkeypatch, failures=3)
     assert stop_motors.main() == 0
-    assert [kits[0].motor1.written, kits[0].motor4.written] == [[0.0], [0.0]]
+    transfers = kits[0]._pca.i2c_device.transfers  # One transfer per motor, both inputs at once
+    assert transfers == [bytes([0x06 + 4 * channel]) + BRAKE for channel in (9, 11, 3, 5)]
 
 
 def test_an_unreachable_board_is_reported(monkeypatch):

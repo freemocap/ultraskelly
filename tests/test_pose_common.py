@@ -4,6 +4,7 @@ import pytest
 from ultraskelly.core.bot.sensory.pose_common import (
     CocoKeypoint,
     body_angle_from_shoulders,
+    locate_target,
     select_target,
 )
 
@@ -69,3 +70,25 @@ def test_select_target_reports_no_target(keypoints, scores):
     assert select_target(
         keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4
     ) == (None, None, None)
+
+
+def test_locate_target_names_the_followed_persons_row_with_the_same_target():
+    keypoints = np.stack([person(nose=(10, 20, 0.9)), person(nose=(300, 200, 0.9))])
+    scores = np.array([0.6, 0.8])
+
+    row, target = locate_target(
+        keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4
+    )
+
+    assert row == 1
+    assert target == select_target(
+        keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4
+    )
+
+
+def test_locate_target_follows_nobody_when_the_best_persons_target_keypoint_is_unsure():
+    keypoints = np.stack([person(nose=(10, 20, 0.9)), person(nose=(300, 200, 0.1))])
+
+    assert locate_target(
+        keypoints=keypoints, scores=np.array([0.6, 0.8]), target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4
+    ) == (None, (None, None, None))

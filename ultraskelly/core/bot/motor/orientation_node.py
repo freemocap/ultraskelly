@@ -7,6 +7,8 @@ import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
+from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistState
 from ultraskelly.core.pubsub.bot_topics import (
     ServoStateMessage,
@@ -79,6 +81,9 @@ class OrientationNode(Node):
     waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
     waist_mode: WaistState = Field(default=WaistState.IDLE)
     manual: bool = Field(default=False, description="True while a motor test drives the actuators; tracking commands nothing")
+    motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(
+        default=None, exclude=True, description="Ticked every control step; brakes the DC motors if the steps stop",
+    )
     
     # Target tracking state
     latest_target: TargetLocationMessage | None = Field(default=None, exclude=True)
@@ -95,9 +100,14 @@ class OrientationNode(Node):
         cls,
         *,
         pubsub: PubSubTopicManager,
-        params: OrientationNodeParams
+        params: OrientationNodeParams,
+        pwm_frequency: float = 1600.0,
     ) -> "OrientationNode":
-        """Factory method to create and initialize OrientationNode."""
+        """Factory method to create and initialize OrientationNode.
+
+        `pwm_frequency` is the motor board's; the jaw's factory must be given the same, as the
+        board has one PWM clock for all its motors.
+        """
         from adafruit_motorkit import MotorKit
         from adafruit_servokit import ServoKit
 
@@ -109,23 +119,12 @@ class OrientationNode(Node):
         node.servo_kit.servo[params.tilt_channel].angle = node.tilt_angle
         
         # Initialize motor kit
-        node.motor_kit = MotorKit(address=0x60, pwm_frequency=1600)
+        node.motor_kit = MotorKit(address=0x60, pwm_frequency=pwm_frequency)
         
-        # Select waist motor channel
-        match params.waist_motor_channel:
-            case 1:
-                node.waist_motor = node.motor_kit.motor1
-            case 2:
-                node.waist_motor = node.motor_kit.motor2
-            case 3:
-                node.waist_motor = node.motor_kit.motor3
-            case 4:
-                node.waist_motor = node.motor_kit.motor4
-            case _:
-                raise ValueError(f"Invalid waist motor channel: {params.waist_motor_channel}")
-        
-        if node.waist_motor is None:
-            raise ValueError(f"Could not initialize waist motor on channel {params.waist_motor_channel}")
+        # The waist motor, both bridge inputs set in one I2C transfer (see bridge_motor.py)
+        node.waist_motor = BridgeMotor.from_motorkit(node.motor_kit, params.waist_motor_channel)
+        # Braking between PWM pulses: quieter and gentler at low drive (see waist_drive.py)
+        node.waist_motor.decay_mode = SLOW_DECAY if params.waist.slow_decay else FAST_DECAY
         
         # Get subscription
         node.target_subscription = pubsub.get_subscription(TargetLocationTopic)
@@ -215,6 +214,8 @@ class OrientationNode(Node):
         try:
             while not self.stop_event.is_set():
                 await self.step()
+                if self.motor_watchdog is not None:
+                    self.motor_watchdog.tick()
 
                 # Short sleep for responsive control
                 await asyncio.sleep(0.01)  # 100Hz update rate
@@ -224,6 +225,8 @@ class OrientationNode(Node):
             raise
         
         finally:
+            if self.motor_watchdog is not None:
+                self.motor_watchdog.disarm()  # Stopping on purpose; the brake follows here
             # Always stop motors and center servos on exit
             self.waist_motor.throttle = 0.0
             self.servo_kit.servo[self.params.pan_channel].angle = 90.0

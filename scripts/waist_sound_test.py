@@ -35,8 +35,9 @@ from pathlib import Path
 import numpy as np
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
+from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
-from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams
 from ultraskelly.core.bot.motor.simulated_actuators import (
     ActuatorCommand,
     CommandRecorder,
@@ -87,6 +88,7 @@ class Profile:
     coast: bool = False  # Stop by releasing the motor instead of braking it
     slow_decay: bool = False  # Brake instead of coast between PWM pulses
     pwm_hz: float = 1600.0
+    steps: tuple[float | None, ...] = ()  # A recorded drive, one value per control period, instead of the shape above
 
     def __post_init__(self) -> None:
         if not 0 < self.seconds <= MAX_MOVE_SECONDS:
@@ -96,6 +98,8 @@ class Profile:
 
     def throttle(self, t: float) -> float | None:
         """Throttle magnitude t seconds into the move; None releases the motor."""
+        if self.steps:
+            return self.steps[min(int(t / CONTROL_PERIOD + 1e-9), len(self.steps) - 1)]  # Tolerates float error
         if t >= self.seconds:
             return None if self.coast else 0.0
         if self.pulse_on and t % (self.pulse_on + self.pulse_off) >= self.pulse_on:
@@ -110,18 +114,22 @@ class Profile:
         return level
 
 
-def drive_profile(params: WaistDriveParams, angle: float = 30.0, seconds: float = 1.5) -> Profile:
-    """One move of the bot's waist drive with the head held `angle` degrees off center, open loop.
+def drive_profile(params: WaistDriveParams, angle: float = 30.0, closing_dps: float = 20.0) -> Profile:
+    """One recentering move of the bot's own waist drive, replayed open loop.
 
-    The bot brakes a released waist after its coast; here it stays released through the rest.
+    The drive sees a head `angle` degrees off center coming back at `closing_dps`, as the camera
+    loop would bring it back while the waist turns, until the drive has stopped and braked.
     """
-    cruise = min(params.max_throttle, params.min_throttle + params.gain * max(0.0, angle - params.start_angle))
-    start = min(params.start_throttle, cruise)
+    drive, steps = WaistDrive(params), []
+    while len(steps) * CONTROL_PERIOD < MAX_MOVE_SECONDS:
+        t = len(steps) * CONTROL_PERIOD
+        value = drive.update(now=t, pan_offset=-max(0.0, angle - closing_dps * t))  # Negative pan: positive drive
+        steps.append(value)
+        if value == 0.0 and t > 0:
+            break
     return Profile(
-        f"the bot's drive with the head {angle:.0f} deg off: {start:.2f} ramping to {cruise:.2f}, "
-        f"down to {params.release_throttle:.2f}, released",
-        cruise=cruise, seconds=seconds, start=start, ramp_up=(cruise - start) / params.ramp_up,
-        stop=params.release_throttle, ramp_down=(cruise - params.release_throttle) / params.ramp_down, coast=True,
+        f"the bot's drive for a {angle:.0f} degree recentering (head back at {closing_dps:.0f} deg/s)",
+        seconds=len(steps) * CONTROL_PERIOD, steps=tuple(steps), slow_decay=params.slow_decay,
     )
 
 
@@ -391,7 +399,6 @@ def main() -> None:
         raise SystemExit(str(error))
     orientation, limits, recorder = OrientationNodeParams(), ActuatorLimits(), CommandRecorder()
 
-    from adafruit_motor import motor as dc_motor
     from adafruit_motorkit import MotorKit
     from adafruit_servokit import ServoKit
 
@@ -426,7 +433,7 @@ def main() -> None:
         camera.stop()
         raise
     kit = MotorKit(address=0x60, pwm_frequency=1600)
-    motors = {number: getattr(kit, f"motor{number}") for number in (1, 2, 3, 4)}
+    motors = {number: BridgeMotor.from_motorkit(kit, number) for number in (1, 2, 3, 4)}  # As the bot drives them
     raw_waist = motors[orientation.waist_motor_channel]
     waist = RecordingMotor(motor=raw_waist, name="waist", recorder=recorder, max_throttle=limits.waist_max_throttle)
     audio = Microphone(card, folder / "audio.wav", gain=args.gain)
@@ -438,18 +445,18 @@ def main() -> None:
         segments.append(dict(profile="idle", direction=0, start=began, drive_end=time.monotonic(), end=time.monotonic()))
         for name, profile in selected.items():
             kit._pca.frequency = profile.pwm_hz
-            raw_waist.decay_mode = dc_motor.SLOW_DECAY if profile.slow_decay else dc_motor.FAST_DECAY
+            raw_waist.decay_mode = SLOW_DECAY if profile.slow_decay else FAST_DECAY
             for direction in (+1, -1):
                 print(f"{name} {direction:+d}: {profile.description}", flush=True)
                 start, drive_end = drive(waist, profile, direction)
                 time.sleep(REST_SECONDS)
                 segments.append(dict(profile=name, direction=direction, start=start, drive_end=drive_end, end=time.monotonic()))
         kit._pca.frequency = 1600
-        raw_waist.decay_mode = dc_motor.FAST_DECAY
+        raw_waist.decay_mode = FAST_DECAY
         return_waist(waist, camera, began, args.offset)
     finally:
         stop_board_motors({f"motor{number}": motor for number, motor in motors.items()})
-        raw_waist.decay_mode = dc_motor.FAST_DECAY
+        raw_waist.decay_mode = FAST_DECAY
         kit._pca.frequency = 1600
         print("All DC motors stopped", flush=True)
         audio_start = audio.stop()
