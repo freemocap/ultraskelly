@@ -11,11 +11,17 @@ calibration, plus the disparity of the matches. Run on the Pi; the ZED needs no 
 import argparse
 import asyncio
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
 from ultraskelly.core.bot.sensory.stereo_rectification import zed_rectifier
-from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNode, ZedCameraNodeParams, ZedResolution
+from ultraskelly.core.bot.sensory.zed_camera_node import (
+    ZedCameraNode,
+    ZedCameraNodeParams,
+    ZedResolution,
+    yuyv_to_rgb_with_opencv,
+)
 from ultraskelly.core.pubsub.bot_topics import StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -24,7 +30,14 @@ FRAME_SPACING = 10  # Use every tenth frame after that
 OUTLIER_PIXELS = 8  # Matches this far from the median row offset are mismatches
 
 
-async def capture_pairs(resolution: ZedResolution, count: int) -> list:
+class ColourPair(NamedTuple):
+    left: np.ndarray  # RGB
+    right: np.ndarray
+    frame_number: int | None
+
+
+async def capture_pairs(resolution: ZedResolution, count: int) -> list[ColourPair]:
+    """`count` live pairs, both eyes converted to RGB."""
     bus = PubSubTopicManager.create()
     node = ZedCameraNode.create(pubsub=bus, params=ZedCameraNodeParams(resolution=resolution))
     pairs = bus.get_subscription(StereoFrameTopic)
@@ -34,7 +47,7 @@ async def capture_pairs(resolution: ZedResolution, count: int) -> list:
         for index in range(SETTLE_FRAMES + count * FRAME_SPACING):
             pair = await asyncio.wait_for(pairs.get(), timeout=5)
             if index >= SETTLE_FRAMES and (index - SETTLE_FRAMES) % FRAME_SPACING == 0:
-                kept.append(pair)
+                kept.append(ColourPair(*(yuyv_to_rgb_with_opencv(pair.eye(eye)) for eye in (0, 1)), pair.frame_number))
     finally:
         node.stop()
         await running
