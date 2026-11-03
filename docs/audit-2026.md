@@ -851,6 +851,38 @@ depth has nothing on that ray, it stayed a dashed direction. The poses of both c
 head are nominal, so the face point is an estimate until W2 measures it or the camera bracket
 gives the poses.
 
+### Dashboard work per frame (2026-11-03)
+
+The 3D scene had drawn for each of three unsynchronised inputs (the gaze each tracking frame,
+`robot_state`, the depth) from an animation loop that woke on every display frame; the readouts
+rebuilt about 40 elements on every `robot_state`; and the depth worker coloured the heat map
+pixel by pixel. Now the scene draws on demand at most once per tracking-camera frame, without
+multisampling on the Pi's GPU; text is written only where it changes, and node health and rates
+once a second; and the heat map is coloured on the GPU, its range taken from every 4th pixel
+([how](dashboard.md#frame-rate-on-the-pi)). The tiles had also rewritten their `live` and
+`stale` classes with every video frame: `classList.add` and `remove` set the attribute even when
+nothing changes, 200 mutation records a second on their own.
+
+Measured in headless Chrome on Windows at the Pi's layout, against a fake stream with a moving
+person: OAK and ZED frames at 30 a second, `robot_state` at 20 and the live depth sample at 10, on
+independent clocks as on the Pi. One 8 s run each, the commit before (8e98317) against this one:
+
+| Per second | Before | After |
+| --- | --- | --- |
+| 3D renders | 32 | 28 |
+| Animation-frame callbacks | 60 | 36, and 13 timers |
+| DOM mutation records | 645 | 81 |
+| Layout and style recalculation | 16.0 ms | 4.3 ms |
+| Renderer process | 0.38 cores | 0.31 cores |
+| Idle (head held, target fixed, no depth): renders, callbacks, mutations | 1, 60, 483 | 0, 0, 1 |
+
+The depth worker's round trip fell from 3.1 to 1.9 ms a frame. The GPU heat map matches the
+old colouring within 3 of 255 levels on both of W2's samples, unknown pixels stay black, and
+the enlarged copy is identical. The 81 remaining mutation records are text that changes: the
+target pixel, the face position and age, the commanded angles. An orbit drag ends where it
+did before and settles as fast, with half the renders. Chromium's CPU on the Pi is not
+measured yet.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,

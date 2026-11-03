@@ -86,15 +86,24 @@ page is one scrolling column: 3D scene, OAK, ZED tiles, then the cards.
 
 The OAK video is drawn one to one. Each image source has its own newest-wins decode slot,
 so the ZED pair never starves the OAK. One depth image feeds the heat map and the 3D point
-cloud on the GPU. Covered or hidden tiles skip decoding. The 3D scene draws only when a
-command, the depth or the view changed, and the time series at most 10 times a second.
+cloud on the GPU. Covered or hidden tiles skip decoding.
+
+The 3D scene draws only when something in it changed (a command, the gaze, the depth or
+the view), and at most once per tracking-camera frame, 30 times a second from the OAK: the
+gaze, `robot_state` and the depth arrive unsynchronised and share renders, and nothing runs
+while nothing changes. On the Pi's GPU (V3D) and on software renderers it draws without
+multisampling; `?antialias=1` or `?antialias=0` in the address decides instead. Readouts are
+written only where their text changes, node health and message rates refresh once a
+second, and the time series draws at most 10 times a second.
 
 ## Depth
 
 The ZED's `depth_frame` messages ([the depth stream](depth-stream.md)) are decoded in a
-worker (`depth-worker.js`): it inflates the millimetres, colours the heat map and decodes
-the rectified colour image, so the page itself only copies bytes out of the stream and
-draws. Newest wins: while the worker is busy, only the newest frame waits.
+worker (`depth-worker.js`): it inflates the millimetres, takes the heat map's range from
+every 4th pixel and decodes the rectified colour image, so the page itself only copies
+bytes out of the stream and draws. The heat map is coloured on the GPU from the 16-bit
+millimetres (`heatmap.js`), with the legend's turbo colours. Newest wins: while the worker
+is busy, only the newest frame waits.
 
 - **Heat map:** each frame from its 2nd to its 98th percentile, red near and blue far, the
   range eased between frames. The legend under the tiles gives that range in metres, the

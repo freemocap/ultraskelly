@@ -16,6 +16,13 @@ const IGNORED = new Set(['zed_rectified', 'zed_depth']);  // ZED previews: depth
 
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
 
+// A tile that just drew: counted for its rate, live and not stale. A forced toggle leaves an unchanged class
+// alone, where add and remove would write it again with every frame.
+function counted(tile) {
+  tile.drawn += 1; tile.lastAt = performance.now();
+  tile.figure.classList.toggle('live', true); tile.figure.classList.toggle('stale', false);
+}
+
 function sizeCanvas(canvas, width, height) {
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
   return canvas.getContext('2d');
@@ -131,17 +138,16 @@ export class CameraTiles {
       ctx.drawImage(image.bitmap, 0, 0);
       this.drawGuides(ctx, image.cameraId, frame);
     }
-    tile.drawn += 1; tile.lastAt = performance.now();
-    tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
+    counted(tile);
   }
 
-  // A bitmap made elsewhere (the depth views) into a tile; the caller closes the bitmap.
-  showBitmap(key, bitmap) {
+  // A tile drawn elsewhere (the heat map, on its own WebGL canvas): count it, and copy it into the enlarged
+  // view when that shows this tile.
+  markDrawn(key) {
     const tile = this.tiles.get(key);
     if (!tile) return;
-    for (const canvas of this.canvasesFor(key)) sizeCanvas(canvas, bitmap.width, bitmap.height).drawImage(bitmap, 0, 0);
-    tile.drawn += 1; tile.lastAt = performance.now();
-    tile.figure.classList.add('live'); tile.figure.classList.remove('stale');
+    if (this.enlargedId === key) sizeCanvas(this.enlarged.canvas, tile.canvas.width, tile.canvas.height).drawImage(tile.canvas, 0, 0);
+    counted(tile);
   }
 
   // Aim point, jaw zone, people and the target ring, in the pixels of this camera's image. The ring

@@ -121,7 +121,7 @@ export function createDepthLayer({head, origin, scale, invalidate}) {
   const frustum = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color: 0x8a7fd8, transparent: true, opacity: .55}));
   frustum.visible = false;
   group.add(frustum);
-  let points = null, mesh = null, depthTexture = null, colorTexture = null, size = '', lastAt = 0;
+  let points = null, mesh = null, depthTexture = null, colorTexture = null, size = '', lastAt = 0, placed = '';
   const shown = {cloud: true, mesh: false, frustum: true};
 
   function rebuild(width, height) {
@@ -147,12 +147,14 @@ export function createDepthLayer({head, origin, scale, invalidate}) {
     frustum.geometry.setFromPoints(segments);
   }
 
+  // The cloud and mesh show while depth is fresh, the frustum once depth has come; a draw only when one of
+  // them appears or disappears.
   function applyVisibility() {
-    const fresh = lastAt && performance.now() - lastAt < STALE_MS;
+    const fresh = Boolean(lastAt) && performance.now() - lastAt < STALE_MS, was = [points?.visible, mesh?.visible, frustum.visible].join();
     if (points) points.visible = fresh && shown.cloud;
     if (mesh) mesh.visible = fresh && shown.mesh;
     frustum.visible = Boolean(lastAt) && shown.frustum;
-    invalidate();
+    if ([points?.visible, mesh?.visible, frustum.visible].join() !== was) invalidate();
   }
 
   // One decoded depth frame (depth.js): result.mm and result.color are this layer's to keep and close.
@@ -181,9 +183,12 @@ export function createDepthLayer({head, origin, scale, invalidate}) {
     const rows = pose?.rotation ?? [[0, 0, 1], [-1, 0, 0], [0, -1, 0]];
     const rotation = uniforms.cameraRotation.value.set(...rows[0], ...rows[1], ...rows[2]);
     const translation = uniforms.cameraTranslation.value.fromArray(pose?.translation_m ?? [0, 0.0315, 0]);
-    placeFrustum(camera, rotation, translation);
+    const placement = JSON.stringify([camera.fx, camera.fy, camera.cx, camera.cy, camera.width, camera.height, rows, pose?.translation_m]);
+    const moved = placement !== placed;
+    if (moved) { placed = placement; placeFrustum(camera, rotation, translation); }
     lastAt = performance.now();
     applyVisibility();
+    if (points.visible || mesh.visible || (moved && frustum.visible)) invalidate();  // Hidden depth draws nothing
   }
 
   return {
