@@ -150,9 +150,10 @@ def estimate_alignment(
 
     grey = lambda image: cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     oak_height, oak_width = views[0][0].shape[:2]
-    all_points, all_pixels = [], []
+    all_points, all_pixels, matches = [], [], 0
     for oak, zed, depth in views:
         oak_pixels, zed_pixels = matched_points(grey(oak), grey(zed))
+        matches += len(zed_pixels)
         if len(zed_pixels) == 0:
             continue
         points, known = points_from_depth(zed_pixels, depth, rectification)
@@ -160,5 +161,11 @@ def estimate_alignment(
         all_pixels.append(oak_pixels[known])
     points = np.concatenate(all_points) if all_points else np.zeros((0, 3))
     pixels = np.concatenate(all_pixels) if all_pixels else np.zeros((0, 2))
+    if len(points) < MIN_POINTS:
+        raise ValueError(
+            f"{matches} features matched between the cameras over {len(views)} views, {len(points)} of them "
+            f"with ZED depth; at least {MIN_POINTS} are needed. Point both cameras at a detailed scene "
+            f"0.5 to 3 m away that they both see."
+        )
     camera_matrix = intrinsics_from_field_of_view((oak_width, oak_height), field_of_view)
     return fit_alignment(points, pixels, camera_matrix, (oak_width, oak_height))
