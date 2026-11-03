@@ -2,19 +2,22 @@
 
 The node works at its own rate, at most `max_hz`, always on the newest pair, in a worker
 thread. The CPU baseline matcher is OpenCV's semi-global block matching (StereoSGBM,
-3-way mode). The depth image is pixel-aligned with the rectified left image, which
-travels with it: together they are an RGB-D frame in the rectified left camera's frame.
+3-way mode); `stereonet` runs the Hailo Model Zoo's StereoNet on the Hailo-8 instead,
+which needs the robot lock like every Hailo user. The depth image is pixel-aligned with
+the rectified left image, which travels with it: together they are an RGB-D frame in
+the rectified left camera's frame.
 """
 import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 import numpy as np
 from pydantic import Field, SkipValidation, field_validator
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.sensory.hailo_stereonet import DEFAULT_HEF
 from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectification, StereoRectifier, zed_rectifier
 from ultraskelly.core.pubsub.bot_topics import DepthFrameMessage, DepthFrameTopic, StereoFrameMessage, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
@@ -32,6 +35,10 @@ EDGE_MARGIN = 4
 class StereoDepthNodeParams(NodeParams):
     """Parameters for StereoDepthNode."""
 
+    matcher: Literal["sgbm", "stereonet"] = Field(
+        default="sgbm", description="sgbm: OpenCV on the CPU; stereonet: StereoNet on the Hailo-8",
+    )
+    stereonet_hef: str = Field(default=DEFAULT_HEF, description="StereoNet compiled for the installed HailoRT")
     max_hz: float = Field(default=5.0, gt=0.0, le=30.0, description="Depth frames per second at most")
     num_disparities: int = Field(
         default=64, ge=16, le=256,
@@ -61,10 +68,15 @@ class DisparityMatcher(Protocol):
     """Finds, for each pixel of a rectified left image, how far left it appears in the right image."""
 
     name: str
-    search_range: int  # Disparities it can find: 0 up to this many pixels
+    search_range: float  # Disparities it can find: 0 up to this many pixels
+    color: bool  # Whether it matches colour images rather than grey
 
     def disparity(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
-        """Rectified grey images in; float32 disparity in pixels out, zero or less where unknown."""
+        """Rectified images in; float32 disparity in pixels out, zero or less where unknown."""
+        ...
+
+    def close(self) -> None:
+        """Release what it holds."""
         ...
 
 
@@ -72,6 +84,7 @@ class SgbmMatcher:
     """OpenCV's semi-global block matcher, on the CPU."""
 
     name = "sgbm"
+    color = False
 
     def __init__(self, num_disparities: int, block_size: int) -> None:
         import cv2
@@ -85,6 +98,9 @@ class SgbmMatcher:
 
     def disparity(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
         return self.matcher.compute(left, right).astype(np.float32) / 16.0  # Fixed point, 4 fractional bits
+
+    def close(self) -> None:
+        pass
 
 
 def depth_millimetres(
@@ -120,19 +136,23 @@ class StereoDepthNode(Node):
     def create(
         cls, *, pubsub: PubSubTopicManager, params: StereoDepthNodeParams, eye_size: tuple[int, int],
     ) -> "StereoDepthNode":
-        """Factory method: rectification for the ZED's `eye_size` (width, height) and the CPU matcher."""
+        """Factory method: rectification for the ZED's `eye_size` (width, height) and the matcher."""
+        rectifier = zed_rectifier(eye_size, params.calibration)
+        if params.matcher == "stereonet":
+            from ultraskelly.core.bot.sensory.hailo_stereonet import HailoStereoNetMatcher
+
+            matcher = HailoStereoNetMatcher(params.stereonet_hef, eye_size, centre_row=rectifier.rectification.cy)
+        else:
+            matcher = SgbmMatcher(params.num_disparities, params.block_size)
         return cls(
-            pubsub=pubsub,
-            params=params,
-            rectifier=zed_rectifier(eye_size, params.calibration),
-            matcher=SgbmMatcher(params.num_disparities, params.block_size),
+            pubsub=pubsub, params=params, rectifier=rectifier, matcher=matcher,
             pairs=pubsub.get_subscription(StereoFrameTopic),
         )
 
     async def run(self) -> None:
         """Depth for the newest pair, then a pause so the rate stays under `max_hz`."""
         logger.info(
-            f"Starting StereoDepthNode [{self.matcher.name}, {self.params.num_disparities} disparities, "
+            f"Starting StereoDepthNode [{self.matcher.name}, disparities up to {self.matcher.search_range:.0f} px, "
             f"at most {self.params.max_hz:g} Hz]"
         )
         try:
@@ -146,18 +166,23 @@ class StereoDepthNode(Node):
                 self.seconds_computing += elapsed
                 await asyncio.sleep(max(0.0, 1.0 / self.params.max_hz - elapsed))
         finally:
+            self.matcher.close()
             average = self.seconds_computing / max(self.frames_computed, 1)
             logger.info(f"StereoDepthNode stopped after {self.frames_computed} depth frames, {1000 * average:.0f} ms each")
 
     def compute(self, pair: StereoFrameMessage) -> DepthFrameMessage:
         """Rectify (unless the pair already is), match and convert to millimetres. Runs in a worker thread."""
         if pair.rectification is not None:
-            color, right, rectification = pair.left, self.to_grey(pair.right), pair.rectification
+            color, right, rectification = pair.left, pair.right, pair.rectification
         else:
             color = self.rectifier.rectify_eye(0, pair.left)
-            right = self.rectifier.rectify_eye(1, self.to_grey(pair.right))
+            # Grey before rectifying, when the matcher works in grey: a third of the remap work.
+            right = self.rectifier.rectify_eye(1, pair.right if self.matcher.color else self.to_grey(pair.right))
             rectification = self.rectifier.rectification
-        disparity = self.matcher.disparity(self.to_grey(color), right)
+        if self.matcher.color:
+            disparity = self.matcher.disparity(color, right)
+        else:
+            disparity = self.matcher.disparity(self.to_grey(color), right if right.ndim == 2 else self.to_grey(right))
         return DepthFrameMessage(
             depth=depth_millimetres(
                 disparity, rectification, self.params.min_depth, self.params.max_depth, self.matcher.search_range,

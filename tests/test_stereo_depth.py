@@ -25,13 +25,18 @@ ONE_METRE = 340.0 * 0.063  # Disparity of a point 1 m away, pixels
 class ConstantMatcher:
     name = "constant"
     search_range = 64
+    color = False
 
     def __init__(self, disparity: float) -> None:
         self.value = disparity
+        self.closed = False
 
     def disparity(self, left, right):
         assert left.ndim == right.ndim == 2  # Matched in grey
         return np.full(left.shape, self.value, np.float32)
+
+    def close(self):
+        self.closed = True
 
 
 class Rectifier:

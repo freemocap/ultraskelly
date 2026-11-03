@@ -42,8 +42,9 @@ def main() -> None:
         help="Run only the ZED Mini and the dashboard: no OAK, Hailo or motors, so the robot can be in use.",
     )
     parser.add_argument(
-        "--depth", action="store_true",
-        help="With --zed or --zed-only: also compute depth from the ZED's pair (OpenCV on the CPU, at most 5 Hz).",
+        "--depth", nargs="?", const="sgbm", choices=["sgbm", "stereonet"],
+        help="With --zed or --zed-only: also compute depth from the ZED's pair, at most 5 Hz: with OpenCV on "
+             "the CPU (sgbm, the default) or StereoNet on the Hailo-8 (stereonet, needs the robot lock).",
     )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
