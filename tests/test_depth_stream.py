@@ -31,7 +31,7 @@ def decode_points(message: dict) -> np.ndarray:
 
 
 def test_a_depth_frame_carries_depth_colour_intrinsics_and_pose():
-    encoded = encode_depth_frame(wall_at(1.5), color_jpeg=b"JPEG", sequence=3,
+    encoded = encode_depth_frame(wall_at(1.5), color_jpeg=b"JPEG", sequence=3, step=2,
                                  camera_to_head=nominal_camera_to_head(LEVEL))
     message = cbor2.loads(encoded)
 

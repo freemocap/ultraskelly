@@ -9,7 +9,7 @@ message, all self-describing like everything else on the stream:
 | Message | Rate | What it holds |
 | --- | --- | --- |
 | `frame` with cameras `zed_left`, `zed_right` | 30 per second | The raw eyes, JPEG, as the cameras see them |
-| `frame` with cameras `zed_rectified`, `zed_depth` | at most 5 per second | A preview: the rectified left eye, and the depth drawn in colour (red near, blue far, black unknown) |
+| `frame` with cameras `zed_rectified`, `zed_depth` | at most 10 per second | A preview: the rectified left eye, and the depth drawn in colour (red near, blue far, black unknown) |
 | `depth_frame` | the same depth frames | The depth itself in millimetres, with everything needed to place it in 3D |
 
 The `frame` messages show in today's video panels with no change. `depth_frame` is for
@@ -27,12 +27,12 @@ clock of `robot_state.time` and of frame timestamps) and `sequence` (counts dept
 | `frame_number` | The stereo pair's frame number; the `zed_left`/`zed_right` frame with this number is the pair it came from |
 | `method` | How disparity was found: `"sgbm"` (OpenCV on the Pi's CPU) or `"stereonet"` (StereoNet on the Hailo-8) |
 | `camera.id` | `"zed_rectified"`: the rectified left eye |
-| `camera.width`, `camera.height` | Its image size in pixels (672 × 376 at the default VGA) |
+| `camera.width`, `camera.height` | Its image size in pixels: 336 × 188 by default, half the VGA eye, the size depth is computed at |
 | `camera.fx`, `camera.fy`, `camera.cx`, `camera.cy` | Its pinhole intrinsics in pixels. Rectified, so no distortion; `fx` equals `fy` |
 | `camera.baseline_m` | Distance between the eyes, metres (0.063) |
 | `camera.axes` | `"x image right, y image down, z forward"`: OpenCV's camera frame, in metres |
 | `depth.width`, `depth.height` | The depth grid's size |
-| `depth.step` | Depth pixel (u, v) is camera pixel (u × step, v × step); every step-th pixel is kept, exact, never averaged |
+| `depth.step` | Depth pixel (u, v) is camera pixel (u × step, v × step). 1 by default: every pixel. A larger step keeps every step-th pixel, exact, never averaged |
 | `depth.units`, `depth.encoding`, `depth.invalid` | `"mm"`, `"uint16le"` (row-major, little-endian), `0` = no depth |
 | `depth.compression` | `"zlib"` (RFC 1950); `"none"` would mean raw bytes |
 | `depth.data` | The bytes |
@@ -40,9 +40,10 @@ clock of `robot_state.time` and of frame timestamps) and `sequence` (counts dept
 | `camera_to_head` | The camera's pose in the head frame, or absent when unknown (below) |
 
 Depth is distance along the camera's forward axis (z), not along the ray. Unknown pixels
-are 0: nothing matched, nearer than 0.36 m or further than 8 m, or (for StereoNet) outside
-the band of rows it sees, rows 93-293 of 376. Most of each eye's view is currently the
-inside of the skull, which gets no depth.
+are 0: nothing matched, nearer than 0.36 m or further than 8 m, outside the view mask
+where the skull blocks one eye, or (for StereoNet) outside the band of rows it sees, rows
+93-293 of 376. Most of each eye's view is currently the inside of the skull, which gets
+no depth.
 
 ### Points, colours and the head
 
@@ -94,9 +95,10 @@ offset is even.
 
 ## Sizes
 
-At VGA with `step` 2 a frame's depth grid is 336 × 188 (126 KB raw); zlib at level 1
-keeps a scene like the robot's view to a few tens of KB. The rectified JPEG adds about
-20 KB, so depth costs about 0.3 MB/s at 5 frames a second.
+A depth grid of 336 × 188 is 126 KB raw; zlib at level 1 keeps a scene like the
+robot's view to about 15 KB, in 1.3 ms on the Pi. With the rectified JPEG a message is
+about 22 KiB, so depth costs about 0.2 MB/s at 10 frames a second. zlib level 6 saved 8%
+for three times the time.
 
 ## Samples
 

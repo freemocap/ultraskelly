@@ -94,14 +94,26 @@ class RuntimeServerParams(NodeParams):
     jpeg_quality: int = Field(default=80, ge=10, le=100)
 
 
-def depth_to_rgb(depth: np.ndarray, near: float = 300.0, far: float = 5000.0) -> np.ndarray:
-    """Draw a uint16 millimetre depth image in colour: red near, blue far, black unknown."""
+DEPTH_NEAR, DEPTH_FAR = 300, 5000  # Millimetres drawn red and blue
+
+
+def depth_to_bgr(depth: np.ndarray) -> np.ndarray:
+    """Draw a uint16 millimetre depth image in colour, BGR: red at 0.3 m, through yellow and
+    green, to blue at 5 m and beyond; black where unknown."""
     import cv2
 
-    scaled = np.clip((far - depth.astype(np.float32)) / (far - near), 0.0, 1.0)
-    rgb = cv2.cvtColor(cv2.applyColorMap((255 * scaled).astype(np.uint8), cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
-    rgb[depth == 0] = 0
-    return rgb
+    span = DEPTH_FAR - DEPTH_NEAR  # Nearer than DEPTH_NEAR saturates at 255, red
+    steps = cv2.convertScaleAbs(np.minimum(depth, DEPTH_FAR), alpha=-255 / span, beta=255 * DEPTH_FAR / span)
+    bgr = cv2.applyColorMap(steps, cv2.COLORMAP_TURBO)
+    # Blacken unknown pixels with a mask: 0.2 ms here, where numpy's bgr[depth == 0] = 0 takes 5.
+    return cv2.bitwise_and(bgr, bgr, mask=cv2.compare(depth, 0, cv2.CMP_NE))
+
+
+def depth_to_rgb(depth: np.ndarray) -> np.ndarray:
+    """`depth_to_bgr` in RGB order."""
+    import cv2
+
+    return cv2.cvtColor(depth_to_bgr(depth), cv2.COLOR_BGR2RGB)
 
 
 def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
@@ -109,8 +121,9 @@ def encode_jpeg_with_opencv(frame: np.ndarray, quality: int) -> bytes:
     import cv2
 
     if frame.ndim == 2 and frame.dtype == np.uint16:
-        frame = depth_to_rgb(frame)
-    bgr = cv2.cvtColor(np.ascontiguousarray(frame[..., :3]), cv2.COLOR_RGB2BGR)
+        bgr = depth_to_bgr(frame)
+    else:
+        bgr = cv2.cvtColor(np.ascontiguousarray(frame[..., :3]), cv2.COLOR_RGB2BGR)
     ok, jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise ValueError("JPEG encoding failed")
@@ -192,6 +205,19 @@ def person_trackers(camera: str, image_size: tuple[int, int], poses: PoseDataMes
         trackers.append(tracker_observation(FOLLOWED if followed else f"person-{row}", channels,
                                             detector_type=POSE_TRACKER, connection_groups=[BODY]))
     return trackers
+
+
+class JpegCache:
+    """Encodes each image once, however many messages carry it."""
+
+    def __init__(self, encode_jpeg: Callable[[np.ndarray, int], bytes]) -> None:
+        self.encode_jpeg = encode_jpeg
+        self.encoded: dict[int, tuple[np.ndarray, bytes]] = {}
+
+    def encode(self, image: np.ndarray, quality: int) -> bytes:
+        if id(image) not in self.encoded:
+            self.encoded[id(image)] = (image, self.encode_jpeg(image, quality))  # Holding the image keeps its id
+        return self.encoded[id(image)][1]
 
 
 @dataclass(frozen=True)
@@ -398,10 +424,10 @@ class RuntimeServerNode(Node):
             await asyncio.gather(sending, return_exceptions=True)
         return websocket
 
-    def _encode_depth_frame(self, frame: DepthFrameMessage, sequence: int) -> bytes:
+    def _encode_depth_frame(self, frame: DepthFrameMessage, sequence: int, jpegs: "JpegCache") -> bytes:
         """The `depth_frame` message for a depth frame (docs/depth-stream.md). Runs in a worker thread."""
         return encode_depth_frame(
-            frame, sequence=sequence, color_jpeg=self.encode_jpeg(frame.color, self.params.jpeg_quality),
+            frame, sequence=sequence, color_jpeg=jpegs.encode(frame.color, self.params.jpeg_quality),
             camera_to_head=nominal_camera_to_head(frame.rectification),
         )
 
@@ -416,17 +442,18 @@ class RuntimeServerNode(Node):
                     (camera, feed.index + offset, image)
                     for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
                 ]
+                jpegs = JpegCache(self.encode_jpeg)  # A depth frame's colour image is encoded once for both messages
                 message = await asyncio.to_thread(
                     encode_camera_frame, cameras,
                     frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
                     timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
-                    poses=poses, encode_jpeg=self.encode_jpeg, jpeg_quality=self.params.jpeg_quality,
+                    poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
                 )
                 feed.stream.publish(message)
                 if isinstance(camera_frame, DepthFrameMessage):  # Also the depth itself, for 3D views
                     self.depth_sequence += 1
                     self.depth_stream.publish(
-                        await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence)
+                        await asyncio.to_thread(self._encode_depth_frame, camera_frame, self.depth_sequence, jpegs)
                     )
         except Exception:
             logger.exception("Frame encoding failed")

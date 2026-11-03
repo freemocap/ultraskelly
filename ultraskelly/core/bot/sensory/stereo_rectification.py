@@ -116,21 +116,32 @@ def calibration_file(serial: str, folder: Path = CALIBRATION_FOLDER) -> Path:
     return path
 
 
-def zed_rectifier(eye_size: tuple[int, int], calibration: Path | None = None) -> "StereoRectifier":
+def zed_rectifier(eye_size: tuple[int, int], calibration: Path | None = None, scale: float = 1.0) -> "StereoRectifier":
     """Rectification for the connected ZED's eyes of `eye_size` (width, height): from the
-    `calibration` file, or by default the factory file for the serial number it reports."""
+    `calibration` file, or by default the factory file for the serial number it reports.
+    With `scale` below 1 the rectified images come out that much smaller."""
     if calibration is None:
         serial = find_zed_serial()
         if serial is None:
             raise RuntimeError("The ZED reports no serial number, so its calibration file is unknown")
         calibration = calibration_file(serial)
-    return StereoRectifier(read_zed_calibration(calibration.read_text(), eye_size))
+    return StereoRectifier(read_zed_calibration(calibration.read_text(), eye_size), scale)
+
+
+def scaled_projection(projection: np.ndarray, scale: float) -> np.ndarray:
+    """A projection matrix for images `scale` times the size, pixel centres kept: a pixel of the
+    smaller image covers 1 / scale pixels of the larger one, and its centre is at their middle."""
+    scaled = projection.copy()
+    scaled[:2] *= scale
+    scaled[:2, 2] += 0.5 * (scale - 1)
+    return scaled
 
 
 class StereoRectifier:
-    """Rectifies image pairs with precomputed OpenCV remap tables."""
+    """Rectifies image pairs with precomputed OpenCV remap tables. With `scale` below 1 it makes
+    smaller rectified images directly, from the full-size camera images, in one remap."""
 
-    def __init__(self, calibration: StereoCalibration) -> None:
+    def __init__(self, calibration: StereoCalibration, scale: float = 1.0) -> None:
         import cv2
 
         left, right = calibration.left, calibration.right
@@ -140,25 +151,30 @@ class StereoRectifier:
             calibration.image_size, rotation, calibration.translation.reshape(3, 1),
             flags=cv2.CALIB_ZERO_DISPARITY, alpha=0, newImageSize=calibration.image_size,
         )
-        # Float tables: OpenCV 5's remap runs them about twice as fast as fixed-point ones
-        # (2.4 against 4.3 ms per 672x376 colour image on the Pi 5, one thread).
+        left_projection = scaled_projection(left_projection, scale)
+        right_projection = scaled_projection(right_projection, scale)
+        width, height = calibration.image_size
+        size = (round(width * scale), round(height * scale))
+        # Per eye, two forms of the same tables: OpenCV 5.0's remap on the Pi 5 is fastest with
+        # float tables for colour images (2.4 against 4.3 ms at 672x376, one thread) and with
+        # fixed-point ones for grey images (1.3 against 1.8 ms).
         self.maps = [
             cv2.initUndistortRectifyMap(
-                eye.camera_matrix, eye.distortion, eye_rotation, projection, calibration.image_size, cv2.CV_32FC1
+                eye.camera_matrix, eye.distortion, eye_rotation, projection, size, cv2.CV_32FC1
             )
             for eye, eye_rotation, projection in (
                 (left, left_rotation, left_projection), (right, right_rotation, right_projection),
             )
         ]
+        self.fixed_maps = [cv2.convertMaps(map_x, map_y, cv2.CV_16SC2) for map_x, map_y in self.maps]
         # Per eye: camera matrix, distortion, rectifying rotation, projection, for rectify_points.
         self.eyes = [
             (left.camera_matrix, left.distortion, left_rotation, left_projection),
             (right.camera_matrix, right.distortion, right_rotation, right_projection),
         ]
-        width, height = calibration.image_size
         self.rectification = StereoRectification(
-            width=width,
-            height=height,
+            width=size[0],
+            height=size[1],
             focal_length=float(left_projection[0, 0]),
             cx=float(left_projection[0, 2]),
             cy=float(left_projection[1, 2]),
@@ -174,7 +190,7 @@ class StereoRectifier:
 
     def rectify_eye(self, eye: int, image: np.ndarray) -> np.ndarray:
         """One image, colour or grey, from eye 0 (left) or 1 (right), rectified."""
-        return self._remap(image, self.maps[eye])
+        return self._remap(image, self.maps[eye] if image.ndim == 3 else self.fixed_maps[eye])
 
     def rectify_points(self, eye: int, points: np.ndarray) -> np.ndarray:
         """Where (N, 2) pixel positions in eye 0 (left) or 1 (right) of the camera's

@@ -650,9 +650,87 @@ hides most of the view, so 18% of pixels had a depth.
 | 4 | as fast as possible: 21.1 Hz | 47 ms | 85 ms | 331% |
 
 OpenCV's default thread pool doubles the CPU of the same work here (idle workers
-spin). `cv2.setNumThreads(1)` applies to the whole process, so it is a bot-wide
-choice, not made here. With the server streaming 30 raw pairs and 5 depth frames a
-second, a ZED-only run used 122% of a core.
+spin). With the server streaming 30 raw pairs and 5 depth frames a second, a ZED-only
+run used 122% of a core.
+
+**One OpenCV thread for the bot (2026-11-02, approved).** `python -m ultraskelly` now
+calls `cv2.setNumThreads(1)` before building the bot. Each row is one 20-second sample
+of the bot under `--hardware --simulate-motors --no-window`, measured from the PC; pose
+rate is the OAK frames that reached a viewer with their poses.
+
+| Bot | OpenCV threads | Bot process, of a core | Whole Pi, of 4 cores | Pose |
+| --- | --- | --- | --- | --- |
+| OAK and pose only | 4 (default) | 61% | 15% | 29.6 fps |
+| OAK and pose only | 1 | 52% | 14% | 30.1 fps |
+| with `--zed`, no depth | 4 | 101% | 26% | 30.1 fps |
+| with `--zed`, no depth | 1 | 76% | 20% | 29.6 fps |
+| with `--zed`, depth at full size, 5 Hz | 4 | 174% | 48% | 27.2 fps |
+| with `--zed`, depth at full size, 5 Hz | 1 | 112% | 31% | 30.1 fps |
+| with `--zed --depth` today (half size, 10 Hz) | 1 | 95% | 25% | 29.6 fps |
+
+**StereoNet beside pose.** HailoRT gives a process the Hailo-8 once: the depth node's
+own VDevice failed with `HAILO_OUT_OF_PHYSICAL_DEVICES` while the pose node held one.
+Both now share `hailo_device.shared_vdevice()`, whose round-robin scheduler switches the
+chip between the two models. StereoNet (Model Zoo v2.17, six contexts) holds the chip
+for about 207 ms a frame, and a running frame cannot be pre-empted, so pose waits:
+
+| StereoNet rate | Pose | StereoNet frame |
+| --- | --- | --- |
+| none | 30.0 fps | |
+| 1 Hz | 24.9 fps | 207 ms |
+| 1 Hz, StereoNet at scheduler priority 8 | 25.4 fps | 206 ms |
+| as fast as it runs (4.8 Hz) | 4.7 fps | 212 ms |
+
+Alone, StereoNet took 198 ms a pair, against the Model Zoo's 100 ms on a faster PCIe
+link. Its two inputs are wired left then right: swapped, its depth differed from the
+CPU's by about 50% instead of 9-16%.
+
+**Depth quality, judged offline.** The skull blocks most of today's live view, so the
+two matchers were compared on three side-by-side frames saved at 15:10 that show the
+room and a person about 1.2 m away (`python -m scripts.stereo_quality`). With no ground
+truth: reprojection error (shift the right eye by each pixel's disparity and compare it
+with the left, on textured pixels), frame-to-frame variation of the still scene, and
+coverage, all only where both eyes see the room (the view mask, below).
+
+| Matcher | Depth on pixels both eyes see | Reprojection error, median | Varies between frames |
+| --- | --- | --- | --- |
+| OpenCV SGBM, full size (672×376) | 64.7% | 3-4 grey levels | 2.3% |
+| OpenCV SGBM, three-quarter size | 69.5% | 3 | 2.5% |
+| OpenCV SGBM, half size (336×188) | 75.5% | 3-4 | 3.0% |
+| StereoNet on the Hailo-8, full size | 53.0% (its band of rows only) | 5-8 | 5.2% |
+
+Half-size depth differs from full size by 3% (median), and by less than 10% on 89% of
+pixels. StereoNet, trained on driving scenes, blurs the person's outline and differs
+from OpenCV by 13% (median). It fills every pixel of its band, with no confidence, so
+it also reports depth where nothing matches. The default is therefore OpenCV at half
+size; `--depth stereonet` remains for experiments, at most about 1 Hz beside pose.
+
+**Fast and lean.** One VGA depth frame at full size took 64 ms of one core: SGBM 57 ms
+of it. The node now rectifies straight into half-size images (one remap from the
+full-size frames, 1.4 ms for both eyes) and matches 32 disparities there: 10 ms. That
+reaches the same nearest depth, 0.36 m, as 64 disparities at full size. Remapping to
+half size without averaging first was no worse than averaging (49.6% coverage, 2.7%
+variation, 1.1% difference) and three times quicker. Colour images use float remap
+tables and grey ones fixed-point tables, each the faster in OpenCV 5.0 (2.4 against
+4.3 ms, and 1.3 against 1.8 ms). Drawing depth in colour fell from 7.1 to 1.5 ms (a
+masked `bitwise_and` instead of numpy's boolean assignment, 0.2 against 5.2 ms), and
+the rectified image is now encoded once for both depth messages. A depth frame takes
+17 ms; at 10 a second the bot with OAK, pose, ZED and depth uses 95% of a core, pose
+holds 30 fps, and each `depth_frame` message is about 22 KiB (zlib level 1: 1.3 ms;
+level 6 saves 8% for three times the time).
+
+**The view mask.** The nose bridge (before the rebuild) and the eye-socket rims (since)
+block part of each eye, and matches there are nonsense. A left-eye pixel whose 9×9 patch
+matches no right-eye patch on its row, at any disparity up to 128, by better than 12 grey
+levels on average, is blocked: the other eye cannot see the same thing. Blocked regions
+that reach a side of the image are filled out to it, which covers the smooth interior of
+the bridge too; smaller ones are noise. On the room frames this masked the bridge and a
+strip at the left edge, which the right eye cannot see past its own side of the bridge,
+39% of the image. `python -m scripts.zed_view_mask` proposes a mask from live pairs and
+writes `ultraskelly/calibration/zed/SN<serial>-view-mask.png`, which depth then uses: it
+blanks depth outside the mask and matches only the mask's bounding box. It belongs to
+one mounting; redo it whenever the ZED is re-seated. No mask is committed yet: today's
+mounting is about to change.
 
 ## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
 

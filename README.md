@@ -131,6 +131,10 @@ command: `.venv/bin/python -m scripts.stop_motors` brakes them all.
 Add `--zed` to also capture the ZED Mini stereo camera in the skull's eye sockets: its
 left and right images (672×376 each at 30 fps) travel together in one `frame` message,
 as cameras `zed_left` and `zed_right`, and appear as two more video panels.
+Add `--depth` as well for depth from the pair (OpenCV on the CPU, 336×188, up to 10 frames a
+second, about 17 ms each), streamed as a `depth_frame` message ([docs/depth-stream.md](docs/depth-stream.md))
+and as two more panels. `--depth stereonet` uses StereoNet on the Hailo-8 instead: it needs
+the robot lock and slows pose, see the audit.
 `python -m ultraskelly --zed-only --port 8081` runs only the ZED and the dashboard,
 without the OAK, Hailo or motors, so it can run while someone else uses the robot.
 

@@ -19,8 +19,8 @@ from ultraskelly.core.pubsub.bot_topics import DepthFrameMessage
 from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
 from ultraskelly.ui.runtime_server import encode_jpeg_with_opencv
 
-# The ZED's rectified VGA camera.
-VGA = StereoRectification(width=672, height=376, focal_length=339.8, cx=331.1, cy=193.4, baseline=0.063,
+# The camera depth uses by default: the ZED's rectified VGA eye at half size.
+VGA = StereoRectification(width=336, height=188, focal_length=169.9, cx=165.3, cy=96.45, baseline=0.063,
                           left_rotation=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
 WALL, FLOOR, BALL_CENTRE, BALL_RADIUS = 3.0, 0.4, np.array([0.2, 0.0, 1.0]), 0.12
 
