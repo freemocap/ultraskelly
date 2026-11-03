@@ -199,3 +199,18 @@ def test_a_palm_becomes_a_hand_crop_request_and_the_hand_joins_its_frame():
     [(topic, message)] = published(node)
     [hand] = message.hands
     assert topic is OakResultsTopic and (hand.presence, hand.handedness) == pytest.approx((0.95, 0.7))
+
+
+def test_a_missing_model_leaves_the_oak_without_models_instead_of_stopping_the_bot(monkeypatch):
+    import ultraskelly.core.bot.sensory.oak_camera_node as oak
+
+    def missing(name, cache):
+        raise RuntimeError(f"OAK model {name} is not in {cache}")
+
+    monkeypatch.setattr(oak, "load_archive", missing)
+    node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(models=OakModelParams()))
+
+    node._build_models(dai=None, camera=None, models=node.params.models)  # Builds nothing: no pipeline is touched
+
+    assert node.assembler is None and "face_detection" not in node.queues
+    assert "is not in" in node.status()["models_error"]

@@ -110,6 +110,7 @@ class OakCameraNode(Node):
     # The results of recent frames by frame number, for consumers that need every frame's (results_for).
     recent_results: SkipValidation[dict[int, OakResultsMessage]] = Field(default_factory=dict, exclude=True)
     dropped: int = Field(default=0, exclude=True)  # Messages the event loop was too busy to take
+    models_error: str | None = Field(default=None, exclude=True)  # Why the OAK runs without its models
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: OakCameraNodeParams) -> "OakCameraNode":
@@ -153,14 +154,24 @@ class OakCameraNode(Node):
 
     def _build_models(self, dai, camera, models: OakModelParams) -> None:
         """YuNet on its own small camera output; the Script node cuts the crops out of full-size frames,
-        planar BGR like the networks take, so cropping converts nothing."""
+        planar BGR like the networks take, so cropping converts nothing. Every model is loaded
+        first: with one missing, the OAK runs none and the bot tracks with the Hailo alone."""
         pipeline = self.pipeline
         hands = models.hands_every is not None
+        names = ["face_detection", "head_pose", "gaze"]
+        names += ["face_landmarks"] if models.mesh_every is not None else []
+        names += ["palm_detection", "hand_landmarks"] if hands else []
+        try:
+            archives = {name: load_archive(name, models.model_cache) for name in names}
+        except RuntimeError as error:
+            self.models_error = str(error)
+            logger.error(f"Running the OAK without its models: {error}")
+            return
 
         def network(name: str, image_inputs: list | None = None):
             threads, shaves = models.resources[name]
             node = pipeline.create(dai.node.NeuralNetwork)
-            node.setNNArchive(load_archive(name, models.model_cache), shaves)  # The SHAVE count picks the blob
+            node.setNNArchive(archives[name], shaves)  # The SHAVE count picks the blob
             node.setNumInferenceThreads(threads)
             for port in image_inputs if image_inputs is not None else [node.input]:
                 port.setBlocking(True)  # Inside the chain nothing is dropped, so answers stay in step
@@ -246,6 +257,7 @@ class OakCameraNode(Node):
         return {
             "rates": rates,
             "chip": dict(self.chip),
+            "models_error": self.models_error,
             "faces_incomplete": 0 if self.assembler is None else self.assembler.incomplete,
             "missing": {} if self.assembler is None else dict(self.assembler.missing),
         }
