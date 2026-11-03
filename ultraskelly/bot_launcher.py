@@ -182,9 +182,8 @@ class BotLauncher(BaseModel):
                 PoseDetectorNode.create(pubsub=self.pubsub, params=self.config.pose_detector)
             )
         elif self.config.detector_type == DetectorType.HAILO_POSE:
-            self.nodes.append(
-                OakCameraNode.create(pubsub=self.pubsub, params=self.config.oak_camera)
-            )
+            oak = OakCameraNode.create(pubsub=self.pubsub, params=self.config.oak_camera)
+            self.nodes.append(oak)
             self.nodes.append(
                 HailoPoseDetectorNode.create(
                     pubsub=self.pubsub, params=self.config.hailo_pose_detector
@@ -194,6 +193,7 @@ class BotLauncher(BaseModel):
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
         camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
+        oak_running = self.config.detector_type == DetectorType.HAILO_POSE
         aim = self.config.orientation
         self.nodes.append(
             RuntimeServerNode.create(
@@ -210,6 +210,9 @@ class BotLauncher(BaseModel):
                 # The Hailo detector reports which OAK frame each pose came from.
                 pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
                 motor_tests=self.motor_tester,
+                # The OAK's own chip finds faces in the same frames.
+                faces_camera=camera_name if oak_running and self.config.oak_camera.faces is not None else None,
+                oak_status=oak.status if oak_running else None,
             )
         )
         if self.config.recording is not None:

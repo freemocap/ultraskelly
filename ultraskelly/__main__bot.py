@@ -10,7 +10,7 @@ from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
-from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakFaceParams
 from ultraskelly.core.bot.sensory.pose_detection_node import PoseDetectorParams, CocoKeypoint
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZedCameraNodeParams
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def launch_config(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
-    zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
+    zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080, oak_models: bool = True,
 ) -> LaunchConfig:
     """The robot's declarative launch configuration.
 
@@ -32,12 +32,16 @@ def launch_config(
         zed_only: Run only the ZED Mini and the dashboard, without tracking or motors.
         depth: With the ZED, also compute depth from its pair with this matcher (sgbm or stereonet).
         port: The dashboard's port.
+        oak_models: Run the face models on the OAK's own chip (face detection, head pose, gaze, face landmarks).
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
     config = LaunchConfig(
         detector_type=DetectorType.HAILO_POSE,
-        oak_camera=OakCameraNodeParams(flip_camera=True),  # The OAK's image arrives upside down
+        oak_camera=OakCameraNodeParams(
+            flip_camera=True,  # The OAK's image arrives upside down; its ISP turns it
+            faces=OakFaceParams() if oak_models else None,
+        ),
         hailo_pose_detector=HailoPoseDetectorParams(
             target_keypoint=CocoKeypoint.NOSE,
             detection_threshold=0.5,
@@ -82,12 +86,12 @@ def launch_config(
 
 async def main(
     *, simulate_motors: bool = False, show_window: bool = True, record: bool = False, microphone: str | None = None,
-    zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080,
+    zed: bool = False, zed_only: bool = False, depth: str | None = None, port: int = 8080, oak_models: bool = True,
 ) -> None:
     """Launch with the configuration above; the options are `launch_config`'s."""
     launcher = BotLauncher.from_config(launch_config(
         simulate_motors=simulate_motors, show_window=show_window, record=record, microphone=microphone,
-        zed=zed, zed_only=zed_only, depth=depth, port=port,
+        zed=zed, zed_only=zed_only, depth=depth, port=port, oak_models=oak_models,
     ))
     await launcher.run()
 

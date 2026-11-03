@@ -46,12 +46,16 @@ def main() -> None:
         help="With --zed or --zed-only: also compute depth from the ZED's pair, at most 5 Hz: with OpenCV on "
              "the CPU (sgbm, the default) or StereoNet on the Hailo-8 (stereonet, needs the robot lock).",
     )
+    parser.add_argument(
+        "--no-oak-models", action="store_true",
+        help="With --hardware: run no models on the OAK's own chip (face detection, head pose, gaze, face landmarks).",
+    )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
-    if (args.simulate_motors or args.no_window or args.record or args.zed) and not args.hardware:
-        parser.error("--simulate-motors, --no-window, --record and --zed are used together with --hardware")
+    if (args.simulate_motors or args.no_window or args.record or args.zed or args.no_oak_models) and not args.hardware:
+        parser.error("--simulate-motors, --no-window, --record, --zed and --no-oak-models are used together with --hardware")
     if args.microphone and not args.record:
         parser.error("--microphone is used together with --record")
     if args.zed_only and args.hardware:
@@ -77,6 +81,7 @@ def main() -> None:
             simulate_motors=args.simulate_motors, show_window=not args.no_window,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, port=args.port,
+            oak_models=not args.no_oak_models,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

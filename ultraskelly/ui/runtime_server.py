@@ -41,6 +41,8 @@ from ultraskelly.core.pubsub.bot_topics import (
     DepthFrameMessage,
     FaceLocationMessage,
     FaceLocationTopic,
+    FacesMessage,
+    FacesTopic,
     FrameMessage,
     PoseDataMessage,
     PoseDataTopic,
@@ -52,6 +54,7 @@ from ultraskelly.core.pubsub.bot_topics import (
 )
 from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC, TopicSubscriptionQueue
 from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_head
+from ultraskelly.ui.face_stream import face_trackers
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
@@ -140,6 +143,8 @@ BODY = connection_group(
     "body", [(KEYPOINT_NAMES[start], KEYPOINT_NAMES[end]) for start, end in SKELETON_CONNECTIONS], "#3ddc84"
 )
 POSE_STALL_SECONDS = 0.5  # Without a pose this long, a posed camera streams its frames bare
+FACES_WAIT_SECONDS = 0.1  # A frame waits at most this long for the OAK's faces in it
+RECENT_FACES = 16  # Faces kept by frame number until their frame is encoded
 
 
 def camera_images(message: FrameMessage | StereoFrameMessage | DepthFrameMessage) -> list[np.ndarray]:
@@ -160,13 +165,14 @@ def encode_camera_frame(
     poses: PoseDataMessage | None,
     encode_jpeg: Callable[[np.ndarray, int], bytes],
     jpeg_quality: int,
+    faces: FacesMessage | None = None,
 ) -> bytes:
     """One FreeMoCap frame message: the JPEG of each (camera ID, index, image) captured
-    together, and each person's keypoints in pixels of the first image. Pure CPU work,
-    safe to run in a worker thread."""
+    together, and each person's keypoints and face in pixels of the first image. Pure CPU
+    work, safe to run in a worker thread."""
     camera, _, image = cameras[0]
     height, width = image.shape[:2]
-    trackers = person_trackers(camera, (width, height), poses)
+    trackers = person_trackers(camera, (width, height), poses) + face_trackers(camera, faces)
     images = [
         PayloadImage(camera, index, image.shape[1], image.shape[0], encode_jpeg(image, jpeg_quality))
         for camera, index, image in cameras
@@ -251,6 +257,7 @@ class CameraFeed:
     encoding: bool = False
     encoded: int = 0
     last_pose_at: float | None = None
+    pending_since: float = 0.0  # When the pending frame arrived; it may wait briefly for its faces
 
 
 @dataclass
@@ -283,6 +290,9 @@ class RuntimeServerNode(Node):
     depth_sequence: int = Field(default=0, exclude=True)
     state_published_at: float = Field(default=0.0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    faces_camera: str | None = Field(default=None, description="Camera whose frames the OAK's face models read")
+    faces: SkipValidation[dict[int, FacesMessage]] = Field(default_factory=dict, exclude=True)  # Recent, by frame number
+    oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
 
     @classmethod
     def create(
@@ -300,14 +310,18 @@ class RuntimeServerNode(Node):
         motor_tests: MotorTester | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
+        faces_camera: str | None = None,
+        oak_status: Callable[[], dict] | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
-        `pose_camera`'s frames travel with the poses detected in them. With `motor_tests`,
-        the dashboard can run motor tests through /api/motor-test. A stereo camera's two
-        images travel together in one frame message, as cameras `<name>_left` and `<name>_right`;
-        a depth frame's as `<name>_rectified` and `<name>_depth`, the depth drawn in colour.
+        `pose_camera`'s frames travel with the poses detected in them, and `faces_camera`'s with
+        the faces the OAK found in them. With `motor_tests`, the dashboard can run motor tests
+        through /api/motor-test. A stereo camera's two images travel together in one frame
+        message, as cameras `<name>_left` and `<name>_right`; a depth frame's as
+        `<name>_rectified` and `<name>_depth`, the depth drawn in colour. `oak_status` reports
+        the OAK's model rates and chip load for robot_state.
         """
         node = cls(
             pubsub=pubsub,
@@ -318,6 +332,8 @@ class RuntimeServerNode(Node):
             encode_jpeg=encode_jpeg,
             pose_camera=pose_camera,
             motor_tests=motor_tests,
+            faces_camera=faces_camera,
+            oak_status=oak_status,
         )
         overlays = overlays or {}
         feeds = [(name, topic, (name,)) for name, topic in cameras.items()]
@@ -336,6 +352,7 @@ class RuntimeServerNode(Node):
             "target": pubsub.get_subscription(TargetLocationTopic),
             "pose": pubsub.get_subscription(PoseDataTopic),
             "face": pubsub.get_subscription(FaceLocationTopic),
+            "faces": pubsub.get_subscription(FacesTopic),
         }
         return node
 
@@ -382,6 +399,7 @@ class RuntimeServerNode(Node):
             "rates": {name: round(hz, 1) for name, hz in self.rates.items()},
             "nodes": self.node_status(),
             "motor_test": None if self.motor_tests is None else self.motor_tests.state(),
+            "oak": None if self.oak_status is None else self.oak_status(),
         }
         if servo := self.latest.get("servo_state"):
             message: ServoStateMessage = servo.message
@@ -449,7 +467,7 @@ class RuntimeServerNode(Node):
         """Encode the newest pending frame message, repeating while newer ones arrive."""
         feed.encoding = True
         try:
-            while feed.pending is not None and self.clients > 0:
+            while feed.pending is not None and self.clients > 0 and self._ready(feed):
                 (camera_frame, poses), feed.pending = feed.pending, None
                 feed.encoded += 1
                 cameras = [
@@ -457,11 +475,16 @@ class RuntimeServerNode(Node):
                     for offset, (camera, image) in enumerate(zip(feed.views, camera_images(camera_frame)))
                 ]
                 jpegs = JpegCache(self.encode_jpeg)  # A depth frame's colour image is encoded once for both messages
+                faces = None
+                if isinstance(camera_frame, FrameMessage):  # The camera's own JPEG, or one encoding for every consumer
+                    jpegs = JpegCache(lambda image, quality, frame=camera_frame: frame.jpeg_bytes(quality, self.encode_jpeg))
+                    if feed.name == self.faces_camera:
+                        faces = self.faces.get(camera_frame.frame_number)
                 message = await asyncio.to_thread(
                     encode_camera_frame, cameras,
                     frame_number=camera_frame.frame_number if camera_frame.frame_number is not None else feed.encoded,
                     timestamp=camera_frame.timestamp if camera_frame.timestamp is not None else time.monotonic(),
-                    poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality,
+                    poses=poses, encode_jpeg=jpegs.encode, jpeg_quality=self.params.jpeg_quality, faces=faces,
                 )
                 feed.stream.publish(message)
                 if isinstance(camera_frame, DepthFrameMessage):  # Also the depth itself, for 3D views
@@ -473,6 +496,17 @@ class RuntimeServerNode(Node):
             logger.exception("Frame encoding failed")
         finally:
             feed.encoding = False
+
+    def _ready(self, feed: CameraFeed) -> bool:
+        """Whether the pending frame may be encoded: not while the OAK's faces in it are still
+        due, for at most FACES_WAIT_SECONDS. Faces that stopped coming are not waited for."""
+        camera_frame = feed.pending[0]
+        if feed.name != self.faces_camera or not isinstance(camera_frame, FrameMessage) or "faces" not in self.latest:
+            return True
+        now, number = time.monotonic(), camera_frame.frame_number
+        if number is None or number in self.faces or now - self.latest["faces"].at >= POSE_STALL_SECONDS:
+            return True
+        return max(self.faces, default=number) > number or now - feed.pending_since >= FACES_WAIT_SECONDS
 
     async def pump(self) -> None:
         """Drain subscriptions into the latest state; while anyone watches, encode the
@@ -490,7 +524,11 @@ class RuntimeServerNode(Node):
                     if name == "pose" and message.frame is not None and self.pose_camera in self.feeds:
                         posed = self.feeds[self.pose_camera]
                         posed.last_pose_at = now
-                        posed.pending = (message.frame, message)
+                        posed.pending, posed.pending_since = (message.frame, message), now
+                    if name == "faces" and message.frame_number is not None:
+                        self.faces[message.frame_number] = message
+                        while len(self.faces) > RECENT_FACES:
+                            del self.faces[min(self.faces)]
             for feed in self.feeds.values():
                 while not feed.subscription.empty():
                     camera_frame = feed.subscription.get_nowait()
@@ -501,8 +539,8 @@ class RuntimeServerNode(Node):
                     # A posed camera's frames come with their poses, unless the detector has stalled.
                     poses_flowing = feed.last_pose_at is not None and now - feed.last_pose_at < POSE_STALL_SECONDS
                     if feed.name != self.pose_camera or not poses_flowing:
-                        feed.pending = (camera_frame, None)
-                if feed.pending is not None and self.clients > 0 and not feed.encoding:
+                        feed.pending, feed.pending_since = (camera_frame, None), now
+                if feed.pending is not None and self.clients > 0 and not feed.encoding and self._ready(feed):
                     asyncio.create_task(self._encode(feed))
             if self.clients > 0 and now - self.state_published_at >= 1 / self.params.state_hz:
                 self.state_published_at, self.state_sequence = now, self.state_sequence + 1

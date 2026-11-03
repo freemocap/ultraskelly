@@ -1,5 +1,8 @@
+import threading
+from collections.abc import Callable
+
 import numpy as np
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ultraskelly.core.bot.sensory.stereo_rectification import StereoRectification
 from ultraskelly.core.pubsub.pubsub_abcs import TopicMessageABC, create_topic
@@ -10,6 +13,19 @@ class FrameMessage(TopicMessageABC):
     frame: np.ndarray
     frame_number: int | None = None  # The camera's frame counter, when it provides one
     timestamp: float | None = None  # Capture time in seconds on time.monotonic()'s clock, when known
+    jpeg: bytes | None = None  # The frame as JPEG when the camera encodes it itself, as an OAK's hardware encoder can
+    _jpegs: dict[int, bytes] = PrivateAttr(default_factory=dict)  # Encoded here, by quality
+    _jpeg_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def jpeg_bytes(self, quality: int, encode: Callable[[np.ndarray, int], bytes]) -> bytes:
+        """The frame as JPEG: the camera's own when it sent one, else encoded at `quality` once,
+        whichever consumer asks first, and kept for the rest (the stream and the recorder)."""
+        if self.jpeg is not None:
+            return self.jpeg
+        with self._jpeg_lock:
+            if quality not in self._jpegs:
+                self._jpegs[quality] = encode(self.frame, quality)
+            return self._jpegs[quality]
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -82,6 +98,34 @@ class ServoStateMessage(TopicMessageABC):
     model_config = ConfigDict(frozen=True)
 
 
+class FaceObservation(BaseModel):
+    """One face the OAK's own chip found and measured in one of its frames. Pixels are the frame's."""
+    box: tuple[float, float, float, float]  # x1, y1, x2, y2
+    score: float  # YuNet's confidence, 0 to 1
+    landmarks: np.ndarray  # (5, 2) x, y: right eye, left eye, nose, right and left mouth corner (the person's own sides)
+    head_pose: tuple[float, float, float] | None = None  # Yaw, pitch, roll in degrees, as the head pose network gives them
+    gaze: tuple[float, float, float] | None = None  # Unit gaze direction in the gaze network's axes (docs/stream.md)
+    mesh: np.ndarray | None = None  # (468, 3) MediaPipe face landmarks: x, y and relative depth z, in pixels
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
+class FacesMessage(TopicMessageABC):
+    """The faces found in one OAK frame by the models on the OAK's own chip; empty when it saw none."""
+    faces: list[FaceObservation]
+    image_size: tuple[int, int]  # (width, height) of the frame the pixels belong to
+    frame_number: int | None = None  # The OAK frame's number, as in its FrameMessage
+    timestamp: float | None = None  # That frame's capture time, on time.monotonic()'s clock
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        frozen=True
+    )
+
+
 class PoseDataMessage(TopicMessageABC):
     """Full pose detection data for visualization."""
     keypoints: np.ndarray | None = None  # Shape: (num_people, 17, 3)
@@ -103,6 +147,7 @@ FrameTopic = create_topic(FrameMessage)
 StereoFrameTopic = create_topic(StereoFrameMessage)
 DepthFrameTopic = create_topic(DepthFrameMessage)
 FaceLocationTopic = create_topic(FaceLocationMessage)
+FacesTopic = create_topic(FacesMessage)
 TargetLocationTopic = create_topic(TargetLocationMessage)
 ServoStateTopic = create_topic(ServoStateMessage)
 PoseDataTopic = create_topic(PoseDataMessage)
