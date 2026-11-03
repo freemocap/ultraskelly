@@ -482,6 +482,48 @@ real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port an
 adapter in software with the waist at rest. A motor board that dies between a brake's two
 transfers can still leave a motor driven (above).
 
+## FreeMoCap's reviewed SDK and its consumer checks (2026-11-02)
+
+FreeMoCap reviewed the stream SDK UltraSkelly uses and asked for consumer checks on the
+robot ([handoff](https://github.com/freemocap/freemocap/blob/f729e8aeaba495839d7372c2f20c18c96618f4f6/current-work-plans/03-transport/ultraskelly-consumer-handoff.md)).
+UltraSkelly moved to that batch, `f729e8ae` on `sfn26-ultraskelly`: `uv.lock` and the
+vendored bundle changed and no code did. Using what the batch added:
+
+- Each pose message carries the target published from the same detections and the row of
+  the person it belongs to. In each frame the followed person is declared as tracker
+  `target`, the others as `person-<row>`, and `target` also carries a custom numeric
+  channel, `ultraskelly.target`, so a viewer draws the target with the image it was
+  found in. The 20 Hz `robot_state.target` drawn over video came from another moment.
+  [The stream guide](stream.md) describes every field; the dashboard adopts the channel in
+  its rebuild.
+- `python -m ultraskelly.replay --serve --people N` feeds the real producer from a
+  synthetic camera: N people at 30 fps whose rows are shuffled every frame.
+- `scripts/stream_acceptance.py` runs FreeMoCap's consumer checks in headless Chromium.
+
+Evidence, on the Pi in Chromium 156 (headless, the page served over plain HTTP from a LAN
+address, so not a secure context): against the synthetic camera all eight checks passed,
+including identities kept through row reordering (303 of 303 frames), the custom channel's
+descriptor and values, retries stopping after a disconnect during a connection failure,
+and a reconnect drawing its first frame without earlier messages. Against the bot, with
+the OAK and the Hailo-8 and simulated motors, the five checks that need nobody in view
+passed: 30.1 frames/s decoded and drawn and 19.1 `robot_state`/s. Per frame on the OAK's
+29 KB frames:
+
+| Protocol | ms | Image path | ms |
+| --- | --- | --- | --- |
+| CBOR decode and validation | 0.065 | Payload read | 0.005 |
+| Frame resolution | 0.001 | JPEG decode (median) | 2.9 |
+| Channel views | 0.001 | Draw (median) | 0.4 |
+
+As before, message handling is negligible and JPEG decoding is the client's cost.
+FreeMoCap's [consumer report](https://github.com/freemocap/freemocap/blob/be58d412155902a0e6542d33c519c9212e7d94e1/current-work-plans/03-transport/ultraskelly-consumer-report.md)
+has both runs, the method and the wishes that came out of them. Not yet checked: people
+in front of the robot's camera, and a GPU-drawn window (headless Chromium had no GPU
+context; the dashboard's WebGL view needed `--use-angle=swiftshader
+--enable-unsafe-swiftshader` there). Any Chromium started in the Pi's desktop session
+needs `--password-store=basic` and a throwaway profile, or it asks for the keyring
+password on the robot's screen.
+
 ## Validation and limits
 
 Initial portable queue tests: 3 failed / 2 passed, exposing blocked publication,
