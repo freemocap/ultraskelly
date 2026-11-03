@@ -254,6 +254,36 @@ the bot from a non-interactive shell also exposed that background jobs inherit
 an ignored SIGINT; `python -m ultraskelly` now restores Ctrl+C and maps SIGTERM
 to the same clean shutdown.
 
+### Encoding only what viewers draw (2026-11-03)
+
+The server now reads each viewer's display feedback (docs/stream.md, "What a viewer
+draws"). It encodes a feed only while some viewer draws it, sends each viewer only that,
+and encodes the ZED's eyes at the largest size drawn when that is at most three quarters
+of the camera's. It waits on its topics instead of polling them every 5 ms. It also sends
+without permessage-deflate, which browsers negotiated and which deflated every JPEG and
+zlib payload again for nothing.
+
+Measured on the Pi with the bot at `--hardware --simulate-motors --zed --depth`, serving
+on localhost only, with the Pi's full-screen Chromium as the viewer: 30 s samples after
+30 s, main `eb16215` against `w4-stream-views` `ee61990`.
+
+| | Before | After |
+| --- | --- | --- |
+| Bot process | 1.60 cores | 1.22 cores |
+| Chromium on the Pi | 1.85 cores | 1.53 cores |
+| Whole Pi | 89.5% of 4 cores | 72.1% of 4 cores |
+| Sent to the dashboard | 3.9 MB/s | 2.9 MB/s |
+| Frames the dashboard drew, OAK and ZED | 22 and 22 a second of 30 | 30 and 30 |
+| Bot with no viewer | 0.66 cores | 0.68 cores |
+
+The dashboard asked for the OAK at 640×480, both eyes at 317×178 and `depth_frame`; the
+eyes went out at 318×178. The OAK keeps its pixels because the dashboard draws the aim
+point and jaw zone in them, from `robot_state.overlays`; it could shrink too once the
+dashboard scales those. Single samples; earlier samples of main with the dashboard
+differed by up to 0.06 cores. `robot_state`'s unchanging fields (overlays, the node list,
+the motor-test limits) are 570 of its 1443 bytes, but encoding them costs 36 µs a message,
+0.07% of a core at 20 Hz, so they still travel in every message.
+
 ### Hailo-8 driver warning storm and reset (2026-11-02)
 
 The Pi reset itself at 10:12 with the bot running. The previous boot's kernel
