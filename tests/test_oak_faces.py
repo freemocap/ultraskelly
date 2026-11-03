@@ -75,7 +75,7 @@ def results(*rows):
 
 
 def test_a_frame_waits_for_its_answers_and_carries_them_per_face():
-    assembler = FaceAssembler(SIZE, max_faces=3, mesh=True)
+    assembler = FaceAssembler(SIZE, max_faces=3)
     crops, done = assembler.detected(10, 1.5, detections(NEAR, FAR), now=0.0)
     assert done == [] and [crop.kind for crop in crops].count(CropKind.MESH) == 1
 
@@ -92,20 +92,35 @@ def test_a_frame_waits_for_its_answers_and_carries_them_per_face():
     assert (far.head_pose, far.gaze, far.mesh) == (None, None, None)  # NaN: not measured
 
 
-def test_frames_leave_in_order_and_one_without_faces_waits_behind_an_older_one():
-    assembler = FaceAssembler(SIZE, max_faces=3, mesh=False)
+def test_a_frame_without_faces_goes_out_at_once_while_an_older_one_is_measured():
+    assembler = FaceAssembler(SIZE, max_faces=3, mesh_every=None)
     assembler.detected(20, None, detections(NEAR), now=0.0)
 
     _, done = assembler.detected(21, None, FaceDetections.empty(), now=0.03)
-    assert done == []  # Frame 21 saw nobody, but frame 20 is still being measured
+    assert [(message.frame_number, message.faces) for message in done] == [(21, [])]  # Found by its number
 
-    done = assembler.answered(20, 0.05, results=results([0, 1, 2, 3, 0, 0, -1]))
-    assert [message.frame_number for message in done] == [20, 21]
-    assert done[1].faces == []
+    [measured] = assembler.answered(20, 0.05, results=results([0, 1, 2, 3, 0, 0, -1]))
+    assert measured.frame_number == 20 and measured.faces[0].head_pose == pytest.approx((1, 2, 3))
+
+
+def test_head_pose_and_landmarks_are_measured_at_their_own_rates():
+    assembler = FaceAssembler(SIZE, max_faces=3, every=2, mesh_every=4)
+    kinds = [{crop.kind for crop in assembler.detected(number, None, detections(NEAR), now=0.0)[0]} for number in range(4)]
+
+    assert kinds == [{CropKind.HEAD_POSE, CropKind.LEFT_EYE, CropKind.RIGHT_EYE, CropKind.MESH}, set(),
+                     {CropKind.HEAD_POSE, CropKind.LEFT_EYE, CropKind.RIGHT_EYE}, set()]
+    assert [number for number in assembler.pending] == [0, 2]  # The unmeasured frames went out with their boxes
+
+
+def test_measuring_no_faces_asks_for_nothing():
+    assembler = FaceAssembler(SIZE, max_faces=0)
+    crops, [message] = assembler.detected(5, None, detections(NEAR), now=0.0)
+
+    assert crops == [] and message.faces[0].head_pose is None and message.faces[0].box == pytest.approx((256, 96, 384, 240))
 
 
 def test_unanswered_frames_go_out_after_the_timeout_with_what_came():
-    assembler = FaceAssembler(SIZE, max_faces=3, mesh=True, timeout=0.5)
+    assembler = FaceAssembler(SIZE, max_faces=3, timeout=0.5)
     assembler.detected(30, None, detections(NEAR), now=0.0)
     assembler.answered(30, 0.1, results=results([0, 5, 6, 7, 1, 0, 0]))
     assert assembler.finished(0.4) == []  # Still waiting for the face landmarks

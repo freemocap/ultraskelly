@@ -62,18 +62,21 @@ def eye_box(eye: np.ndarray, face_box: np.ndarray) -> np.ndarray:
     return np.concatenate([eye - half, eye + half])
 
 
-def face_crops(faces: FaceDetections, image_size: tuple[int, int], *, max_faces: int, mesh: bool) -> list[Crop]:
-    """The crops for the best `max_faces` faces, in face order: head pose, left eye, right eye,
-    and for the largest face, when `mesh`, the face landmark crop last."""
+def face_crops(
+    faces: FaceDetections, image_size: tuple[int, int], *, max_faces: int, mesh: bool, head_pose: bool = True,
+) -> list[Crop]:
+    """The crops for the best `max_faces` faces, in face order: with `head_pose`, head pose, left
+    eye and right eye for each; with `mesh`, the face landmark crop of the largest, last."""
     crops = []
-    for face in range(min(faces.count, max_faces)):
+    measured = min(faces.count, max_faces)
+    for face in range(measured if head_pose else 0):
         box, landmarks = faces.boxes[face], faces.landmarks[face]
         crops.append(Crop(CropKind.HEAD_POSE, face, clip_box(box)))
         crops.append(Crop(CropKind.LEFT_EYE, face, clip_box(eye_box(landmarks[1], box))))
         crops.append(Crop(CropKind.RIGHT_EYE, face, clip_box(eye_box(landmarks[0], box))))
-    if mesh and faces.count:
+    if mesh and measured:
         areas = (faces.boxes[:, 2] - faces.boxes[:, 0]) * (faces.boxes[:, 3] - faces.boxes[:, 1])
-        largest = int(np.argmax(areas[:max_faces]))
+        largest = int(np.argmax(areas[:measured]))
         # Clipped at the image's edge: the crop is then not square, and mesh_points maps it back as cut.
         crops.append(Crop(CropKind.MESH, largest, clip_box(mesh_box(faces.boxes[largest], image_size))))
     return crops
@@ -108,27 +111,39 @@ class Pending:
     faces: FaceDetections
     mesh_crop: Crop | None
     since: float
+    awaits_results: bool = False  # Head pose crops were asked for, so the Script answers
     results: np.ndarray | None = None  # (faces, RESULT_FIELDS) from the Script node
     mesh: np.ndarray | None = None  # (468, 3) image pixels
 
 
 class FaceAssembler:
     """Joins, frame by frame, YuNet's faces with the head pose, gaze and face landmarks the OAK
-    sends back for them, and says which crops to ask for. A frame whose answers do not all come
-    within `timeout` seconds is published with what did."""
+    sends back for them, and says which crops to ask for. Head pose and gaze are measured in
+    one detection of `every`, face landmarks in one of `mesh_every` (None: never); the other
+    frames' faces carry their boxes and landmarks only. A frame is published as soon as it has
+    its answers, or after `timeout` seconds with what came."""
 
-    def __init__(self, image_size: tuple[int, int], *, max_faces: int = 3, mesh: bool = True, timeout: float = 0.5) -> None:
-        self.image_size, self.max_faces, self.mesh, self.timeout = image_size, max_faces, mesh, timeout
+    def __init__(
+        self, image_size: tuple[int, int], *, max_faces: int = 3, every: int = 1, mesh_every: int | None = 1,
+        timeout: float = 0.5,
+    ) -> None:
+        self.image_size, self.max_faces, self.timeout = image_size, max_faces, timeout
+        self.every, self.mesh_every = every, mesh_every
+        self.detections = 0
         self.pending: dict[int, Pending] = {}
         self.incomplete = 0  # Frames published without every answer
 
     def detected(
         self, sequence: int, timestamp: float | None, faces: FaceDetections, now: float,
     ) -> tuple[list[Crop], list[FacesMessage]]:
-        """A frame's faces: the crops to request, and any frames now finished (this one, if it has no faces)."""
-        crops = face_crops(faces, self.image_size, max_faces=self.max_faces, mesh=self.mesh)
+        """A frame's faces: the crops to request, and any frames now finished (this one, if nothing is measured in it)."""
+        head_pose = self.detections % self.every == 0
+        mesh = self.mesh_every is not None and self.detections % self.mesh_every == 0
+        self.detections += 1
+        crops = face_crops(faces, self.image_size, max_faces=self.max_faces, mesh=mesh, head_pose=head_pose)
         mesh_crop = next((crop for crop in crops if crop.kind == CropKind.MESH), None)
-        self.pending[sequence] = Pending(sequence, timestamp, faces, mesh_crop, now)
+        awaits = any(crop.kind == CropKind.HEAD_POSE for crop in crops)
+        self.pending[sequence] = Pending(sequence, timestamp, faces, mesh_crop, now, awaits_results=awaits)
         return crops, self.finished(now)
 
     def answered(self, sequence: int, now: float, *, results: np.ndarray | None = None,
@@ -143,20 +158,19 @@ class FaceAssembler:
         return self.finished(now)
 
     def complete(self, frame: Pending) -> bool:
-        if frame.faces.count == 0:
-            return True
-        return frame.results is not None and (frame.mesh_crop is None or frame.mesh is not None)
+        return ((not frame.awaits_results or frame.results is not None)
+                and (frame.mesh_crop is None or frame.mesh is not None))
 
     def finished(self, now: float) -> list[FacesMessage]:
-        """Frames done or given up on, in frame order: a frame waits for every older one."""
+        """Frames done or given up on, oldest first. A done frame need not wait for an older
+        one: consumers find a frame's faces by its number."""
         messages = []
         for sequence in sorted(self.pending):
             frame = self.pending[sequence]
-            if not self.complete(frame) and now - frame.since <= self.timeout:
-                break
-            del self.pending[sequence]
-            self.incomplete += not self.complete(frame)
-            messages.append(self.message(frame))
+            if self.complete(frame) or now - frame.since > self.timeout:
+                del self.pending[sequence]
+                self.incomplete += not self.complete(frame)
+                messages.append(self.message(frame))
         return messages
 
     def message(self, frame: Pending) -> FacesMessage:

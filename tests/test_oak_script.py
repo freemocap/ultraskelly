@@ -178,6 +178,21 @@ def test_a_lost_head_pose_leaves_its_frame_unmeasured_and_the_next_frame_in_step
     assert face_rows(found) == [[0, 30.0, -5.0, 2.0, 0.0, 0.0, -3.0]]  # Frame 4's own answers
 
 
+def test_an_answer_for_a_later_frame_waits_for_it_instead_of_being_lost():
+    one_face = (crop(CropKind.HEAD_POSE, 0, (0.1, 0.1, 0.2, 0.2)),)
+    outputs = run([request(3, *one_face), request(4, *one_face)], [Frame(3), Frame(4)],
+                  answer_head_pose=lambda count: count != 1)  # Frame 3's head pose never comes back
+
+    lost, found = outputs["results"].sent
+    assert found.getSequenceNum() == 4 and face_rows(found)[0][1] == 20.0  # Frame 4's own head pose
+
+
+def test_a_landmark_crop_alone_sends_no_results():
+    outputs = run([request(5, crop(CropKind.MESH, 0, (0.3, 0.1, 0.7, 0.6)))], [Frame(5)])
+
+    assert len(outputs["mesh_image"].sent) == 1 and "results" not in outputs
+
+
 def test_a_request_for_a_frame_that_already_left_is_skipped():
     outputs = run(
         [request(2, crop(CropKind.HEAD_POSE, 0, (0.1, 0.1, 0.2, 0.2))),

@@ -1,5 +1,6 @@
 """The OAK node turns what the OAK sends into frames and faces; run here with stand-ins for depthai."""
 import asyncio
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -76,7 +77,7 @@ class Loop:
 def node_with_faces():
     node = OakCameraNode(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(faces=OakFaceParams()))
     node.outbox = asyncio.Queue(maxsize=16)
-    node.faces = FaceAssembler((640, 480), max_faces=3, mesh=True)
+    node.faces = FaceAssembler((640, 480), max_faces=3)
     node.crop_requests = SimpleNamespace(sent=[])
     node.crop_requests.send = node.crop_requests.sent.append
     return node
@@ -150,14 +151,15 @@ def test_a_busy_event_loop_drops_the_oldest_waiting_message():
 
 def test_status_reports_output_rates_and_the_chip():
     node = node_with_faces()
-    for arrival in (0.0, 1 / 30, 2 / 30):
-        node._count("face_detection", arrival)
+    now = time.monotonic()
+    for arrival in range(60):
+        node._count("face_detection", now - 3.0 + arrival / 20)  # 20 per second, the last 2 s of them recent
     node._on_system(dai, SimpleNamespace(
         leonCssCpuUsage=SimpleNamespace(average=0.25), leonMssCpuUsage=SimpleNamespace(average=0.5),
         ddrMemoryUsage=SimpleNamespace(used=30 * 2**20, total=333 * 2**20), chipTemperature=SimpleNamespace(average=48.0),
     ), 0.0, Loop())
 
     status = node.status()
-    assert status["rates"]["face_detection"] > 0
+    assert status["rates"]["face_detection"] == pytest.approx(20, abs=1)
     assert status["chip"] == {"leon_os_cpu": 0.25, "leon_rt_cpu": 0.5, "ddr_used_mib": 30.0, "ddr_total_mib": 333.0,
                               "temperature_c": 48.0}

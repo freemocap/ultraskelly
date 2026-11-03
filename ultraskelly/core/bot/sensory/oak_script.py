@@ -28,17 +28,21 @@ SIZES = {0: (60, 60), 1: (60, 60), 2: (60, 60), 3: (192, 192)}
 WAIT = 0.25  # Seconds to wait for a network's answer before giving up on it
 
 
+held = {}  # An answer for a later frame, read while waiting for an earlier one's
+
+
 def answer(name, sequence):
     # The next output of `name` for this frame; None after WAIT. Older frames' outputs are dropped.
     deadline = time.time() + WAIT
     while time.time() < deadline:
-        message = node.inputs[name].tryGet()
+        message = held.pop(name, None) or node.inputs[name].tryGet()
         if message is None:
             time.sleep(0.001)
         elif message.getSequenceNum() == sequence:
             return message
         elif message.getSequenceNum() > sequence:
-            return None  # This frame's answer was lost; leave the newer one unread
+            held[name] = message  # This frame's answer was lost; keep the later one for its own frame
+            return None
     return None
 
 
@@ -85,9 +89,10 @@ while True:
     for face, found, gaze in zip(faces, poses, gazes):
         direction = gaze.getLayerFp16("Identity0")[:3] if gaze is not None else [nan, nan, nan]
         values += [face] + list(found if found is not None else [nan, nan, nan]) + list(direction)
-    results = NNData(64 + 8 * len(values))
-    results.setLayer("faces", values)
-    results.setSequenceNum(sequence)
-    results.setTimestamp(frame.getTimestamp())
-    node.outputs["results"].send(results)
+    if faces:  # A request with only a landmark crop has nothing to report here
+        results = NNData(64 + 8 * len(values))
+        results.setLayer("faces", values)
+        results.setSequenceNum(sequence)
+        results.setTimestamp(frame.getTimestamp())
+        node.outputs["results"].send(results)
 """
