@@ -73,7 +73,7 @@ export class HealthView {
     this.$ = elements;
     this.choice = null;          // 'open' or 'closed', the user's, until a new problem
     this.seen = new Set();       // Problem ids in the last update
-    this.rows = new Map(); this.lights = new Map(); this.key = ''; this.model = null; this.link = null;
+    this.rows = new Map(); this.lights = new Map(); this.key = ''; this.readings = ''; this.model = null; this.link = null;
     elements.toggle.onclick = () => this.setOpen(this.$.panel.hidden);
     elements.lights.onclick = () => this.setOpen(this.$.panel.hidden);
     elements.close.onclick = () => this.setOpen(false);
@@ -89,7 +89,8 @@ export class HealthView {
     const open = this.choice ? this.choice === 'open' : problems > 0;
     setProperty(this.$.panel, 'hidden', !open);
     setText(this.$.toggle, open ? 'Hide' : problems ? 'Details' : 'Checks');
-    this.$.toggle.setAttribute('aria-expanded', String(open));
+    if (this.$.toggle.getAttribute('aria-expanded') !== String(open)) this.$.toggle.setAttribute('aria-expanded', String(open));
+    if (open) this.renderDiagnostics();  // The live readings are written only while someone can see them
   }
 
   // The dashboard's own problem, shown with the bot's: the link to the bot, or null when it is fine.
@@ -107,10 +108,10 @@ export class HealthView {
     if ([...ids].some(id => !this.seen.has(id))) this.choice = null;
     this.seen = ids;
     const key = JSON.stringify([model.checked, model.components.map(p => [p.id, p.status, p.message, p.fix, p.since]),
-                                model.problems.map(p => p.id), model.i2c, model.servo, model.power]);
+                                model.problems.map(p => p.id)]);
     if (key !== this.key) {
       this.key = key;
-      this.renderBanner(); this.renderRows(); this.renderLights(); this.renderDiagnostics();
+      this.renderBanner(); this.renderRows(); this.renderLights();
     }
     this.renderSince();
     this.apply();
@@ -182,6 +183,10 @@ export class HealthView {
   // The bot's live readings, compact: which I2C addresses answer, what the servo board reads back, the Pi's rails.
   renderDiagnostics() {
     const {i2c, servo, power} = this.model ?? {}, lines = [];
+    // Each reading's snapshot time changes with every message; what is shown does not.
+    const readings = JSON.stringify([i2c, servo, power], (name, value) => name === 'time' ? undefined : value);
+    if (readings === this.readings) return;
+    this.readings = readings;
     if (i2c) {
       const answering = new Set(i2c.answering ?? []), expected = i2c.expected ?? [...answering];
       const errors = Object.entries(i2c.errors ?? {}).filter(([, count]) => count).map(([address, count]) => `${address} ${count}`);

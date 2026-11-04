@@ -70,6 +70,12 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .lamps{display:flex;flex-wrap:wrap;gap:3px 9px;font:10px ui-monospace,monospace;color:var(--muted);cursor:pointer;flex:none}
 .dashboard .lamp{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .dashboard .lamp i{width:7px;height:7px;border-radius:50%;background:#5d6f76}
+/* The motor tests' boards and a servo test's read-back. */
+.dashboard .motor-test-boards{display:flex;flex-wrap:wrap;gap:3px 12px;margin:0 0 8px;font-size:11px}
+.dashboard .motor-test-boards .lamp{white-space:normal}
+.dashboard .motor-test-readback{display:grid;gap:2px;margin:8px 0 0;padding:6px 8px;border:1px solid var(--line);border-radius:5px;font-size:11px;line-height:1.4}
+.dashboard .motor-test-readback.done{border-color:#2f5d3a}.dashboard .motor-test-readback.refused{border-color:#6b2a26}
+.dashboard .motor-test-readback .advice{color:#ffd58a}.dashboard .motor-test-readback .advice:empty{display:none}
 .dashboard .drawer-close{position:absolute;top:6px;right:8px;padding:1px 8px;font-size:15px;line-height:1.2}
 .dashboard [hidden]{display:none !important}
 

@@ -1,7 +1,9 @@
 // Motor test panel: moves one actuator at a time through /api/motor-test. The bot applies the
 // test limits and pauses tracking during each test; every test is answered once it has
-// finished, been stopped or been refused, and the answer is shown here.
-import { setText } from '/dom.js';
+// finished, been stopped or been refused, and the answer is shown here. From the bot's hardware
+// checks (robot_state.health) it shows whether each board answers and, after a servo test, the
+// command next to what the servo board reads back: angles are commands, not measured positions.
+import { setProperty, setText } from '/dom.js';
 
 const CENTER = 90;      // Degrees; the head's neutral angle
 const SERVO_STEP = 10;  // Degrees per nudge
@@ -12,6 +14,27 @@ const element = (tag, properties = {}, ...children) => {
   return made;
 };
 const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
+const percent = duty => `${(duty * 100).toFixed(2)}%`;
+const BOARDS = [['servo_board', 'Servo board 0x40'], ['motor_hat', 'Motor HAT 0x60']];
+const SAME_DUTY = 0.0015;  // Read-back this close to the commanded angle's duty is the command: about 1.4 degrees
+
+// What the servo board says about the last servo test's channel, from the bot's checks: [words, hint, kind], or null.
+function readbackOf(health, name) {
+  const board = health?.components?.find(part => part.id === 'servo_board'), channel = health?.servo_board?.channels?.[name];
+  if (board && (board.status === 'fail' || board.status === 'warn') && !channel) {
+    return [`${board.message || 'The servo board does not answer'}: the command went nowhere`, board.fix || '', 'refused'];
+  }
+  if (!channel || channel.duty == null || channel.expected_duty == null) return null;
+  const servo = health.servo_board, angle = channel.commanded_deg == null ? 'the command' : `${Math.round(channel.commanded_deg)}°`;
+  const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${percent(channel.duty)}, ${angle} needs ${percent(channel.expected_duty)}`;
+  if (servo.awake === false) return [`${said}, but the chip is asleep, so it sends no pulses`, 'The bot wakes it when it starts the servos', 'refused'];
+  if (Math.abs(channel.duty - channel.expected_duty) > SAME_DUTY) {
+    return [`${said}: the command did not reach the chip`, 'Check the I2C wires to the servo board (SDA, SCL, GND)', 'refused'];
+  }
+  const rate = servo.frequency_hz != null && Math.abs(servo.frequency_hz - 50) > 5 ? ` at ${servo.frequency_hz.toFixed(0)} Hz, where servos want about 50` : '';
+  return [`${said}${rate}: the chip has the command`,
+          'If it did not move: the OE wire (it must be low), V+ servo power on the board\'s terminal, the plug\'s orientation', rate ? 'refused' : 'done'];
+}
 
 export class MotorTestPanel {
   constructor(root) {
@@ -19,6 +42,7 @@ export class MotorTestPanel {
     this.limits = null;
     this.running = false;
     this.commands = {};
+    this.lastServo = null;  // The actuator of the last servo test, whose read-back is shown
     this.load();
   }
 
@@ -41,7 +65,7 @@ export class MotorTestPanel {
     };
     const number = (value, max, step, label) => element('input', {type: 'number', value, min: step, max, step, title: label, ariaLabel: label});
     const servoRow = (name, label) => {
-      const shown = element('span', {className: 'motor-test-value', textContent: '—'});
+      const shown = element('span', {className: 'motor-test-value', textContent: '—', title: 'Commanded angle, not a measured position'});
       const move = angle => this.send({actuator: name, angle: Math.min(high, Math.max(low, angle))});
       const current = () => this.commands[name] ?? CENTER;
       return [element('tr', {},
@@ -83,14 +107,19 @@ export class MotorTestPanel {
           element('td', {className: 'motor-test-inputs', colSpan: 2}, this.jawDrive, element('span', {textContent: 'for'}), this.jawSeconds, element('span', {textContent: 's'})))));
     this.stopButton = element('button', {textContent: '■ Stop', className: 'motor-test-stop', onclick: () => this.stop()});
     this.result = element('span', {className: 'motor-test-result', textContent: enabled ? 'Ready' : 'Turned off in the launch configuration', role: 'status'});
+    this.boards = element('div', {className: 'motor-test-boards', hidden: true});
+    this.readback = element('div', {className: 'motor-test-readback', hidden: true}, element('span'), element('span', {className: 'advice'}));
     this.root.replaceChildren(
       element('div', {className: 'section-title'}, element('h2', {textContent: 'Motor test'}), element('span', {textContent: 'ONE AT A TIME'})),
+      this.boards,
       table,
       element('div', {className: 'motor-test-foot'}, this.stopButton, this.result),
+      this.readback,
       element('p', {className: 'note', textContent:
         `Tracking pauses during each test. Servos ${low}–${high}°; waist up to ${limits.waist_max_throttle.toFixed(2)} for ` +
         `${limits.waist_max_seconds.toFixed(2)} s, at most ${limits.waist_max_travel.toFixed(2)} throttle-seconds one way; ` +
-        `jaw up to ${limits.mouth_max_throttle.toFixed(2)} for ${limits.mouth_max_seconds.toFixed(2)} s.`}));
+        `jaw up to ${limits.mouth_max_throttle.toFixed(2)} for ${limits.mouth_max_seconds.toFixed(2)} s. ` +
+        `Angles are commands; the servo board's read-back is its own register, so it shows a command arrived, not where a servo is.`}));
     this.enabled = enabled;
     this.setRunning(false);
   }
@@ -113,6 +142,7 @@ export class MotorTestPanel {
 
   async send(test) {
     if (this.running) return;
+    if (test.angle != null) this.lastServo = test.actuator;
     this.setRunning(true);
     this.show(test.angle != null ? `Moving ${test.actuator} to ${test.angle}°…` : `Driving ${test.actuator} ${signed(test.throttle)} for ${test.seconds} s…`);
     try {
@@ -144,8 +174,35 @@ export class MotorTestPanel {
       setText(this.shown[name], value == null ? '—' : `${value.toFixed(0)}°`);
     }
     const test = state.motor_test;
+    if (test?.last?.angle != null && !this.running) this.lastServo = test.last.actuator;  // Also a test from another screen
+    if (!this.root.closest('[hidden]')) { this.showBoards(state.health); this.showReadback(state.health); }  // Only while open
     if (!test) return;
     setText(this.travel, signed(test.waist_travel));
     if (test.running && !this.running) this.show(`Running from another screen: ${test.running.description}`);
+  }
+
+  // Whether each board answers, from the bot's checks; nothing without them.
+  showBoards(health) {
+    const parts = BOARDS.map(([id, name]) => [health?.components?.find(part => part.id === id), name]).filter(([part]) => part);
+    setProperty(this.boards, 'hidden', !parts.length);
+    if (this.boards.childElementCount !== parts.length) {
+      this.boards.replaceChildren(...parts.map(() => element('span', {className: 'lamp'}, element('i'), document.createTextNode(''))));
+    }
+    parts.forEach(([part, name], i) => {
+      const lamp = this.boards.children[i];
+      setProperty(lamp, 'className', `lamp ${part.status}`);
+      setProperty(lamp, 'title', part.fix ? `${part.message}. Fix: ${part.fix}` : part.message);
+      setText(lamp.lastChild, part.status === 'ok' ? `${name} answers` : part.message || `${name}: ${part.status}`);
+    });
+  }
+
+  // After a servo test, the command next to the chip's read-back, live, and where to look if the servo did not move.
+  showReadback(health) {
+    const said = this.lastServo ? readbackOf(health, this.lastServo) : null;
+    setProperty(this.readback, 'hidden', !said);
+    if (!said) return;
+    const [words, hint, kind] = said;
+    setText(this.readback.firstChild, words); setText(this.readback.lastChild, hint);
+    setProperty(this.readback, 'className', `motor-test-readback ${kind}`);
   }
 }

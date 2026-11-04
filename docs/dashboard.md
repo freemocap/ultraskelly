@@ -49,7 +49,12 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 - **Motor tests:** the strip card shows the running or last test and the net waist travel,
   with Open and Stop; Stop works with the panel closed. Open docks the motor test panel
   (`motor-test.js`) over the right of the 3D scene, so the skeleton stays in view. On a
-  phone the card opens in place.
+  phone the card opens in place. From the bot's checks the panel shows whether the servo
+  board (0x40) and the Motor HAT (0x60) answer, and after a servo test the command next to
+  what the servo board reads back: when the chip has the command and the servo did not
+  move, look at the OE wire, the V+ servo power and the plug's orientation; when it does
+  not, the command never reached the chip. Angles stay commands: the read-back is the
+  chip's own register, not where the servo is.
 
 Click a video tile to enlarge it over the 3D scene; click it again or press Esc to return.
 
