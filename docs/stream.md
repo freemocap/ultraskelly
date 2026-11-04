@@ -163,6 +163,8 @@ gets these, like `robot_state`, whatever its `kinds`: on every change and at lea
 | `time` | when it was sent, in seconds on the Pi's `time.monotonic()` clock, as `robot_state.time` |
 | `components` | one entry per part this launch uses, in a fixed order |
 | `diagnostics` | the live hardware checks, below; empty until the first has run |
+| `diagnostics_time` | when those checks last ran to the end, on the same clock, or null before the first. If they fail as a whole, the last readings stay and this time stops, so readings much older than `time` are stale |
+| `diagnostics_error` | null while every check works; else `error`, which checks failed and how (such as "power: ValueError: ..."), and `since`, when they began failing. A single check that fails is null in `diagnostics` while the others go on; checks that fail from the first run leave `diagnostics_time` null, and this says why |
 
 Each component:
 
