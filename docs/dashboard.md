@@ -24,8 +24,8 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 
 ## Panels
 
-- **Header:** connection state, `robot_state` messages per second, and whether the
-  motors are simulated or real.
+- **Header:** connection state, `robot_state` messages per second, whether the motors
+  are simulated or real, and the problems banner (see Health).
 - **3D scene:** the schematic skeleton driven by the commanded head pan and tilt, the
   waist drive arrow and the jaw. These are commands, not measured positions, and the
   scene says so. View buttons: orbit, behind the head, side, top. The ZED's point cloud
@@ -49,7 +49,15 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 - **Motor tests:** the strip card shows the running or last test and the net waist travel,
   with Open and Stop; Stop works with the panel closed. Open docks the motor test panel
   (`motor-test.js`) over the right of the 3D scene, so the skeleton stays in view. On a
-  phone the card opens in place.
+  phone the card opens in place. From the bot's checks the panel shows whether the servo
+  board (0x40) and the Motor HAT (0x60) answer, and after a servo test the command next to
+  the pulse the servo board reads back and the pulse that angle needs: when the chip has the
+  command and the servo did not move, look at the OE wire, the V+ servo power and the plug's
+  orientation; when it does not, the command never reached the chip. Angles stay commands:
+  the read-back is the chip's own register, not where the servo is. While a board is down
+  the controllers still run and record their commands, but nothing reaches it, so the
+  commands read "not sent" there and in the time series, the bot refuses that board's
+  tests with its message and fix, and the strip card shows the board's message, not "Ready".
 
 Click a video tile to enlarge it over the 3D scene; click it again or press Esc to return.
 
@@ -149,6 +157,44 @@ pixel looked up in the ZED's depth), drawn in orange; the dashboard does not com
 Without a face point newer than 0.5 s, the ray is a dashed 3 m direction through the frame's
 `ultraskelly.target` pixel, and the head following nobody hides it. Camera poses are nominal
 until the camera bracket gives them, and the waist angle is not measured.
+
+## Health
+
+The dashboard says what works, what does not and what to do about it (`health.js`). The bot
+checks each part this launch uses, the OAK camera and its models, the AI HAT+ (Hailo), the
+ZED camera, its IMU, the depth, the servo board at 0x40 and the Motor HAT at 0x60, and sends
+a `health` message (W4's format, docs/stream.md) on every change, every 2 s and to each
+viewer as it connects: each part's status (ok; degraded, working in part; missing; error;
+off, not used on purpose), a message, a hint in plain words, since when, and, for a part
+that fails because another does, which one. The dashboard shows them as the bot writes them,
+and adds what only it knows: whether the bot is reachable, whether its checks have
+stopped coming (none for 5 s while `robot_state` still comes), and whether its live
+readings are old (`diagnostics_time` more than 12 s behind, two missed checks: the
+readings say how old, and the motor tests show no read-back).
+
+- **Banner**, in the header: with every part well, a quiet "All hardware OK · 8 checks";
+  otherwise a red strip (amber when only degraded) with the number of problems and each one.
+  A part that fails because another does is not counted again: with both cameras unplugged,
+  the OAK and the ZED are two problems, and the ZED's IMU and the depth follow from the ZED.
+- **Health panel**, over the left of the 3D scene (at the top on a phone): one row per part
+  with its light, message, status word and since when, the part it follows from, its hint,
+  and when a part is back but the bot must restart to use it, why. Then the bot's live
+  readings: which I2C addresses answer, the servo board's read-back next to the pulse its
+  commanded angle needs, USB, the Hailo device, the Pi's rails and throttling, and the motor
+  watchdog. A row's tooltip gives the bot's detail for it. It opens by itself
+  when a new problem appears and folds away when all is well; the banner's button, the
+  panel's × and the nodes card's lights open and close it, and that choice holds until a
+  problem the page has not seen yet.
+- **Lights** on the nodes card, one per part.
+- **Every view that waits on a part says why**, from the same checks: the OAK tile, the ZED's
+  eyes, the heat map, the face card, the target row (no poses without the AI HAT+), the IMU
+  lanes and a note under the 3D scene's title each give the missing part's message and fix. A
+  feed that stops mid-run keeps its last picture, dimmed, with the reason over it; the 3D
+  scene, the time series and the motor tests keep working whatever is missing.
+
+A bot that sends no checks still gets a panel, from what `robot_state` says anyway: crashed
+or stopped nodes with their errors, and cameras without frames, with no fixes, since only the
+bot could write them.
 
 ## Faces and hands
 

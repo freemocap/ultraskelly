@@ -11,6 +11,10 @@
 <body class="dashboard">
 <header>
   <div class="brand"><span class="mark">U/S</span><h1>UltraSkelly <span>/ live</span></h1></div>
+  <div id="problems" class="problems" role="status" aria-live="polite">
+    <b id="problems-count">Waiting for the bot</b><span id="problems-summary"></span>
+    <button id="problems-toggle" aria-controls="health" aria-expanded="false">Checks</button>
+  </div>
   <div class="status">
     <span id="connection">Connecting…</span>
     <span id="state-rate" title="robot_state messages per second">—</span>
@@ -20,7 +24,7 @@
 <main class="layout">
   <section class="stage" aria-label="3D scene">
     <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
-    <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p></div>
+    <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p><p id="stage-note" class="stage-note" hidden></p></div>
     <div class="stage-foot">
       <div class="foot-left">
         <div class="layers" role="group" aria-label="Depth layers" title="The ZED's depth on the skeleton's head">
@@ -37,6 +41,12 @@
     <canvas aria-label="Enlarged camera view"></canvas>
     <div class="enlarged-bar"><span id="enlarged-label"></span><button id="enlarged-close" title="Back to the 3D scene (Esc)">Close</button></div>
   </div>
+  <aside id="health" class="drawer health" aria-label="Hardware checks" hidden>
+    <button id="health-close" class="drawer-close" title="Close the hardware checks" aria-label="Close the hardware checks">×</button>
+    <div class="section-title"><h2>Hardware</h2><span id="health-source"></span></div>
+    <ol id="health-rows" class="parts"></ol>
+    <section class="diagnostics" hidden><h3>Live readings <span id="health-readings-age" hidden></span></h3><dl id="health-diagnostics"></dl></section>
+  </aside>
   <aside id="motor-drawer" class="drawer" aria-label="Motor tests" hidden>
     <button id="motor-drawer-close" class="drawer-close" title="Close the motor tests" aria-label="Close the motor tests">×</button>
     <section id="motor-test" aria-label="Move one actuator at a time"></section>
@@ -45,7 +55,7 @@
     <section class="sensor oak" aria-label="Tracking camera">
       <div class="sensor-title"><h2>Tracking camera <span id="tracking-name">OAK</span></h2><span id="oak-rate" class="rate">—</span></div>
       <figure class="tile" data-camera="oak" data-label="Tracking camera (OAK)" title="Click to enlarge">
-        <canvas width="640" height="480" aria-label="OAK video with the poses found in each frame"></canvas>
+        <canvas width="640" height="480" aria-label="OAK video with the poses found in each frame"></canvas><p class="empty"><b>No OAK video yet</b><span></span></p>
       </figure>
       <div class="target-row">
         <span id="target-state" class="badge">No target</span>
@@ -57,9 +67,9 @@
     <section class="sensor zed" aria-label="Eyes and depth">
       <div class="sensor-title"><h2>Eyes and depth <span>ZED Mini</span></h2><span id="zed-rate" class="rate">—</span></div>
       <div class="tiles">
-        <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>Left eye</figcaption><p class="empty">No ZED video yet</p></figure>
-        <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>Right eye</figcaption><p class="empty">No ZED video yet</p></figure>
-        <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty">No depth yet</p></figure>
+        <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>Left eye</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
+        <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>Right eye</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
+        <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty"><b>No depth yet</b><span></span></p></figure>
         <section class="face-card" aria-label="The tracked face in 3D" title="The Pi's face locator: the OAK's target pixel found in the ZED's depth, in the head frame">
           <div class="face-head"><span>Face</span><span id="face-alignment" title="Which OAK-to-ZED alignment placed it: nominal until measured"></span></div>
           <div class="face-distance" id="face-distance">—</div>
@@ -85,6 +95,7 @@
     </section>
     <section class="card nodes">
       <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
+      <div id="health-lights" class="lamps" title="Hardware checks: click for details" hidden></div>
       <div id="nodes"></div>
       <dl id="rates"></dl>
     </section>

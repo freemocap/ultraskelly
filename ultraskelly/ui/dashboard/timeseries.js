@@ -43,6 +43,8 @@ export class TimeSeries {
     this.rings = new Map(LANES.map(lane => [lane.id, lane.traces.map(() => new Ring())]));
     this.now = null;   // Newest time seen, seconds on the Pi's clock
     this.dirty = true; this.drawnAt = -Infinity; this.timer = 0;
+    this.waiting = new Map();  // Lane id -> why it has no data, in place of the lane's own "Waiting for ..."
+    this.notes = new Map();    // Lane id -> a word after its title, such as "not sent" while its board is down
     new ResizeObserver(() => this.changed()).observe(canvas);
     clock.add(now => this.frame(now));
   }
@@ -50,6 +52,20 @@ export class TimeSeries {
   changed() {
     this.dirty = true;
     this.clock.changed();
+  }
+
+  // A word after a lane's title (the bot's checks, health.js), or null for none.
+  setNote(laneId, text) {
+    if ((this.notes.get(laneId) ?? null) === (text ?? null)) return;
+    if (text) this.notes.set(laneId, text); else this.notes.delete(laneId);
+    this.changed();
+  }
+
+  // Why a lane has no data (the bot's checks, health.js), or null for its own words.
+  setWaiting(laneId, text) {
+    if ((this.waiting.get(laneId) ?? null) === (text ?? null)) return;
+    if (text) this.waiting.set(laneId, text); else this.waiting.delete(laneId);
+    this.changed();
   }
 
   // values: one per trace of the lane, null or NaN for a gap.
@@ -111,6 +127,8 @@ export class TimeSeries {
     ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'middle';
     ctx.fillStyle = '#91a2a8'; ctx.fillText(lane.title, x, y + header / 2);
     let at = x + ctx.measureText(lane.title).width + 8;
+    const note = this.notes.get(lane.id);
+    if (note) { ctx.fillStyle = '#ff8f7f'; ctx.fillText(note, at, y + header / 2); at += ctx.measureText(note).width + 8; }
     ctx.font = '11px ui-monospace, monospace';
     lane.traces.forEach(([name, color], i) => {
       const value = rings[i].last(), text = `${name} ${Number.isFinite(value) ? value.toFixed(lane.digits) + lane.unit : '—'}`;
@@ -135,7 +153,8 @@ export class TimeSeries {
     ctx.stroke();
     ctx.fillStyle = '#5d6f76'; ctx.font = '10px ui-monospace, monospace';
     if (plotH > 24) { ctx.fillText(hi.toFixed(lane.digits), x + 3, top + 7); ctx.fillText(lo.toFixed(lane.digits), x + 3, top + plotH - 6); }
-    if (!any && lane.waiting) { ctx.fillText(lane.waiting, x + w / 2 - ctx.measureText(lane.waiting).width / 2, top + plotH / 2); return; }
+    const waiting = this.waiting.get(lane.id) ?? lane.waiting;
+    if (!any && waiting) { ctx.fillText(waiting, x + w / 2 - ctx.measureText(waiting).width / 2, top + plotH / 2); return; }
     // Traces, decimated to the pixel columns; a NaN leaves a gap.
     lane.traces.forEach(([, color], i) => {
       ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();

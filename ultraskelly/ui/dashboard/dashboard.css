@@ -38,6 +38,50 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .drawer{grid-area:stage;z-index:2;justify-self:end;align-self:start;position:relative;margin:8px;width:clamp(280px,27%,340px);max-height:calc(100% - 16px);
   overflow:auto;padding:10px 12px;background:var(--panel);border:1px solid #3c4c54;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.45)}
 .dashboard .drawer>section{border:0;padding:0;background:none}
+/* Problems banner, in the header: a quiet line while all is well, a red strip with each problem when not. */
+.dashboard .problems{flex:1;min-width:0;display:flex;align-items:center;gap:8px;margin:0 14px;padding:3px 4px 3px 10px;border:1px solid transparent;
+  border-radius:4px;font-size:12px;color:var(--muted)}
+.dashboard .problems b{font-weight:600;white-space:nowrap;flex:none}
+.dashboard .problems span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.dashboard .problems button{margin-left:auto;flex:none;font-size:11px;padding:1px 9px}
+.dashboard .problems.ok b{color:var(--accent)}
+.dashboard .problems.warn{background:#3d3214;border-color:#8a6a1f;color:#ffe2a0}
+.dashboard .problems.bad{background:#521d1b;border-color:#b2453c;color:#ffe1dc;font-size:13px}
+.dashboard .problems.bad b{color:#fff}
+/* The health panel opens over the left of the 3D scene; the motor tests open on the right. */
+.dashboard .drawer.health{justify-self:start;width:clamp(320px,38%,470px)}
+.dashboard .parts{list-style:none;margin:0;padding:0;display:grid;gap:5px}
+.dashboard .part{display:grid;grid-template-columns:10px minmax(0,1fr) auto;
+  grid-template-areas:"light name since" ". message message" ". because because" ". fix fix" ". restart restart";
+  column-gap:8px;row-gap:1px;padding:5px 8px;border:1px solid var(--line);border-radius:5px;background:#10171b}
+.dashboard .part .light{grid-area:light;width:10px;height:10px;border-radius:50%;align-self:center;background:#5d6f76}
+.dashboard .part b{grid-area:name;font-size:12px;font-weight:600}
+.dashboard .part .since{grid-area:since;font:10px ui-monospace,monospace;color:var(--muted);align-self:center}
+.dashboard .part .message{grid-area:message;font-size:12px}
+.dashboard .part .fix{grid-area:fix;font-size:11.5px;color:#ffd58a}
+.dashboard .part .fix::before{content:"Fix: ";color:var(--muted)}
+.dashboard .part.ok .fix,.dashboard .part.off .fix{color:var(--muted)}  /* A note on a part that is well or not used */
+.dashboard .part.ok .fix::before,.dashboard .part.off .fix::before{content:none}
+.dashboard .part .because{grid-area:because;font-size:11px;color:var(--muted)}
+.dashboard .part .restart{grid-area:restart;font-size:11px;color:#ffb4a8}
+.dashboard .part.ok .message,.dashboard .part.off .message{color:var(--muted)}
+.dashboard .part.fail{border-color:#6b2a26}.dashboard .part.warn{border-color:#6b5622}
+.dashboard .ok>.light,.dashboard .lamp.ok i{background:#3fb950}.dashboard .warn>.light,.dashboard .lamp.warn i{background:#d29922}
+.dashboard .fail>.light,.dashboard .lamp.fail i{background:#f85149}.dashboard .off>.light,.dashboard .lamp.off i{background:#39444a}
+.dashboard .diagnostics h3{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 4px}
+.dashboard .diagnostics h3 span{margin-left:4px;color:var(--orange);text-transform:none;letter-spacing:0}  /* Old readings */
+.dashboard .diagnostics dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 8px;margin:0;font-size:11px}
+.dashboard .diagnostics dt{color:var(--muted);white-space:nowrap}.dashboard .diagnostics dd{margin:0;font-family:ui-monospace,monospace}
+/* The nodes card's status lights, one per checked part: a click opens the health panel. */
+.dashboard .lamps{display:flex;flex-wrap:wrap;gap:3px 9px;font:10px ui-monospace,monospace;color:var(--muted);cursor:pointer;flex:none}
+.dashboard .lamp{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.dashboard .lamp i{width:7px;height:7px;border-radius:50%;background:#5d6f76}
+/* The motor tests' boards and a servo test's read-back. */
+.dashboard .motor-test-boards{display:flex;flex-wrap:wrap;gap:3px 12px;margin:0 0 8px;font-size:11px}
+.dashboard .motor-test-boards .lamp{white-space:normal}
+.dashboard .motor-test-readback{display:grid;gap:2px;margin:8px 0 0;padding:6px 8px;border:1px solid var(--line);border-radius:5px;font-size:11px;line-height:1.4}
+.dashboard .motor-test-readback.done{border-color:#2f5d3a}.dashboard .motor-test-readback.refused{border-color:#6b2a26}
+.dashboard .motor-test-readback .advice{color:#ffd58a}.dashboard .motor-test-readback .advice:empty{display:none}
 .dashboard .drawer-close{position:absolute;top:6px;right:8px;padding:1px 8px;font-size:15px;line-height:1.2}
 .dashboard [hidden]{display:none !important}
 
@@ -54,8 +98,14 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .tiles .tile{aspect-ratio:16/9}
 .dashboard .tile canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .dashboard .tile figcaption{position:absolute;left:6px;top:4px;font-size:11px;color:#e4e7df;text-shadow:0 1px 2px #000;pointer-events:none}
-.dashboard .tile .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;margin:0;font-size:11px;color:var(--muted);pointer-events:none}
+.dashboard .tile .empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;margin:0;
+  padding:0 12px;text-align:center;font-size:11px;color:var(--muted);pointer-events:none}
+.dashboard .tile .empty b{font-weight:500}.dashboard .tile .empty span{font-size:10.5px;color:#ffd58a}.dashboard .tile .empty span:empty{display:none}
+.dashboard .tile.down .empty b{color:#ffb4a8}
+.dashboard .tile[data-camera=oak] .empty{justify-content:flex-end;padding-bottom:16px}  /* Below the aim point and jaw zone */
 .dashboard .tile.live .empty{display:none}
+.dashboard .tile.stale .empty{display:flex;background:rgba(11,19,24,.62)}  /* Why, over the dimmed last frame */
+.dashboard .stage-note{margin:3px 0 0;font-size:11px;color:#ffd58a}
 .dashboard .tile.stale canvas{opacity:.35}
 .dashboard .target-row{height:24px;display:flex;align-items:center;gap:10px;font:12px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden}
 .dashboard .target-row>*{flex:none}  /* Keep each item whole; the row clips its least important ones at the end */
@@ -112,8 +162,9 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .motor-test-inputs{text-align:left;font-size:11px;color:var(--muted)}
 .motor-test-inputs input[type=number]{display:inline-block;width:62px;height:24px;margin:0 4px}
 .motor-test-value{font:12px ui-monospace,monospace;color:var(--accent)}
-.motor-test-foot{display:flex;align-items:center;gap:8px;margin-top:8px}
-.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.35}
+.motor-test-foot{display:flex;align-items:baseline;gap:8px;margin-top:8px}
+.motor-test-foot .motor-test-stop{flex:none}  /* A long refusal wraps beside it, never under it */
+.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.35;min-width:0}
 .motor-test-result.done{color:var(--accent)}.motor-test-result.refused{color:var(--orange)}
 .dashboard .drawer .section-title{margin:0 32px 6px 0}
 .dashboard .drawer .section-title>span{font-size:10px}
@@ -132,6 +183,10 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
   .dashboard .card{overflow:visible}
   .dashboard .series{order:3;height:300px}.dashboard .tests{order:4}.dashboard .drawer{order:5}.dashboard .nodes{order:6}
   .dashboard .drawer{width:auto;max-height:none;margin:0;box-shadow:none;align-self:stretch}
+  .dashboard .drawer.health{width:auto;order:0}
+  /* The banner takes its own line under the title */
+  .dashboard header{flex-wrap:wrap;height:auto;row-gap:4px;padding-top:4px;padding-bottom:5px}
+  .dashboard .problems{order:3;flex:1 1 100%;margin:0;font-size:11px}.dashboard .problems.bad{font-size:12px}
   .dashboard .stage-foot .hint{display:none}
   .dashboard .status .pill{display:inline}  /* Real or simulated motors stays visible; the message rate gives way */
   .dashboard #state-rate{display:none}

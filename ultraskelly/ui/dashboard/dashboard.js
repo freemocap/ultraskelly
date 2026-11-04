@@ -3,13 +3,14 @@
 // FreeMoCap `frame` messages carry camera JPEGs with the poses found in that very image. Everything the
 // page shows changes in one frame per tracking-camera frame (frameclock.js).
 import { TransportService } from '/vendor/freemocap-client.js';
-import { MotorTestPanel } from '/motor-test.js';
+import { MotorTestPanel, down as boardDown } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
+import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -65,6 +66,7 @@ addEventListener('keydown', event => {
 function showTestStatus(text, kind = '') {
   setText($('tests-status'), text);
   setProperty($('tests-status'), 'className', `tests-status ${kind}`);
+  setProperty($('tests-status'), 'title', text);  // The whole text where two lines cut it
 }
 let stopNotice = null;  // The Stop button's answer, shown for a few seconds over the test status
 $('tests-stop').onclick = async () => {
@@ -78,14 +80,17 @@ $('tests-stop').onclick = async () => {
     notice(`No answer from the robot: ${problem.message}`, 'refused');
   }
 };
-function showTests(state) {
+function showTests(state, model) {
   const test = state.motor_test;
   setProperty($('tests-open'), 'hidden', !test); setProperty($('tests-stop'), 'hidden', !test);
   if (!test) { setText($('tests-travel'), ''); showTestStatus('Not available in this run'); return; }
   setText($('tests-travel'), `waist ${signed(test.waist_travel)}`);
+  // Not "Ready" while a board does not answer: the bot refuses that board's tests, so say why in its words.
+  const boards = ['servo_board', 'motor_board'].map(id => boardDown(model, id)).filter(Boolean);
   if (stopNotice && performance.now() < stopNotice.until && !test.running) showTestStatus(stopNotice.text, stopNotice.kind);
   else if (!test.enabled) showTestStatus('Turned off in the launch configuration');
   else if (test.running) showTestStatus(`Running: ${test.running.description}`);
+  else if (boards.length) showTestStatus(boards.map(part => part.message || `${part.name}: ${part.word}`).join(' · '), 'refused');
   else if (test.last) {
     const outcome = test.last.outcome;
     showTestStatus(`${outcome[0].toUpperCase()}${outcome.slice(1)}: ${test.last.description}`, outcome === 'done' ? 'done' : 'refused');
@@ -121,6 +126,24 @@ function placeFace(state) {
   facePoint = faceFresh(state.face) ? state.face.position_head : null;
   scene?.gaze.update(gazeTarget, facePoint);
 }
+// Every view that waits on a part says why it is empty and what to do, from the bot's checks (health.js); with
+// the part well, the view's own words.
+let reasons = {};
+function explainParts(model, state) {
+  const why = id => reasonOf(model, id), zed = why('zed_camera'), imu = why('zed_imu');
+  // The bot's depth check speaks for itself; without one, the ZED camera's problem is the depth's too.
+  const found = why('depth'), depth = found ?? (zed && {message: `No depth: ${zed.message}`, fix: zed.fix});
+  reasons = {oak: why('oak_camera'), zed, depth, hailo: why('hailo')};
+  tiles.explain('oak', reasons.oak, hasTarget(state) ? 'No video: target position only' : null);
+  tiles.explain('zed_left', zed); tiles.explain('zed_right', zed);
+  tiles.explain('depth_heat', depth);
+  for (const lane of ['accel', 'gyro']) series.setWaiting(lane, imu?.message ?? null);
+  setText($('stage-note'), depth?.message ?? ''); setProperty($('stage-note'), 'hidden', !depth);
+  // While a board is down the controllers still run and record their commands, but nothing reaches it.
+  series.setNote('head', why('servo_board') ? 'not sent' : null);
+  series.setNote('drive', why('motor_board') ? 'not sent' : null);
+}
+
 function showFace(state) {
   const face = state.face, fresh = faceFresh(face);
   const nominal = face?.alignment === 'nominal' ? ' (nominal)' : '';
@@ -130,6 +153,7 @@ function showFace(state) {
   setText($('face-alignment'), face?.alignment ?? '');
   const [x, y, z] = facePoint ?? [];
   setText($('face-position'), fresh ? `${metres(x)} fwd · ${metres(y)} left · ${metres(z)} up`
+    : reasons.depth ? reasons.depth.message : reasons.oak ? `No OAK target: ${reasons.oak.message}`
     : !face ? 'No face locator in this run' : 'No face located');
   setText($('face-foot'), fresh && face.pixel ? `from OAK pixel ${face.pixel.map(Math.round).join(', ')} · ${ago(face.age)} old` : '');
 }
@@ -138,7 +162,8 @@ function showTarget(state) {
   const seen = hasTarget(state), target = state.target, servo = state.servo_state;
   setText($('target-state'), seen ? 'Tracking' : 'No target');
   $('target-state').classList.toggle('tracking', seen);
-  setText($('target-pixel'), seen ? `${target.x}, ${target.y} px` : '—');
+  // Without the AI HAT+ there are no poses, so no target: say so.
+  setText($('target-pixel'), seen ? `${target.x}, ${target.y} px` : reasons.hailo ? `no poses: ${reasons.hailo.message}` : '—');
   setText($('target-angle'), seen && target.angle != null ? `body ${target.angle.toFixed(0)}°` : '');
   // The head reports the target inside its jaw zone on both axes: the condition for opening the jaw.
   setText($('target-lock'), seen && servo ? (servo.locked_x && servo.locked_y ? 'in jaw zone' : 'outside jaw zone') : '');
@@ -223,8 +248,15 @@ const Imu = {parse(message) {  // docs/stream.md
   }
   return message;
 }};
+const Health = {parse(message) {  // docs/stream.md: the bot's hardware checks
+  if (!Array.isArray(message?.components)) throw new Error('health without components');
+  return message;
+}};
 const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`,
-                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu}});
+                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu, health: Health}});
+// The bot's newest hardware checks: on every change, every 2 s, and to each viewer as it connects.
+let latestHealth = null, healthAt = 0;
+stream.subscribeToKind('health', report => { latestHealth = report; healthAt = performance.now(); clock.changed(); });
 const depth = new DepthViews({tiles, layer: scene?.depth ?? null, clock,
                               legend: {near: $('depth-near'), ramp: $('depth-ramp'), far: $('depth-far'), info: $('depth-info')}});
 stream.subscribeToKind('depth_frame', frame => depth.handle(frame));
@@ -241,14 +273,22 @@ stream.subscribeToKind('robot_state', state => {
   clock.changed();
 });
 // The readouts' part of the page's frame: the newest robot_state's text, once per state.
+// What works and what does not (health.js): the banner in the header, the panel over the left of the 3D scene,
+// the nodes card's lights.
+const health = new HealthView({banner: $('problems'), count: $('problems-count'), summary: $('problems-summary'),
+                               toggle: $('problems-toggle'), panel: $('health'), close: $('health-close'), rows: $('health-rows'),
+                               lights: $('health-lights'), diagnostics: $('health-diagnostics'), source: $('health-source'),
+                               readingsAge: $('health-readings-age')});
 let stateShown = null;
 clock.add(() => {
   const state = latestState;
   if (!state || state === stateShown) return false;
   stateShown = state;
   tiles.showTargetWithoutVideo(state);
-  showMode(state); showTarget(state); showFace(state); showTests(state);
-  motorTest.update(state);
+  health.update(healthOf(state, latestHealth));
+  explainParts(health.model, state);
+  showMode(state); showTarget(state); showFace(state); showTests(state, health.model);
+  motorTest.update(state, health.model);
   return false;
 });
 // The ZED IMU's batches (docs/stream.md), in its sensor axes. The bytes are copied out of the decoder's
@@ -322,15 +362,29 @@ function sendViews() {
 tiles.onChange = sendViews;
 document.addEventListener('visibilitychange', sendViews);
 addEventListener('resize', sendViews);
-stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
+stream.on('close', () => {
+  $('connection').textContent = '○ Reconnecting…';
+  health.setOwn('link', {text: 'Lost the connection to the bot, reconnecting', status: 'fail'});
+});
 stream.connect();
-window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness, frame rates, node health and message rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
 setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
   if (lastSnapshotAt) setText($('connection'), stale ? '○ No data' : '● Live');
+  // The dashboard's own check: whether the bot is sending anything at all.
+  if (stream.getState() === 'CONNECTED') {
+    health.setOwn('link', lastSnapshotAt && stale ? {text: `No data from the bot for ${ago(age)}`, status: 'fail'} : null);
+    // Checks that stop coming while robot_state still does are stale: say so rather than show old ones as now.
+    const checksAge = (performance.now() - healthAt) / 1000;
+    health.setOwn('checks', latestHealth && !stale && checksAge > STALE_S ? {text: `No hardware checks from the bot for ${Math.round(checksAge)} s`, status: 'warn'} : null);
+    // Checks that still come, but whose live readings stopped: the bot keeps sending its last ones (diagnostics_time).
+    health.setOwn('readings', latestHealth && !stale && checksAge <= STALE_S && readingsStale(health.model)
+      ? {text: `The bot's live checks stopped: readings ${Math.round(health.model.diagnosticsAge)} s old`, status: 'warn'} : null);
+  }
+  health.renderSince();
   setText($('state-rate'), `${snapshotsThisSecond}/s`); snapshotsThisSecond = 0;
   setProperty($('connection'), 'title', lastSnapshotAt ? `Newest robot_state ${ago(age)} ago` : '');
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
