@@ -330,6 +330,19 @@ def test_the_oak_models_report_what_is_downloaded_while_the_oak_is_out(tmp_path)
     assert off.health.get("oak_models").status == Status.OFF
 
 
+def test_oak_models_fetched_while_the_bot_runs_are_seen(tmp_path, monkeypatch):
+    launcher = start(Robot(oak=False), tmp_path)  # The test's model cache is empty
+    monkeypatch.setattr(bot_launcher, "missing_models", lambda cache: {})  # Fetched meanwhile
+    launcher._report_oak_models()
+    assert launcher.health.get("oak_models").status == Status.MISSING  # The cache is read again only now and then
+
+    monkeypatch.setattr(bot_launcher, "MODELS_RECHECK", 0.0)
+    launcher._report_oak_models()
+    models = launcher.health.get("oak_models")
+    assert (models.status, models.message, models.because) == (
+        Status.DEGRADED, "Downloaded; they run once the OAK streams", "oak_camera")
+
+
 @pytest.fixture
 def quick(monkeypatch):
     """Check health every 20 ms, a camera counts as streaming within 0.2 s of its last data."""

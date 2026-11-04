@@ -94,6 +94,7 @@ RECOVERY_INTERVAL = 5.0  # Seconds between looks for parts to bring back
 RETRY_LIMIT = 300.0  # The longest wait, in seconds, between tries at a part that is there but fails to start
 STEADY_SECONDS = 60.0  # How long a part brought back must run before its waits start over
 BOARD_MISSES = 2  # Checks in a row a board the bot drives must miss before it counts as gone
+MODELS_RECHECK = 30.0  # Seconds between reads of the OAK model cache while the OAK is out
 OAK_FEED = "oak"  # The dashboard's name for the OAK's camera
 
 
@@ -225,8 +226,9 @@ class BotLauncher(BaseModel):
     # The OAK's node while there is one, and when it was made
     oak: SkipValidation[OakCameraNode | None] = Field(default=None, exclude=True)
     oak_started: float = Field(default=0.0, exclude=True)
-    # The OAK models not downloaded, read once while the OAK is out (with it, the OAK says)
+    # The OAK models not downloaded, read every MODELS_RECHECK seconds while the OAK is out (with it, the OAK says)
     models_missing: dict[str, str] | None = Field(default=None, exclude=True)
+    models_checked_at: float = Field(default=float("-inf"), exclude=True)
     # Each part's node, the newest when one was brought back; every task's node
     parts: SkipValidation[dict[str, Node]] = Field(default_factory=dict, exclude=True)
     task_nodes: SkipValidation[dict[asyncio.Task, Node]] = Field(default_factory=dict, exclude=True)
@@ -475,21 +477,22 @@ class BotLauncher(BaseModel):
         if models is None:
             self.health.report("oak_models", Status.OFF, "Turned off (--no-oak-models)")
             return
-        fetch = ("Run .venv/bin/python -m scripts.fetch_oak_models with the internet on (scripts/setup-pi.sh does "
-                 "it too), then restart the bot.")
+        fetch = "Run .venv/bin/python -m scripts.fetch_oak_models with the internet on (scripts/setup-pi.sh does it too)"
         if self.oak is not None and self.health.ok("oak_camera"):
-            if self.oak.models_error:
-                self.health.report("oak_models", Status.MISSING, self.oak.models_error, fetch)
+            if self.oak.models_error:  # This OAK started without them: it loads them when it starts again
+                self.health.report("oak_models", Status.MISSING, self.oak.models_error,
+                                   f"{fetch}, then unplug the OAK and plug it back in, or restart the bot.")
             elif self._streaming("oak_camera"):
                 self.health.report("oak_models", Status.OK, "Running on the OAK's chip")
             else:
                 self.health.report("oak_models", Status.DEGRADED, "Loaded on the OAK; waiting for its frames",
                                    None, "oak_camera")
             return
-        if self.models_missing is None:
-            self.models_missing = missing_models(models.model_cache)
+        if time.monotonic() - self.models_checked_at >= MODELS_RECHECK:  # Fetched meanwhile, or gone
+            self.models_missing, self.models_checked_at = missing_models(models.model_cache), time.monotonic()
         if self.models_missing:
-            self.health.report("oak_models", Status.MISSING, f"Not downloaded: {', '.join(self.models_missing)}", fetch)
+            self.health.report("oak_models", Status.MISSING, f"Not downloaded: {', '.join(self.models_missing)}",
+                               f"{fetch}; the OAK loads them once it is plugged in.")
         else:
             self.health.report("oak_models", Status.DEGRADED, "Downloaded; they run once the OAK streams",
                                None, "oak_camera")

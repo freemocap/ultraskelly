@@ -650,7 +650,10 @@ status follow it, and the stall monitor watches its stream only after it has del
 Each part is made in a worker thread, so the motors' control loop and its watchdog run on
 while an OAK boots, which takes seconds. A part that is there but fails to start, or stops
 again within a minute of starting, is tried again after 5 s, then after waits that double
-up to 5 minutes. The OAK is no longer searched for when USB lists no 03e7 device: on the
+up to 5 minutes. While the OAK is out, its model cache is read again every 30 s, so models
+fetched meanwhile show as downloaded without a restart (on 2026-11-04 the face_landmarks
+folder had gone from the cache although its depthai lock file remained, and fetching it
+again fixed it). The OAK is no longer searched for when USB lists no 03e7 device: on the
 robot that search added 11.6 s to every start. While a camera or the IMU stays away, its
 warnings fade: the first failure is logged, then one after waits that double from 30 s to
 10 minutes, and a line when it works again; the health messages carry its state the whole
