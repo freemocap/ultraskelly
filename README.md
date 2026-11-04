@@ -110,7 +110,9 @@ available. Both center the head when they start; the full-power jaw test runs on
 `LaunchConfig.limits` before it reaches a board.
 It starts with whatever hardware works: a missing camera, Hailo-8 or motor board is
 reported on the dashboard with how to fix it, and the rest runs. A missing board's
-actuators record their commands and send nothing. Add `--simulate-motors` to run the
+actuators record their commands and send nothing. Cameras and the Hailo-8 are picked up
+within seconds of appearing; a motor board that answers after the start is reported with a
+restart to use it, since the boards are set up only at startup. Add `--simulate-motors` to run the
 cameras and controllers while recording motor commands in memory instead of driving the
 motor boards. Add `--window` to also show the
 camera in an OpenCV window, which needs a graphical session; `--no-window` is accepted

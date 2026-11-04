@@ -3,6 +3,8 @@ launcher, controllers and server, on fake parts that are present, missing or fai
 import asyncio
 import socket
 import struct
+import threading
+import time
 import types
 
 import numpy as np
@@ -116,16 +118,21 @@ class Robot:
     """Which parts are plugged in, as factories and probes for the launcher."""
 
     def __init__(self, *, oak=True, hailo=True, zed=True, imu=True, servo_board=True, motor_board=True,
-                 usb=None, oak_fails=False, oak_options=None, zed_opens_after=None):
+                 usb=None, oak_fails=False, oak_options=None, zed_opens_after=None, hailo_fails=0):
         self.usb = set(usb) if usb is not None else (
             ({OAK_USB} if oak or oak_fails else set()) | ({ZED_VIDEO_USB, ZED_HID_USB} if zed else set()))
         self.oak, self.hailo, self.zed, self.imu = oak, hailo, zed, imu
         self.servo_board, self.motor_board, self.oak_fails = servo_board, motor_board, oak_fails
         self.oak_options, self.zed_opens_after = oak_options or {}, zed_opens_after
         self.servo_kit, self.motor_kit = ServoKit(), MotorKit()
+        self.opened = []  # The OAK and Hailo-8 factories called, in order
+        self.oak_threads = []  # Where each OAK was made: the main thread, or a worker
+        self.hailo_fails = hailo_fails  # Opens of a Hailo-8 that is there that fail first, as when another program holds it
 
     def hardware(self) -> Hardware:
         def oak_camera(*, pubsub, params):
+            self.opened.append("oak_camera")
+            self.oak_threads.append("main" if threading.current_thread() is threading.main_thread() else "worker")
             if self.oak_fails:
                 raise RuntimeError("X_LINK_DEVICE_NOT_FOUND")
             if not self.oak:
@@ -133,8 +140,15 @@ class Robot:
             return FakeOak(pubsub=pubsub, **self.oak_options)
 
         def hailo_pose(*, pubsub, params):
-            if not self.hailo:
+            self.opened.append("hailo")
+            if not self.hailo or self.hailo_fails > 0:
+                self.hailo_fails -= 1
                 raise RuntimeError("HAILO_OUT_OF_PHYSICAL_DEVICES")
+            return Idle(pubsub=pubsub)
+
+        def stereo_depth(*, pubsub, params, eye_size):
+            if ZED_VIDEO_USB not in self.usb:  # Its calibration is found by the camera's serial number
+                raise RuntimeError("The ZED reports no serial number, so its calibration file is unknown")
             return Idle(pubsub=pubsub)
 
         def zed_camera(*, pubsub, params, wait=False):
@@ -160,7 +174,7 @@ class Robot:
 
         return Hardware(
             oak_camera=oak_camera, hailo_pose=hailo_pose, zed_camera=zed_camera, zed_imu=zed_imu,
-            stereo_depth=lambda *, pubsub, params, eye_size: Idle(pubsub=pubsub),
+            stereo_depth=stereo_depth,
             servo_board=servo_board, motor_board=motor_board,
             probes=Probes(usb=lambda: self.usb, hailo_device=lambda: self.hailo, i2c_bus=lambda: True),
             # The live checks find nothing to look at: these tests never touch a real bus or command
@@ -194,14 +208,16 @@ def test_with_nothing_plugged_in_the_bot_starts_and_says_what_is_missing(tmp_pat
 
     assert statuses(launcher) == {
         "oak_camera": "missing", "oak_models": "missing", "hailo": "missing", "zed_camera": "missing",
-        "zed_imu": "missing", "depth": "ok", "servo_board": "missing", "motor_board": "missing",
+        "zed_imu": "missing", "depth": "degraded", "servo_board": "missing", "motor_board": "missing",
     }
+    depth = launcher.health.get("depth")  # Its calibration comes from the camera: not "no serial number"
+    assert (depth.message, depth.because) == ("Starts once the ZED Mini streams", "zed_camera")
     oak, hailo = launcher.health.get("oak_camera"), launcher.health.get("hailo")
     assert oak.message == "No OAK on USB (no 03e7 device)" and "USB 3 port" in oak.hint
     assert "AI HAT+" in hailo.hint and "nothing is tracked" in hailo.hint
     assert "i2cdetect -y 1 should then show 40" in launcher.health.get("servo_board").hint
     names = [type(node).__name__ for node in launcher.nodes]
-    assert "FakeOak" not in names and names.count("Idle") == 1  # Depth only: no detector
+    assert "FakeOak" not in names and names.count("Idle") == 0  # No detector, and depth waits for the ZED
     assert "FakeZed" in names and "FakeImu" in names  # They wait for their device and pick it up
     assert {"OrientationNode", "MouthNode", "RuntimeServerNode", "StallMonitorNode"} <= set(names)
 
@@ -240,11 +256,43 @@ def test_a_zed_showing_only_its_imu_says_to_flip_its_plug(tmp_path):
 
 
 def test_an_oak_on_usb_that_fails_is_an_error_not_missing(tmp_path):
-    launcher = start(Robot(oak=False, oak_fails=True), tmp_path)
+    robot = Robot(oak=False, oak_fails=True)
+    launcher = start(robot, tmp_path)
 
     oak = launcher.health.get("oak_camera")
     assert oak.status == Status.ERROR and "X_LINK_DEVICE_NOT_FOUND" in oak.message
     assert oak.detail == {"error": "RuntimeError: X_LINK_DEVICE_NOT_FOUND"}
+    assert robot.opened == ["oak_camera", "hailo"]
+
+
+def test_an_oak_or_hailo_that_is_not_there_is_not_searched_for(tmp_path):
+    robot = Robot(oak=False, hailo=False)  # depthai would search USB for 11 s before giving up
+    launcher = start(robot, tmp_path)
+
+    assert robot.opened == []
+    assert launcher.health.get("oak_camera").message == "No OAK on USB (no 03e7 device)"
+    assert launcher.health.get("hailo").message == "No Hailo-8 (no /dev/hailo0)"
+
+
+def test_parts_that_wait_for_another_name_it(tmp_path, quick, monkeypatch):
+    monkeypatch.setattr(bot_launcher, "missing_models", lambda cache: {})  # Every OAK model downloaded
+    launcher = start(Robot(oak=False, zed=False, imu=False), tmp_path)  # The Hailo-8 in, the OAK and ZED out
+
+    async def scenario():
+        task = await run_for(launcher, 0.4)
+        found = {component["id"]: component for component in launcher.health.snapshot()}
+        await stop(launcher, task)
+        return found
+
+    found = asyncio.run(scenario())
+    because = {name: (part["status"], part["because"]) for name, part in found.items()}
+    assert because == {
+        "oak_camera": ("missing", None), "oak_models": ("degraded", "oak_camera"), "hailo": ("degraded", "oak_camera"),
+        "zed_camera": ("missing", None), "zed_imu": ("missing", "zed_camera"), "depth": ("degraded", "zed_camera"),
+        "servo_board": ("ok", None), "motor_board": ("ok", None),
+    }
+    assert found["zed_imu"]["hint"] is None and found["depth"]["hint"] is None  # The ZED's own hint applies
+    assert found["hailo"]["message"] == "Waiting for the OAK camera's frames"
 
 
 def test_stereonet_without_the_hailo_reports_depth_missing(tmp_path):
@@ -261,6 +309,7 @@ def test_stereonet_without_the_hailo_reports_depth_missing(tmp_path):
 
     depth = launcher.health.get("depth")
     assert depth.status == Status.MISSING and "--depth, which computes depth on the CPU" in depth.hint
+    assert depth.because == "hailo"
 
 
 def test_simulated_motors_are_reported_off_and_not_opened(tmp_path):
@@ -286,6 +335,7 @@ def quick(monkeypatch):
     """Check health every 20 ms, a camera counts as streaming within 0.2 s of its last data."""
     monkeypatch.setattr(bot_launcher, "HEALTH_INTERVAL", 0.02)
     monkeypatch.setattr(bot_launcher, "STREAMING_WINDOW", 0.2)
+    monkeypatch.setattr(bot_launcher, "RECOVERY_INTERVAL", 0.05)
 
 
 def fast_stalls(launcher: BotLauncher) -> StallMonitorNode:
@@ -341,7 +391,107 @@ def test_a_zed_plugged_in_later_is_picked_up(tmp_path, quick):
 
     before, (zed, depth) = asyncio.run(scenario())
     assert before == Status.MISSING
-    assert zed.status == Status.OK and zed.message == "Streaming both eyes" and depth.status == Status.OK
+    assert zed.status == Status.OK and zed.message == "Streaming both eyes"
+    assert (depth.status, depth.message) == (Status.OK, "Depth from the ZED's eyes (sgbm)")  # Started once it streamed
+
+
+def test_an_oak_plugged_in_later_is_brought_back(tmp_path, quick):
+    robot = Robot(oak=False, oak_options={"assembler": "the OAK's models"})
+    launcher = start(robot, tmp_path)
+
+    async def scenario():
+        task = await run_for(launcher, 0.2)
+        before = launcher.health.get("oak_camera").status, launcher._oak_status()
+        robot.oak = True
+        robot.usb.add(OAK_USB)
+        await asyncio.sleep(0.5)
+        after = {name: launcher.health.get(name) for name in ("oak_camera", "hailo")}
+        seen = launcher._oak_status(), launcher.server.results_camera, [type(node).__name__ for node in launcher.nodes]
+        await stop(launcher, task)
+        return before, after, seen
+
+    (oak_before, status_before), after, (status, results_camera, names) = asyncio.run(scenario())
+    assert oak_before == Status.MISSING and status_before is None
+    assert (after["oak_camera"].status, after["oak_camera"].message) == (Status.OK, "Streaming")
+    assert after["hailo"].status == Status.OK and after["hailo"].because is None  # Frames to look at again
+    assert status == {"rates": {"frames": 30.0}} and results_camera == "oak"  # The dashboard follows the new OAK
+    assert names.count("FakeOak") == 1
+    assert robot.oak_threads == ["worker"]  # Made off the loop: the motors' control loop ran on meanwhile
+
+
+def test_an_oak_unplugged_and_plugged_back_comes_back_in_its_place(tmp_path, quick):
+    robot = Robot(oak_options={"crash_after": 0.3})
+    launcher = start(robot, tmp_path)
+
+    async def scenario():
+        task = await run_for(launcher, 0.2)
+        robot.usb.discard(OAK_USB)  # The cable comes out, and the OAK node stops with depthai's error
+        await asyncio.sleep(0.4)
+        gone = launcher.health.get("oak_camera").status
+        robot.oak_options = {}  # The next one runs until stopped
+        robot.usb.add(OAK_USB)
+        await asyncio.sleep(0.4)
+        back = launcher.health.get("oak_camera").status
+        states = [entry["state"] for entry in launcher.node_status() if entry["name"] == "FakeOak"]
+        await stop(launcher, task)
+        return gone, back, states
+
+    gone, back, states = asyncio.run(scenario())
+    assert gone == Status.MISSING and back == Status.OK
+    assert states == ["running"] and robot.opened.count("oak_camera") == 2  # Replaced, not added beside the old one
+
+
+def test_a_hailo_held_by_another_program_is_picked_up_once_free(tmp_path, quick):
+    robot = Robot(hailo_fails=2)
+    launcher = start(robot, tmp_path)
+    assert launcher.health.get("hailo").status == Status.ERROR  # /dev/hailo0 is there, so not missing
+
+    async def scenario():
+        task = await run_for(launcher, 0.8)
+        hailo = launcher.health.get("hailo")
+        await stop(launcher, task)
+        return hailo
+
+    hailo = asyncio.run(scenario())
+    assert (hailo.status, hailo.message) == (Status.OK, "Finds people in the OAK's frames")
+    assert robot.opened.count("hailo") == 3
+
+
+def test_an_oak_that_keeps_stopping_is_tried_less_and_less_often(tmp_path, quick):
+    robot = Robot(oak_options={"crash_after": 0.0})  # It opens, then stops at once, every time (a bad cable)
+    launcher = start(robot, tmp_path)
+
+    async def scenario():
+        task = await run_for(launcher, 1.0)
+        await stop(launcher, task)
+
+    asyncio.run(scenario())
+    # Without the waits: about 20 opens, one every 0.05 s. With them, 0.05 s doubling: 1 at startup and about 4 more
+    assert 3 <= robot.opened.count("oak_camera") <= 6
+    assert launcher.health.get("oak_camera").status == Status.ERROR  # On USB, but failing
+
+
+def test_a_part_that_fails_to_start_waits_longer_each_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot_launcher, "RECOVERY_INTERVAL", 5.0)
+    monkeypatch.setattr(bot_launcher, "RETRY_LIMIT", 30.0)
+    robot = Robot(hailo_fails=100)
+    launcher = start(robot, tmp_path)
+    revival = next(revival for revival in launcher.revivals if revival.component == "hailo")
+
+    async def tries() -> list[int]:
+        waits = []
+        for _ in range(5):
+            before = time.monotonic()
+            await launcher._revive(revival)
+            waits.append(round(revival.next_try - before))
+            revival.next_try = 0.0  # Due again at once
+        return waits
+
+    assert asyncio.run(tries()) == [5, 10, 20, 30, 30]
+    assert launcher.health.get("hailo").status == Status.ERROR
+    robot.hailo = False  # Gone: once it is back, it is tried at once
+    asyncio.run(launcher._revive(revival))
+    assert (revival.failures, revival.next_try) == (0, 0.0)
 
 
 def test_a_stream_that_freezes_while_its_camera_counts_as_working_still_restarts_the_bot(tmp_path, quick):
@@ -380,8 +530,8 @@ def test_health_goes_to_every_viewer(tmp_path):
     message = asyncio.run(scenario())
     components = {component["id"]: component for component in message["components"]}
     assert components["oak_camera"]["status"] == "missing" and components["hailo"]["status"] == "missing"
-    assert set(components["oak_camera"]) == {"id", "label", "group", "status", "message", "hint", "since",
-                                             "restart", "detail"}
+    assert set(components["oak_camera"]) == {"id", "label", "group", "status", "message", "hint", "because",
+                                             "since", "restart", "detail"}
     assert message["time"] >= components["oak_camera"]["since"]
 
 
