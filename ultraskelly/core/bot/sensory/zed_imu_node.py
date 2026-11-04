@@ -24,6 +24,7 @@ import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.sensory.fading_warning import FadingWarning
 from ultraskelly.core.bot.sensory.zed_imu_reader import HEADER, REPORT_SIZE
 from ultraskelly.core.pubsub.bot_topics import ImuMessage, ImuTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
@@ -237,19 +238,19 @@ class ZedImuNode(Node):
         """Map each read the reader sends and publish a batch every 1 / batch_hz seconds."""
         logger.info(f"Starting ZedImuNode [{self.params.batch_hz:g} batches a second]")
         published_at = reported_at = time.monotonic()
-        warned_at = float("-inf")
+        warnings = FadingWarning(logger, first=REPORT_SECONDS)  # Less and less often: the health panel shows it live
         try:
             while not self.stop_event.is_set():
                 try:
                     reader = await self.start_reader()
                 except OSError as error:
-                    if time.monotonic() - warned_at >= REPORT_SECONDS:
-                        logger.warning(f"Cannot read the ZED's IMU ({error}); trying every {REOPEN_SECONDS:g} s")
-                        warned_at = time.monotonic()
+                    warnings.warn(f"Cannot read the ZED's IMU ({error}); trying every {REOPEN_SECONDS:g} s")
                     await asyncio.sleep(REOPEN_SECONDS)
                     continue
                 try:
                     while not self.stop_event.is_set() and (read := await reader.read()) is not None:
+                        if warnings.failures:
+                            logger.info(f"Reading the ZED's IMU again after {warnings.worked()} failed tries")
                         self.gather(parse_reports(read[0]), read[1])
                         now = time.monotonic()
                         if now - published_at >= 1 / self.params.batch_hz:
@@ -264,9 +265,7 @@ class ZedImuNode(Node):
                 finally:
                     await reader.close()
                 if not self.stop_event.is_set():
-                    if time.monotonic() - warned_at >= REPORT_SECONDS:
-                        logger.warning(f"The ZED's IMU reader stopped; starting it again in {REOPEN_SECONDS:g} s")
-                        warned_at = time.monotonic()
+                    warnings.warn(f"The ZED's IMU reader stopped; starting it again in {REOPEN_SECONDS:g} s")
                     await asyncio.sleep(REOPEN_SECONDS)
         finally:
             logger.info(f"ZedImuNode stopped: {self.summary()}")

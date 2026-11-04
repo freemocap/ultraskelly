@@ -20,6 +20,7 @@ import numpy as np
 from pydantic import Field, SkipValidation, model_validator
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.sensory.fading_warning import FadingWarning
 from ultraskelly.core.pubsub.bot_topics import StereoFrameMessage, StereoFrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 VIDEO_DEVICES = Path("/sys/class/video4linux")
 REOPEN_SECONDS = 1.0  # Between attempts to reopen a camera that stopped streaming
-REPORT_SECONDS = 30.0  # At most one warning this often about dropped frames or failed reopening
+REPORT_SECONDS = 30.0  # At most one warning this often about dropped frames; the first wait between ones about reopening
 
 
 class ZedResolution(StrEnum):
@@ -246,17 +247,16 @@ class ZedCameraNode(Node):
                 self.source = None
 
     async def _reopen(self) -> None:
-        """Try to reopen the camera once a second until it streams or the node stops."""
-        attempts = 0
+        """Try to reopen the camera once a second until it streams or the node stops. Failures are
+        logged less and less often, since the dashboard's health panel shows the camera live."""
+        warnings = FadingWarning(logger, first=REPORT_SECONDS)
         while not self.stop_event.is_set():
             try:
                 self.source = await asyncio.to_thread(self.open_source)
-                logger.info(f"Reopened the ZED after {attempts} failed attempts")
+                logger.info(f"Reopened the ZED after {warnings.worked()} failed attempts")
                 return
             except Exception as error:
-                if attempts % round(REPORT_SECONDS / REOPEN_SECONDS) == 0:
-                    logger.warning(f"Could not reopen the ZED (attempt {attempts + 1}): {error}")
-                attempts += 1
+                warnings.warn(f"Could not reopen the ZED (attempt {warnings.failures + 1}): {error}")
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=REOPEN_SECONDS)
             except TimeoutError:

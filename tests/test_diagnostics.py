@@ -137,6 +137,19 @@ def test_the_servo_boards_readback_is_judged():
     assert judge_servo_board(None) is None
 
 
+def test_the_live_checks_say_when_they_ran():
+    from ultraskelly.core.bot.health import Health
+
+    now = [10.0]
+    health = Health(clock=lambda: now[0])
+    assert health.message(11.0)["diagnostics_time"] is None  # None yet
+    health.set_diagnostics({"i2c": {"available": False}})
+    version = health.version
+    now[0] = 15.0
+    health.set_diagnostics({"i2c": {"available": False}})  # The same readings, checked again
+    assert health.message(16.0)["diagnostics_time"] == 15.0 and health.version == version
+
+
 def power(throttled: str, supply: float = 5.113) -> dict:
     return {"available": True, **decode_throttled(f"throttled={throttled}"), "rails": {"EXT5V": supply}}
 

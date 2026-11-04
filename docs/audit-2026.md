@@ -651,7 +651,11 @@ Each part is made in a worker thread, so the motors' control loop and its watchd
 while an OAK boots, which takes seconds. A part that is there but fails to start, or stops
 again within a minute of starting, is tried again after 5 s, then after waits that double
 up to 5 minutes. The OAK is no longer searched for when USB lists no 03e7 device: on the
-robot that search added 11.6 s to every start.
+robot that search added 11.6 s to every start. While a camera or the IMU stays away, its
+warnings fade: the first failure is logged, then one after waits that double from 30 s to
+10 minutes, and a line when it works again; the health messages carry its state the whole
+time, and `diagnostics_time` says when the live checks last ran, so readings left by a
+failing check show as stale.
 
 The motor boards are not brought back live. The bot sets them up and centres the head only
 at startup, and the controllers, the motor watchdog and the dashboard's motor tests all
