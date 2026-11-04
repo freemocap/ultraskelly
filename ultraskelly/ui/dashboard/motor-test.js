@@ -1,8 +1,9 @@
 // Motor test panel: moves one actuator at a time through /api/motor-test. The bot applies the
 // test limits and pauses tracking during each test; every test is answered once it has
 // finished, been stopped or been refused, and the answer is shown here. From the bot's hardware
-// checks (robot_state.health) it shows whether each board answers and, after a servo test, the
-// command next to what the servo board reads back: angles are commands, not measured positions.
+// checks (the `health` message, as health.js reads it) it shows whether each board answers and,
+// after a servo test, the command next to what the servo board reads back: angles are commands,
+// not measured positions, and are labelled "not sent" while their board is down.
 import { setProperty, setText } from '/dom.js';
 
 const CENTER = 90;      // Degrees; the head's neutral angle
@@ -14,26 +15,29 @@ const element = (tag, properties = {}, ...children) => {
   return made;
 };
 const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
-const percent = duty => `${(duty * 100).toFixed(2)}%`;
-const BOARDS = [['servo_board', 'Servo board 0x40'], ['motor_hat', 'Motor HAT 0x60']];
-const SAME_DUTY = 0.0015;  // Read-back this close to the commanded angle's duty is the command: about 1.4 degrees
+const BOARDS = [['servo_board', 'Servo board 0x40'], ['motor_board', 'Motor HAT 0x60']];
+const SAME_US = 15;  // A read-back pulse this close to the one the commanded angle needs is the command: about 1.4 degrees
+const down = (model, id) => { const part = model?.components?.find(component => component.id === id); return part && (part.status === 'fail' || part.status === 'warn') ? part : null; };
 
-// What the servo board says about the last servo test's channel, from the bot's checks: [words, hint, kind], or null.
-function readbackOf(health, name) {
-  const board = health?.components?.find(part => part.id === 'servo_board'), channel = health?.servo_board?.channels?.[name];
-  if (board && (board.status === 'fail' || board.status === 'warn') && !channel) {
+// What the servo board says about the last servo test's channel, from the bot's checks (health.js's model): its
+// diagnostics.pca9685, pulse widths in microseconds. [words, hint, kind], or null when there is nothing to say.
+function readbackOf(model, name) {
+  const board = down(model, 'servo_board'), chip = model?.diagnostics?.pca9685, channel = chip?.channels?.[name];
+  if (board && channel?.pulse_us == null) {
     return [`${board.message || 'The servo board does not answer'}: the command went nowhere`, board.fix || '', 'refused'];
   }
-  if (!channel || channel.duty == null || channel.expected_duty == null) return null;
-  const servo = health.servo_board, angle = channel.commanded_deg == null ? 'the command' : `${Math.round(channel.commanded_deg)}°`;
-  const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${percent(channel.duty)}, ${angle} needs ${percent(channel.expected_duty)}`;
-  if (servo.awake === false) return [`${said}, but the chip is asleep, so it sends no pulses`, 'The bot wakes it when it starts the servos', 'refused'];
-  if (Math.abs(channel.duty - channel.expected_duty) > SAME_DUTY) {
+  if (channel?.pulse_us == null) return null;
+  const angle = channel.commanded == null ? 'the command' : `${Math.round(channel.commanded)}°`;
+  const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${Math.round(channel.pulse_us)} µs` +
+               (channel.expected_us == null ? '' : `, ${angle} needs ${Math.round(channel.expected_us)} µs`);
+  if (chip.awake === false) return [`${said}, but the chip is asleep, so it sends no pulses`, 'The bot wakes it when it starts the servos', 'refused'];
+  const moved = 'If it did not move: the OE wire (it must be low), V+ servo power on the board\'s terminal, the plug\'s orientation';
+  if (channel.expected_us == null) return [said, moved, ''];
+  if (Math.abs(channel.pulse_us - channel.expected_us) > SAME_US) {
     return [`${said}: the command did not reach the chip`, 'Check the I2C wires to the servo board (SDA, SCL, GND)', 'refused'];
   }
-  const rate = servo.frequency_hz != null && Math.abs(servo.frequency_hz - 50) > 5 ? ` at ${servo.frequency_hz.toFixed(0)} Hz, where servos want about 50` : '';
-  return [`${said}${rate}: the chip has the command`,
-          'If it did not move: the OE wire (it must be low), V+ servo power on the board\'s terminal, the plug\'s orientation', rate ? 'refused' : 'done'];
+  const rate = chip.frequency_hz != null && Math.abs(chip.frequency_hz - 50) > 5 ? ` at ${chip.frequency_hz.toFixed(0)} Hz, where servos want about 50` : '';
+  return [`${said}${rate}: the chip has the command`, moved, rate ? 'refused' : 'done'];
 }
 
 export class MotorTestPanel {
@@ -165,25 +169,27 @@ export class MotorTestPanel {
     }
   }
 
-  // From each robot_state: the commanded angles, net waist travel, and tests run from elsewhere.
-  update(state) {
+  // From each robot_state and the bot's checks (health.js's model): the commanded angles, net waist travel, tests run
+  // from elsewhere, each board's presence and the last servo test's read-back.
+  update(state, model) {
     if (!this.limits) return;
+    const servosDown = down(model, 'servo_board'), motorsDown = down(model, 'motor_board');
     for (const name of ['pan', 'tilt']) {
       const value = state.motors?.commands?.[name]?.value;
       this.commands[name] = value ?? undefined;
-      setText(this.shown[name], value == null ? '—' : `${value.toFixed(0)}°`);
+      setText(this.shown[name], value == null ? '—' : `${value.toFixed(0)}°${servosDown ? ' not sent' : ''}`);
     }
     const test = state.motor_test;
     if (test?.last?.angle != null && !this.running) this.lastServo = test.last.actuator;  // Also a test from another screen
-    if (!this.root.closest('[hidden]')) { this.showBoards(state.health); this.showReadback(state.health); }  // Only while open
+    if (!this.root.closest('[hidden]')) { this.showBoards(model); this.showReadback(model); }  // Only while open
     if (!test) return;
-    setText(this.travel, signed(test.waist_travel));
+    setText(this.travel, `${signed(test.waist_travel)}${motorsDown ? ' not sent' : ''}`);
     if (test.running && !this.running) this.show(`Running from another screen: ${test.running.description}`);
   }
 
   // Whether each board answers, from the bot's checks; nothing without them.
-  showBoards(health) {
-    const parts = BOARDS.map(([id, name]) => [health?.components?.find(part => part.id === id), name]).filter(([part]) => part);
+  showBoards(model) {
+    const parts = BOARDS.map(([id, name]) => [model?.checked ? model.components.find(part => part.id === id) : null, name]).filter(([part]) => part);
     setProperty(this.boards, 'hidden', !parts.length);
     if (this.boards.childElementCount !== parts.length) {
       this.boards.replaceChildren(...parts.map(() => element('span', {className: 'lamp'}, element('i'), document.createTextNode(''))));
@@ -197,8 +203,8 @@ export class MotorTestPanel {
   }
 
   // After a servo test, the command next to the chip's read-back, live, and where to look if the servo did not move.
-  showReadback(health) {
-    const said = this.lastServo ? readbackOf(health, this.lastServo) : null;
+  showReadback(model) {
+    const said = this.lastServo ? readbackOf(model, this.lastServo) : null;
     setProperty(this.readback, 'hidden', !said);
     if (!said) return;
     const [words, hint, kind] = said;

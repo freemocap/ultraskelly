@@ -10,7 +10,7 @@ import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
-import { HealthView, healthOf, reasonOf } from '/health.js';
+import { HealthView, STALE_S, healthOf, reasonOf } from '/health.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -126,13 +126,18 @@ function placeFace(state) {
 // the part well, the view's own words.
 let reasons = {};
 function explainParts(model, state) {
-  const why = id => reasonOf(model, id), zed = why('zed_video'), imu = why('zed_imu');
-  reasons = {oak: why('oak'), zed, hailo: why('hailo')};
+  const why = id => reasonOf(model, id), zed = why('zed_camera'), imu = why('zed_imu');
+  // The bot's depth check speaks for itself; without one, the ZED camera's problem is the depth's too.
+  const found = why('depth'), depth = found ?? (zed && {message: `No depth: ${zed.message}`, fix: zed.fix});
+  reasons = {oak: why('oak_camera'), zed, depth, hailo: why('hailo')};
   tiles.explain('oak', reasons.oak, hasTarget(state) ? 'No video: target position only' : null);
   tiles.explain('zed_left', zed); tiles.explain('zed_right', zed);
-  tiles.explain('depth_heat', zed && {message: `No depth: ${zed.message}`, fix: zed.fix});
+  tiles.explain('depth_heat', depth);
   for (const lane of ['accel', 'gyro']) series.setWaiting(lane, imu?.message ?? null);
-  setText($('stage-note'), zed ? `No depth on the head: ${zed.message}` : ''); setProperty($('stage-note'), 'hidden', !zed);
+  setText($('stage-note'), depth?.message ?? ''); setProperty($('stage-note'), 'hidden', !depth);
+  // While a board is down the controllers still run and record their commands, but nothing reaches it.
+  series.setNote('head', why('servo_board') ? 'not sent' : null);
+  series.setNote('drive', why('motor_board') ? 'not sent' : null);
 }
 
 function showFace(state) {
@@ -144,7 +149,7 @@ function showFace(state) {
   setText($('face-alignment'), face?.alignment ?? '');
   const [x, y, z] = facePoint ?? [];
   setText($('face-position'), fresh ? `${metres(x)} fwd · ${metres(y)} left · ${metres(z)} up`
-    : reasons.zed ? `No depth: ${reasons.zed.message}` : reasons.oak ? `No OAK target: ${reasons.oak.message}`
+    : reasons.depth ? reasons.depth.message : reasons.oak ? `No OAK target: ${reasons.oak.message}`
     : !face ? 'No face locator in this run' : 'No face located');
   setText($('face-foot'), fresh && face.pixel ? `from OAK pixel ${face.pixel.map(Math.round).join(', ')} · ${ago(face.age)} old` : '');
 }
@@ -239,8 +244,15 @@ const Imu = {parse(message) {  // docs/stream.md
   }
   return message;
 }};
+const Health = {parse(message) {  // docs/stream.md: the bot's hardware checks
+  if (!Array.isArray(message?.components)) throw new Error('health without components');
+  return message;
+}};
 const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`,
-                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu}});
+                                     kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu, health: Health}});
+// The bot's newest hardware checks: on every change, every 2 s, and to each viewer as it connects.
+let latestHealth = null, healthAt = 0;
+stream.subscribeToKind('health', report => { latestHealth = report; healthAt = performance.now(); clock.changed(); });
 const depth = new DepthViews({tiles, layer: scene?.depth ?? null, clock,
                               legend: {near: $('depth-near'), ramp: $('depth-ramp'), far: $('depth-far'), info: $('depth-info')}});
 stream.subscribeToKind('depth_frame', frame => depth.handle(frame));
@@ -268,10 +280,10 @@ clock.add(() => {
   if (!state || state === stateShown) return false;
   stateShown = state;
   tiles.showTargetWithoutVideo(state);
-  health.update(healthOf(state));
+  health.update(healthOf(state, latestHealth));
   explainParts(health.model, state);
   showMode(state); showTarget(state); showFace(state); showTests(state);
-  motorTest.update(state);
+  motorTest.update(state, health.model);
   return false;
 });
 // The ZED IMU's batches (docs/stream.md), in its sensor axes. The bytes are copied out of the decoder's
@@ -347,7 +359,7 @@ document.addEventListener('visibilitychange', sendViews);
 addEventListener('resize', sendViews);
 stream.on('close', () => {
   $('connection').textContent = '○ Reconnecting…';
-  health.setLink({text: 'Lost the connection to the bot, reconnecting', status: 'fail'});
+  health.setOwn('link', {text: 'Lost the connection to the bot, reconnecting', status: 'fail'});
 });
 stream.connect();
 window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, get state() { return latestState; }};  // For DevTools
@@ -359,7 +371,10 @@ setInterval(() => {
   if (lastSnapshotAt) setText($('connection'), stale ? '○ No data' : '● Live');
   // The dashboard's own check: whether the bot is sending anything at all.
   if (stream.getState() === 'CONNECTED') {
-    health.setLink(lastSnapshotAt && stale ? {text: `No data from the bot for ${ago(age)}`, status: 'fail'} : null);
+    health.setOwn('link', lastSnapshotAt && stale ? {text: `No data from the bot for ${ago(age)}`, status: 'fail'} : null);
+    // Checks that stop coming while robot_state still does are stale: say so rather than show old ones as now.
+    const checksAge = (performance.now() - healthAt) / 1000;
+    health.setOwn('checks', latestHealth && !stale && checksAge > STALE_S ? {text: `No hardware checks from the bot for ${Math.round(checksAge)} s`, status: 'warn'} : null);
   }
   health.renderSince();
   setText($('state-rate'), `${snapshotsThisSecond}/s`); snapshotsThisSecond = 0;

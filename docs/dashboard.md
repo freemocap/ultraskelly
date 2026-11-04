@@ -51,10 +51,12 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
   (`motor-test.js`) over the right of the 3D scene, so the skeleton stays in view. On a
   phone the card opens in place. From the bot's checks the panel shows whether the servo
   board (0x40) and the Motor HAT (0x60) answer, and after a servo test the command next to
-  what the servo board reads back: when the chip has the command and the servo did not
-  move, look at the OE wire, the V+ servo power and the plug's orientation; when it does
-  not, the command never reached the chip. Angles stay commands: the read-back is the
-  chip's own register, not where the servo is.
+  the pulse the servo board reads back and the pulse that angle needs: when the chip has the
+  command and the servo did not move, look at the OE wire, the V+ servo power and the plug's
+  orientation; when it does not, the command never reached the chip. Angles stay commands:
+  the read-back is the chip's own register, not where the servo is. While a board is down
+  the controllers still run and record their commands, but nothing reaches it, so the
+  commands read "not sent" there and in the time series.
 
 Click a video tile to enlarge it over the 3D scene; click it again or press Esc to return.
 
@@ -158,19 +160,25 @@ until the camera bracket gives them, and the waist angle is not measured.
 ## Health
 
 The dashboard says what works, what does not and what to do about it (`health.js`). The bot
-checks each part, the OAK, the ZED's video and IMU, the AI HAT+ (Hailo), the servo board
-at 0x40, the Motor HAT at 0x60 and the Pi's power, and sends each one's status (ok, warn,
-fail, or off when the run does not use it), a message, a fix in plain words and since when
-(`robot_state.health`, agreed with W4). The dashboard shows them as the bot writes them, and
-adds the one thing only it knows: whether the bot is reachable.
+checks each part this launch uses, the OAK camera and its models, the AI HAT+ (Hailo), the
+ZED camera, its IMU, the depth, the servo board at 0x40 and the Motor HAT at 0x60, and sends
+a `health` message (W4's format, docs/stream.md) on every change, every 2 s and to each
+viewer as it connects: each part's status (ok; degraded, working in part; missing; error;
+off, not used on purpose), a message, a hint in plain words, since when, and, for a part
+that fails because another does, which one. The dashboard shows them as the bot writes them,
+and adds what only it knows: whether the bot is reachable, and whether its checks have
+stopped coming (none for 5 s while `robot_state` still comes).
 
-- **Banner**, in the header: with every part well, a quiet "All hardware OK · 7 checks";
-  otherwise a red strip with the number of problems and each one, parts that share a cause
-  counted once ("no cameras on USB" for the OAK and both ZED feeds).
+- **Banner**, in the header: with every part well, a quiet "All hardware OK · 8 checks";
+  otherwise a red strip (amber when only degraded) with the number of problems and each one.
+  A part that fails because another does is not counted again: with both cameras unplugged,
+  the OAK and the ZED are two problems, and the ZED's IMU and the depth follow from the ZED.
 - **Health panel**, over the left of the 3D scene (at the top on a phone): one row per part
-  with its light, message, fix and since when, then the bot's live readings: which I2C
-  addresses answer and their error counts, the servo board's read-back next to the duty its
-  commanded angle needs, and the Pi's 3.3 V and 5 V rails and throttling. It opens by itself
+  with its light, message, status word and since when, the part it follows from, its hint,
+  and when a part is back but the bot must restart to use it, why. Then the bot's live
+  readings: which I2C addresses answer, the servo board's read-back next to the pulse its
+  commanded angle needs, USB, the Hailo device, the Pi's rails and throttling, and the motor
+  watchdog. A row's tooltip gives the bot's detail for it. It opens by itself
   when a new problem appears and folds away when all is well; the banner's button, the
   panel's × and the nodes card's lights open and close it, and that choice holds until a
   problem the page has not seen yet.

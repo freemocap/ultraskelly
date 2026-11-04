@@ -51,7 +51,8 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 /* The health panel opens over the left of the 3D scene; the motor tests open on the right. */
 .dashboard .drawer.health{justify-self:start;width:clamp(320px,38%,470px)}
 .dashboard .parts{list-style:none;margin:0;padding:0;display:grid;gap:5px}
-.dashboard .part{display:grid;grid-template-columns:10px minmax(0,1fr) auto;grid-template-areas:"light name since" ". message message" ". fix fix";
+.dashboard .part{display:grid;grid-template-columns:10px minmax(0,1fr) auto;
+  grid-template-areas:"light name since" ". message message" ". because because" ". fix fix" ". restart restart";
   column-gap:8px;row-gap:1px;padding:5px 8px;border:1px solid var(--line);border-radius:5px;background:#10171b}
 .dashboard .part .light{grid-area:light;width:10px;height:10px;border-radius:50%;align-self:center;background:#5d6f76}
 .dashboard .part b{grid-area:name;font-size:12px;font-weight:600}
@@ -59,6 +60,8 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .part .message{grid-area:message;font-size:12px}
 .dashboard .part .fix{grid-area:fix;font-size:11.5px;color:#ffd58a}
 .dashboard .part .fix::before{content:"Fix: ";color:var(--muted)}
+.dashboard .part .because{grid-area:because;font-size:11px;color:var(--muted)}
+.dashboard .part .restart{grid-area:restart;font-size:11px;color:#ffb4a8}
 .dashboard .part.ok .message,.dashboard .part.off .message{color:var(--muted)}
 .dashboard .part.fail{border-color:#6b2a26}.dashboard .part.warn{border-color:#6b5622}
 .dashboard .ok>.light,.dashboard .lamp.ok i{background:#3fb950}.dashboard .warn>.light,.dashboard .lamp.warn i{background:#d29922}
