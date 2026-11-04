@@ -12,6 +12,10 @@ const SHORT = {oak_camera: 'OAK', oak_models: 'Models', hailo: 'Hailo', zed_came
 const LIGHTS = {ok: 'ok', degraded: 'warn', missing: 'fail', error: 'fail', off: 'off'};
 const PROBLEM = new Set(['warn', 'fail']);
 export const STALE_S = 5;  // Checks this old, while robot_state still comes, are stale
+// The live readings (diagnostics) this far behind the bot's clock are old: two of its 5 s checks missed. Health
+// messages keep coming while the checks fail, with the last readings in place, so only diagnostics_time shows it.
+export const READINGS_STALE_S = 12;
+export const readingsStale = model => model?.diagnosticsAge != null && model.diagnosticsAge > READINGS_STALE_S;
 
 const ago = seconds => seconds == null || !Number.isFinite(seconds) ? '' : seconds < 60 ? `${Math.max(0, Math.round(seconds))} s`
   : seconds < 3600 ? `${Math.round(seconds / 60)} min` : `${(seconds / 3600).toFixed(1)} h`;
@@ -37,8 +41,9 @@ export function healthOf(state, report) {
     problem.parts.push(part);
     if (part.status === 'fail') problem.status = 'fail';
   }
+  const now = state?.time ?? report?.time ?? null, checkedAt = report?.diagnostics_time ?? null;  // One clock
   return {checked: Boolean(report?.components), components, problems: [...problems.values()],
-          diagnostics: report?.diagnostics ?? null, time: state?.time ?? report?.time ?? null};
+          diagnostics: report?.diagnostics ?? null, diagnosticsAge: now == null || checkedAt == null ? null : now - checkedAt, time: now};
 }
 
 // Why a part is not working, {message, fix}, or null while it is well, off, or not checked. A part that fails
@@ -124,12 +129,12 @@ function diagnosticLines(diagnostics) {
 // The banner, the panel and the nodes card's lights. The panel opens by itself when a problem appears and folds
 // away when all is well; a click opens or closes it, and that choice holds until a problem the page has not seen yet.
 export class HealthView {
-  // elements: {banner, count, summary, toggle, panel, close, rows, lights, diagnostics, source}
+  // elements: {banner, count, summary, toggle, panel, close, rows, lights, diagnostics, source, readingsAge}
   constructor(elements) {
     this.$ = elements;
     this.choice = null;          // 'open' or 'closed', the user's, until a new problem
     this.seen = new Set();       // Problem ids in the last update
-    this.own = new Map();        // The dashboard's own problems: 'link' (the bot unreachable), 'checks' (stale)
+    this.own = new Map();        // The dashboard's own problems: 'link' (the bot unreachable), 'checks' and 'readings' (stale)
     this.rows = new Map(); this.lights = new Map(); this.key = ''; this.readings = ''; this.model = null;
     elements.toggle.onclick = () => this.setOpen(this.$.panel.hidden);
     elements.lights.onclick = () => this.setOpen(this.$.panel.hidden);
@@ -224,6 +229,11 @@ export class HealthView {
       if (!since) continue;
       const how = part.status === 'ok' ? '' : part.word, long = part.since == null || now == null ? '' : `since ${ago(now - part.since)}`;
       setText(since, [how, long].filter(Boolean).join(' · '));
+    }
+    const note = this.$.readingsAge, stale = readingsStale(this.model);  // Old readings say so, with where to look
+    if (note) {
+      setProperty(note, 'hidden', !stale);
+      setText(note, stale ? `${ago(this.model.diagnosticsAge)} old: the live checks stopped (journalctl -u ultraskelly-bot)` : '');
     }
   }
 

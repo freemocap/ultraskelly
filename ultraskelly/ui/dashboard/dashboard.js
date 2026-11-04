@@ -10,7 +10,7 @@ import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
-import { HealthView, STALE_S, healthOf, reasonOf } from '/health.js';
+import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -277,7 +277,8 @@ stream.subscribeToKind('robot_state', state => {
 // the nodes card's lights.
 const health = new HealthView({banner: $('problems'), count: $('problems-count'), summary: $('problems-summary'),
                                toggle: $('problems-toggle'), panel: $('health'), close: $('health-close'), rows: $('health-rows'),
-                               lights: $('health-lights'), diagnostics: $('health-diagnostics'), source: $('health-source')});
+                               lights: $('health-lights'), diagnostics: $('health-diagnostics'), source: $('health-source'),
+                               readingsAge: $('health-readings-age')});
 let stateShown = null;
 clock.add(() => {
   const state = latestState;
@@ -379,6 +380,9 @@ setInterval(() => {
     // Checks that stop coming while robot_state still does are stale: say so rather than show old ones as now.
     const checksAge = (performance.now() - healthAt) / 1000;
     health.setOwn('checks', latestHealth && !stale && checksAge > STALE_S ? {text: `No hardware checks from the bot for ${Math.round(checksAge)} s`, status: 'warn'} : null);
+    // Checks that still come, but whose live readings stopped: the bot keeps sending its last ones (diagnostics_time).
+    health.setOwn('readings', latestHealth && !stale && checksAge <= STALE_S && readingsStale(health.model)
+      ? {text: `The bot's live checks stopped: readings ${Math.round(health.model.diagnosticsAge)} s old`, status: 'warn'} : null);
   }
   health.renderSince();
   setText($('state-rate'), `${snapshotsThisSecond}/s`); snapshotsThisSecond = 0;

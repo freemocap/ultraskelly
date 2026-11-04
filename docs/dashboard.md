@@ -167,8 +167,10 @@ a `health` message (W4's format, docs/stream.md) on every change, every 2 s and 
 viewer as it connects: each part's status (ok; degraded, working in part; missing; error;
 off, not used on purpose), a message, a hint in plain words, since when, and, for a part
 that fails because another does, which one. The dashboard shows them as the bot writes them,
-and adds what only it knows: whether the bot is reachable, and whether its checks have
-stopped coming (none for 5 s while `robot_state` still comes).
+and adds what only it knows: whether the bot is reachable, whether its checks have
+stopped coming (none for 5 s while `robot_state` still comes), and whether its live
+readings are old (`diagnostics_time` more than 12 s behind, two missed checks: the
+readings say how old, and the motor tests show no read-back).
 
 - **Banner**, in the header: with every part well, a quiet "All hardware OK · 8 checks";
   otherwise a red strip (amber when only degraded) with the number of problems and each one.

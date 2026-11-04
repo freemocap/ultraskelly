@@ -5,6 +5,7 @@
 // after a servo test, the command next to what the servo board reads back: angles are commands,
 // not measured positions, and are labelled "not sent" while their board is down.
 import { setProperty, setText } from '/dom.js';
+import { readingsStale } from '/health.js';
 
 const CENTER = 90;      // Degrees; the head's neutral angle
 const SERVO_STEP = 10;  // Degrees per nudge
@@ -29,6 +30,9 @@ function readbackOf(model, name) {
   const chip = model?.diagnostics?.pca9685, channel = chip?.channels?.[name];
   if (part?.status === 'off') return [part.message || 'Simulated: commands are recorded, not sent', part.fix || '', ''];
   if (channel?.pulse_us == null) return null;
+  if (readingsStale(model)) {  // An old register value is not this test's result
+    return ['No fresh read-back: the bot\'s live checks stopped', 'See why in the bot\'s log: journalctl -u ultraskelly-bot', 'refused'];
+  }
   const angle = channel.commanded == null ? 'the command' : `${Math.round(channel.commanded)}°`;
   const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${Math.round(channel.pulse_us)} µs` +
                (channel.expected_us == null ? '' : `, ${angle} needs ${Math.round(channel.expected_us)} µs`);
