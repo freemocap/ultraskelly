@@ -625,6 +625,20 @@ later is picked up; an OAK that freezes while connected still restarts the bot; 
 reaches a viewer that asked for nothing. The launcher now imports without the Pi's camera
 libraries, so these tests and the recovery tests above run on any computer.
 
+Live checks. Every 5 s, in a worker thread, the bot repeats the checks that were done by
+hand on 2026-11-04 and sends them in the health message: which I²C addresses answer, the
+servo board's own registers (awake, its frequency, and each head channel's pulse against
+the pulse its commanded angle needs), USB presence of the OAK, the ZED's video and its
+IMU, the Hailo-8 on PCIe, the Pi's throttling flags and PMIC rails, lost-arbitration
+errors in the kernel log, and the motor watchdog's brakes. The readback answers the
+question that afternoon ended on: the chip was awake at 50 Hz with 1.5 ms pulses on every
+channel, so commands reached it, and a servo that still did not move pointed past the
+chip, to the OE wire, V+ power or the plugs; the servo board's hint now says so whenever
+the pulses match. The bot already holds the robot lock, and the kernel runs each I²C
+transfer whole, so probing beside the controllers needs no other coordination: reads and
+zero-length writes change nothing on a PCA9685. `tests/test_diagnostics.py` checks the
+arithmetic, the readings of the Pi's own command output, and the judgement, on a fake bus.
+
 ## ZED Mini stereo capture (2026-11-02)
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK

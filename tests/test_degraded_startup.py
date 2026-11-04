@@ -12,6 +12,7 @@ from ultraskelly import bot_launcher
 from ultraskelly.__main__bot import launch_config
 from ultraskelly.bot_launcher import BotLauncher, Hardware
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.diagnostics import Sources
 from ultraskelly.core.bot.health import Health, Probes, Status, usb_devices
 from ultraskelly.core.bot.motor.motor_test import MotorTestRefused, MotorTestRequest
 from ultraskelly.core.bot.motor.simulated_actuators import SimulatedServoKit
@@ -162,6 +163,10 @@ class Robot:
             stereo_depth=lambda *, pubsub, params, eye_size: Idle(pubsub=pubsub),
             servo_board=servo_board, motor_board=motor_board,
             probes=Probes(usb=lambda: self.usb, hailo_device=lambda: self.hailo, i2c_bus=lambda: True),
+            # The live checks find nothing to look at: these tests never touch a real bus or command
+            sources=Sources(open_bus=lambda: None, usb=lambda: self.usb, hailo_device=lambda: self.hailo,
+                            hailo_pci=lambda: self.hailo, imu_device=lambda: False, throttled=lambda: None,
+                            pmic=lambda: None, kernel_log=lambda: None),
         )
 
 

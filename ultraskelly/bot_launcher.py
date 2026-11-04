@@ -18,6 +18,7 @@ from typing import Callable, TypeVar
 
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
+from ultraskelly.core.bot.diagnostics import Diagnostics, Sources, judge_servo_board
 from ultraskelly.core.bot.health import (
     COMPONENTS,
     Health,
@@ -80,6 +81,7 @@ Part = TypeVar("Part")
 Diagnosis = Callable[[BaseException], tuple[Status, str, str | None]]
 STREAMING_WINDOW = 3.0  # Seconds without new data before a camera or the IMU counts as not streaming
 HEALTH_INTERVAL = 1.0  # Seconds between checks of how each part is doing
+DIAGNOSTICS_INTERVAL = 5.0  # Seconds between the live hardware checks (core/bot/diagnostics.py)
 
 
 class LaunchConfig(NodeParams):
@@ -165,6 +167,7 @@ class Hardware:
     servo_board: Callable[[], object] = open_servo_board
     motor_board: Callable[[float], object] = open_motor_board
     probes: Probes = field(default_factory=Probes)
+    sources: Sources = field(default_factory=Sources)  # Where the live hardware checks look
 
 
 class BotLauncher(BaseModel):
@@ -187,6 +190,8 @@ class BotLauncher(BaseModel):
     diagnoses: SkipValidation[dict[str, Diagnosis]] = Field(default_factory=dict, exclude=True)
     # Called every HEALTH_INTERVAL while the bot runs, to keep each part's status current
     watches: SkipValidation[list[Callable[[], None]]] = Field(default_factory=list, exclude=True)
+    diagnostics: SkipValidation[Diagnostics | None] = Field(default=None, exclude=True)
+    controllers: SkipValidation[tuple[OrientationNode, MouthNode] | None] = Field(default=None, exclude=True)
 
     def healthy(self) -> bool:
         """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
@@ -214,6 +219,7 @@ class BotLauncher(BaseModel):
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
         self.nodes.clear()
+        self.diagnostics = Diagnostics(self.hardware.sources)
         if not self.config.tracking:
             self._create_zed_only_nodes()
             return
@@ -223,6 +229,7 @@ class BotLauncher(BaseModel):
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
         # self.nodes.append(WaistNode.create(pubsub=self.pubsub, params=self.config.waist))
         orientation, mouth = self._create_motor_nodes()
+        self.controllers = (orientation, mouth)
         self.nodes.extend([orientation, mouth])
         self.motor_tester = MotorTester(
             orientation=orientation, mouth=mouth, limits=self.config.motor_tests, unavailable=self._unavailable,
@@ -604,6 +611,39 @@ class BotLauncher(BaseModel):
                 watch()
             await asyncio.sleep(HEALTH_INTERVAL)
 
+    async def _watch_diagnostics(self) -> None:
+        """The live hardware checks, every DIAGNOSTICS_INTERVAL, into the health messages. Best effort:
+        a check that fails is logged and skipped, never a reason to stop the bot."""
+        failures = 0
+        while True:
+            try:
+                await self._diagnose()
+            except Exception:
+                failures += 1
+                if failures == 1 or failures % 100 == 0:
+                    logger.exception(f"A hardware check failed ({failures} so far); the others go on")
+            await asyncio.sleep(DIAGNOSTICS_INTERVAL)
+
+    async def _diagnose(self) -> None:
+        driven = self.controllers is not None and self.health.ok("servo_board")  # The real board, in use
+        params = self.config.orientation
+        head = {"pan": params.pan_channel, "tilt": params.tilt_channel} if driven else {}
+        latest = self.command_recorder.latest if self.command_recorder is not None else {}
+        commanded = {name: latest[name].value for name in head if name in latest}
+        result = await asyncio.to_thread(self.diagnostics.collect, head_channels=head, commanded=commanded)
+        watchdog = self.motor_watchdog
+        result["motor_watchdog"] = None if watchdog is None else {"trips": watchdog.trips,
+                                                                  "tripped_at": watchdog.tripped_at}
+        if self.controllers is not None:
+            orientation, mouth = self.controllers
+            result["retried_writes"] = {
+                name: getattr(motor, "failed_writes", None)
+                for name, motor in (("waist", orientation.waist_motor), ("mouth", mouth.mouth_motor))
+            }
+        self.health.set_diagnostics(result)
+        if driven and (judged := judge_servo_board(result["pca9685"])) is not None:
+            self.health.report("servo_board", *judged)
+
     async def run(self) -> None:
         """Run all nodes until one that is not a camera, detector or depth node stops or crashes,
         then stop the rest. Those three report their end against their part and the rest run on.
@@ -614,17 +654,18 @@ class BotLauncher(BaseModel):
         logger.info("LAUNCHING TARGET TRACKER WITH SOPHISTICATED PUBSUB")
         logger.info("=" * 60)
 
-        watcher = None
+        watcher = checks = None
         try:
             await self._start_nodes()
             watcher = asyncio.create_task(self._watch_health())
-            pending = {*self.tasks, watcher}
+            checks = asyncio.create_task(self._watch_diagnostics()) if self.diagnostics is not None else None
+            pending = {*self.tasks, watcher, *([checks] if checks is not None else [])}
             while True:
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 core_ended = False
                 for task in done:
-                    if task is watcher:
-                        task.result()  # Re-raises; it never returns
+                    if task in (watcher, checks):
+                        task.result()  # Re-raises; they never return
                         core_ended = True
                         continue
                     component = self.components_of.get(id(self.nodes[self.tasks.index(task)]))
@@ -637,9 +678,12 @@ class BotLauncher(BaseModel):
                     logger.info("A node stopped; stopping the others...")
                     break
         finally:
-            if watcher is not None:
-                watcher.cancel()
-                await asyncio.gather(watcher, return_exceptions=True)
+            for task in (watcher, checks):
+                if task is not None:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
             await self._shutdown_nodes()
+            if self.diagnostics is not None:
+                self.diagnostics.close()
             self.pubsub.close()
             logger.info("All nodes stopped and pubsub closed")

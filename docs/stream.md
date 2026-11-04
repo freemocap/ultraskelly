@@ -162,6 +162,7 @@ gets these, like `robot_state`, whatever its `kinds`: on every change and at lea
 | --- | --- |
 | `time` | when it was sent, in seconds on the Pi's `time.monotonic()` clock, as `robot_state.time` |
 | `components` | one entry per part this launch uses, in a fixed order |
+| `diagnostics` | the live hardware checks, below; empty until the first has run |
 
 Each component:
 
@@ -175,6 +176,26 @@ Each component:
 | `since` | when the status last changed, on the same clock as `time` |
 | `restart` | null, or why the part is back but the bot must restart to use it |
 | `detail` | small facts, such as the `error` a part failed with |
+
+`diagnostics` holds the checks done by hand when the robot misbehaves, run every 5 s
+(`core/bot/diagnostics.py`). A check that cannot look on this computer says so
+(`available: false`) or is null.
+
+| Field | Contents |
+| --- | --- |
+| `i2c` | `available`; `addresses`, whether `0x40` (servo board), `0x60` (Motor HAT) and `0x70` (their all-call) answer a zero-length write, as i2cdetect probes; `lost_arbitration`, the I²C bus errors the kernel logged since boot. `0x70` answers only until the bot sets up the boards, which clears their all-call bit |
+| `pca9685` | the servo board's own registers while the bot drives it, else null: `address`, `mode1`, `awake`, `frequency_hz`, and per head channel (`pan`, `tilt`) its `channel`, `commanded` angle, the `pulse_us` it puts out, the `expected_us` that angle needs, and whether they `matches` (within 20 µs): the proof that commands reach the chip |
+| `usb` | `oak`, `zed_video`, `zed_hid` (the ZED's IMU interface: with it but no video, flip the ZED's plug) and `zed_imu_device` (/dev/zed-mini-imu) |
+| `hailo` | `device` (/dev/hailo0) and `pci` (a Hailo device, vendor 1e60, on PCIe) |
+| `power` | `available`; `throttled` (`vcgencmd get_throttled`) with its `flags` named, such as "under-voltage now"; `rails`, the PMIC's `EXT5V`, `3V3_SYS` and `1V8_SYS` in volts |
+| `motor_watchdog` | `trips`, how often it braked the DC motors because the control loop stalled, and when it last did (`tripped_at`), or null without motors |
+| `retried_writes` | per DC motor, board writes that failed once and were retried |
+
+When the readback shows the servo board awake at 50 Hz with pulses that match the commands,
+its component says so, and its hint lists what to check if a servo still does not move: the
+board's OE wire (held high it switches every output off), the servo power on V+, and each
+plug's orientation. A board asleep, at the wrong frequency, or with pulses that do not
+match is `degraded`, with what to do.
 
 While a motor board is not `ok` or `off`, `robot_state.motors.commands` still lists its
 actuators: the controllers run and record their commands, but nothing is sent to a board
