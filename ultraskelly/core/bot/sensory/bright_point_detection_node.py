@@ -5,7 +5,6 @@ import time
 import numpy as np
 from pydantic import Field, SkipValidation, field_validator
 
-from ultraskelly import FAIL_ON_IMPORTS
 from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic, FrameTopic
 
 logger = logging.getLogger(__name__)
@@ -14,15 +13,6 @@ from ultraskelly.core.bot.base_abcs import DetectorNode, NodeParams
 from ultraskelly.core.bot.sensory.camera_node import FrameMessage
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
-try:
-    import cv2
-except ImportError as e:
-    if FAIL_ON_IMPORTS:
-        raise
-    logger.error(
-        "Cv2 not loaded - BrightnessDetectorNode will not work. "
-    )
-    cv2 = None  # type: ignore
 
 class BrightnessDetectorParams(NodeParams):
     """Parameters for BrightnessDetectorNode."""
@@ -56,6 +46,8 @@ class BrightnessDetectorNode(DetectorNode):
 
     def detect(self, image: np.ndarray) -> tuple[int | None, int | None, float | None]:
         """Find brightest point and its orientation in frame."""
+        import cv2  # Here, so the module loads where OpenCV is not installed
+
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         blurred = cv2.GaussianBlur(gray, (self.params.blur_size, self.params.blur_size), 0)
 
