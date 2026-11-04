@@ -24,8 +24,8 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 
 ## Panels
 
-- **Header:** connection state, `robot_state` messages per second, and whether the
-  motors are simulated or real.
+- **Header:** connection state, `robot_state` messages per second, whether the motors
+  are simulated or real, and the problems banner (see Health).
 - **3D scene:** the schematic skeleton driven by the commanded head pan and tilt, the
   waist drive arrow and the jaw. These are commands, not measured positions, and the
   scene says so. View buttons: orbit, behind the head, side, top. The ZED's point cloud
@@ -149,6 +149,31 @@ pixel looked up in the ZED's depth), drawn in orange; the dashboard does not com
 Without a face point newer than 0.5 s, the ray is a dashed 3 m direction through the frame's
 `ultraskelly.target` pixel, and the head following nobody hides it. Camera poses are nominal
 until the camera bracket gives them, and the waist angle is not measured.
+
+## Health
+
+The dashboard says what works, what does not and what to do about it (`health.js`). The bot
+checks each part, the OAK, the ZED's video and IMU, the AI HAT+ (Hailo), the servo board
+at 0x40, the Motor HAT at 0x60 and the Pi's power, and sends each one's status (ok, warn,
+fail, or off when the run does not use it), a message, a fix in plain words and since when
+(`robot_state.health`, agreed with W4). The dashboard shows them as the bot writes them, and
+adds the one thing only it knows: whether the bot is reachable.
+
+- **Banner**, in the header: with every part well, a quiet "All hardware OK · 7 checks";
+  otherwise a red strip with the number of problems and each one, parts that share a cause
+  counted once ("no cameras on USB" for the OAK and both ZED feeds).
+- **Health panel**, over the left of the 3D scene (at the top on a phone): one row per part
+  with its light, message, fix and since when, then the bot's live readings: which I2C
+  addresses answer and their error counts, the servo board's read-back next to the duty its
+  commanded angle needs, and the Pi's 3.3 V and 5 V rails and throttling. It opens by itself
+  when a new problem appears and folds away when all is well; the banner's button, the
+  panel's × and the nodes card's lights open and close it, and that choice holds until a
+  problem the page has not seen yet.
+- **Lights** on the nodes card, one per part.
+
+A bot that sends no checks still gets a panel, from what `robot_state` says anyway: crashed
+or stopped nodes with their errors, and cameras without frames, with no fixes, since only the
+bot could write them.
 
 ## Faces and hands
 

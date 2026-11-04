@@ -10,6 +10,7 @@ import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
+import { HealthView, healthOf } from '/health.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -241,12 +242,18 @@ stream.subscribeToKind('robot_state', state => {
   clock.changed();
 });
 // The readouts' part of the page's frame: the newest robot_state's text, once per state.
+// What works and what does not (health.js): the banner in the header, the panel over the left of the 3D scene,
+// the nodes card's lights.
+const health = new HealthView({banner: $('problems'), count: $('problems-count'), summary: $('problems-summary'),
+                               toggle: $('problems-toggle'), panel: $('health'), close: $('health-close'), rows: $('health-rows'),
+                               lights: $('health-lights'), diagnostics: $('health-diagnostics'), source: $('health-source')});
 let stateShown = null;
 clock.add(() => {
   const state = latestState;
   if (!state || state === stateShown) return false;
   stateShown = state;
   tiles.showTargetWithoutVideo(state);
+  health.update(healthOf(state));
   showMode(state); showTarget(state); showFace(state); showTests(state);
   motorTest.update(state);
   return false;
@@ -322,15 +329,23 @@ function sendViews() {
 tiles.onChange = sendViews;
 document.addEventListener('visibilitychange', sendViews);
 addEventListener('resize', sendViews);
-stream.on('close', () => { $('connection').textContent = '○ Reconnecting…'; });
+stream.on('close', () => {
+  $('connection').textContent = '○ Reconnecting…';
+  health.setLink({text: 'Lost the connection to the bot, reconnecting', status: 'fail'});
+});
 stream.connect();
-window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, get state() { return latestState; }};  // For DevTools
+window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness, frame rates, node health and message rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
 setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
   if (lastSnapshotAt) setText($('connection'), stale ? '○ No data' : '● Live');
+  // The dashboard's own check: whether the bot is sending anything at all.
+  if (stream.getState() === 'CONNECTED') {
+    health.setLink(lastSnapshotAt && stale ? {text: `No data from the bot for ${ago(age)}`, status: 'fail'} : null);
+  }
+  health.renderSince();
   setText($('state-rate'), `${snapshotsThisSecond}/s`); snapshotsThisSecond = 0;
   setProperty($('connection'), 'title', lastSnapshotAt ? `Newest robot_state ${ago(age)} ago` : '');
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};

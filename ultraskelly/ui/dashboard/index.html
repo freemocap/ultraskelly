@@ -11,6 +11,10 @@
 <body class="dashboard">
 <header>
   <div class="brand"><span class="mark">U/S</span><h1>UltraSkelly <span>/ live</span></h1></div>
+  <div id="problems" class="problems" role="status" aria-live="polite">
+    <b id="problems-count">Waiting for the bot</b><span id="problems-summary"></span>
+    <button id="problems-toggle" aria-controls="health" aria-expanded="false">Checks</button>
+  </div>
   <div class="status">
     <span id="connection">Connecting…</span>
     <span id="state-rate" title="robot_state messages per second">—</span>
@@ -37,6 +41,12 @@
     <canvas aria-label="Enlarged camera view"></canvas>
     <div class="enlarged-bar"><span id="enlarged-label"></span><button id="enlarged-close" title="Back to the 3D scene (Esc)">Close</button></div>
   </div>
+  <aside id="health" class="drawer health" aria-label="Hardware checks" hidden>
+    <button id="health-close" class="drawer-close" title="Close the hardware checks" aria-label="Close the hardware checks">×</button>
+    <div class="section-title"><h2>Hardware</h2><span id="health-source"></span></div>
+    <ol id="health-rows" class="parts"></ol>
+    <section class="diagnostics" hidden><h3>Live readings</h3><dl id="health-diagnostics"></dl></section>
+  </aside>
   <aside id="motor-drawer" class="drawer" aria-label="Motor tests" hidden>
     <button id="motor-drawer-close" class="drawer-close" title="Close the motor tests" aria-label="Close the motor tests">×</button>
     <section id="motor-test" aria-label="Move one actuator at a time"></section>
@@ -85,6 +95,7 @@
     </section>
     <section class="card nodes">
       <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
+      <div id="health-lights" class="lamps" title="Hardware checks: click for details" hidden></div>
       <div id="nodes"></div>
       <dl id="rates"></dl>
     </section>
