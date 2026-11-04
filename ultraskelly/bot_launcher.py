@@ -238,6 +238,7 @@ class BotLauncher(BaseModel):
     # Whether each motor board's actuators reach it (else stand-ins record them), and checks it missed in a row
     driven: dict[str, bool] = Field(default_factory=dict, exclude=True)
     board_misses: dict[str, int] = Field(default_factory=dict, exclude=True)
+    check_errors_logged: str = Field(default="", exclude=True)  # The live checks' errors last logged
 
     def healthy(self) -> bool:
         """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
@@ -790,7 +791,7 @@ class BotLauncher(BaseModel):
         """The motor boards, from the I2C probe. The bot sets the boards up and centres the head only
         when it starts, so a board it started without that answers now needs a restart; one it drives
         that stops answering is reported before its next command fails, which stops the bot."""
-        if self.config.simulate_motors or not i2c.get("available"):
+        if self.config.simulate_motors or not i2c or not i2c.get("available"):
             return
         for board, address, drives in (("servo_board", SERVO_BOARD_ADDRESS, "the head's pan and tilt"),
                                        ("motor_board", MOTOR_BOARD_ADDRESS, "the waist and jaw")):
@@ -839,8 +840,9 @@ class BotLauncher(BaseModel):
         while True:
             try:
                 await self._diagnose()
-            except Exception:
+            except Exception as error:
                 failures += 1
+                self.health.diagnostics_failed(error)  # Sent, so the dashboard can tell "failing" from "not run yet"
                 if failures == 1 or failures % 100 == 0:
                     logger.exception(f"A hardware check failed ({failures} so far); the others go on")
             await asyncio.sleep(DIAGNOSTICS_INTERVAL)
@@ -861,7 +863,12 @@ class BotLauncher(BaseModel):
                 name: getattr(motor, "failed_writes", None)
                 for name, motor in (("waist", orientation.waist_motor), ("mouth", mouth.mouth_motor))
             }
-        self.health.set_diagnostics(result)
+        errors = self.diagnostics.errors
+        self.health.set_diagnostics(result, errors)
+        if (logged := "; ".join(f"{name}: {error}" for name, error in errors.items())) != self.check_errors_logged:
+            if logged:  # Once for each new set of errors
+                logger.warning(f"Live hardware checks failed, the others go on: {logged}")
+            self.check_errors_logged = logged
         self._check_boards(result["i2c"])
         if driven and self.health.ok("servo_board") and (judged := judge_servo_board(result["pca9685"])) is not None:
             self.health.report("servo_board", *judged)

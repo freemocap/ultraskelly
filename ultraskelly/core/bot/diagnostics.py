@@ -142,17 +142,28 @@ class Diagnostics:
         self.bus = None
         self.lost_arbitration: int | None = None
         self.kernel_log_checks = 0
+        self.errors: dict[str, str] = {}  # The checks that failed in the last collect, and how
 
     def collect(self, *, head_channels: dict[str, int], commanded: dict[str, float | None]) -> dict:
         """Every check; `head_channels` names the servo board's channels (pan, tilt) and
-        `commanded` their angles, to compare with the pulses the chip puts out."""
-        return {
-            "i2c": self.i2c(),
-            "pca9685": self.servo_board(head_channels, commanded),
-            "usb": self.usb(),
-            "hailo": {"device": self.sources.hailo_device(), "pci": self.sources.hailo_pci()},
-            "power": self.power(),
+        `commanded` their angles, to compare with the pulses the chip puts out. A check that fails,
+        such as on a command's unexpected output, is null and its error is in `errors`; the others
+        still come."""
+        checks = {
+            "i2c": self.i2c,
+            "pca9685": lambda: self.servo_board(head_channels, commanded),
+            "usb": self.usb,
+            "hailo": lambda: {"device": self.sources.hailo_device(), "pci": self.sources.hailo_pci()},
+            "power": self.power,
         }
+        result, self.errors = {}, {}
+        for name, check in checks.items():
+            try:
+                result[name] = check()
+            except Exception as error:
+                result[name] = None
+                self.errors[name] = f"{type(error).__name__}: {error}"
+        return result
 
     def _bus(self) -> object | None:
         if self.bus is None:
@@ -252,7 +263,7 @@ def judge_power(power: dict) -> Finding | None:
     """The Pi's supply as a component: an error while under-voltage now, degraded while throttled,
     frequency-capped or at its temperature limit now, else ok, naming what happened since boot;
     None where the flags cannot be read."""
-    if not power.get("available"):
+    if not power or not power.get("available"):
         return None
     supply = power.get("rails", {}).get("EXT5V")
     reading = "" if supply is None else f" (EXT5V {supply:.2f} V)"

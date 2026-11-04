@@ -150,6 +150,55 @@ def test_the_live_checks_say_when_they_ran():
     assert health.message(16.0)["diagnostics_time"] == 15.0 and health.version == version
 
 
+def test_a_check_that_fails_leaves_the_others():
+    garbled = sources({0x40: servo_board()}, throttled=lambda: "throttled=garbled\n")  # A firmware with new output
+
+    diagnostics = Diagnostics(garbled)
+    result = diagnostics.collect(head_channels={"pan": PAN}, commanded={"pan": 90.0})
+
+    assert result["power"] is None and set(diagnostics.errors) == {"power"}
+    assert diagnostics.errors["power"].startswith("ValueError: invalid literal for int()")
+    assert result["pca9685"]["channels"]["pan"]["matches"] is True  # The servo readback still comes
+    assert judge_power(result["power"]) is None
+
+
+def test_failing_checks_say_why_and_since_when():
+    from ultraskelly.core.bot.health import Health
+
+    now = [10.0]
+    health = Health(clock=lambda: now[0])
+    health.diagnostics_failed(RuntimeError("bus gone"))  # From the very first run: not the same as not run yet
+    first = health.message(11.0)
+    assert first["diagnostics_time"] is None
+    assert first["diagnostics_error"] == {"error": "RuntimeError: bus gone", "since": 10.0}
+    now[0] = 15.0
+    health.set_diagnostics({"i2c": {"available": False}}, {"power": "ValueError: garbled"})  # One check still fails
+    assert health.message(16.0)["diagnostics_error"] == {"error": "power: ValueError: garbled", "since": 10.0}
+    health.set_diagnostics({"i2c": {"available": False}})
+    assert health.message(17.0)["diagnostics_error"] is None and health.diagnostics_time == 15.0
+
+
+def test_the_bot_sends_why_its_checks_fail(tmp_path, monkeypatch):
+    from tests.test_degraded_startup import stop
+
+    def broken(**checks):
+        raise RuntimeError("the checks broke")
+
+    launcher = launch_on({0x40: servo_board(), 0x60: servo_board(prescale=3)}, tmp_path, monkeypatch)
+    launcher.diagnostics.collect = broken  # From the very first run
+
+    async def scenario():
+        task = asyncio.create_task(launcher.run())
+        await asyncio.sleep(0.2)
+        message = launcher.health.message(0.0)
+        await stop(launcher, task)
+        return message
+
+    message = asyncio.run(scenario())
+    assert message["diagnostics_time"] is None and message["diagnostics"] == {}
+    assert message["diagnostics_error"]["error"] == "RuntimeError: the checks broke"
+
+
 def power(throttled: str, supply: float = 5.113) -> dict:
     return {"available": True, **decode_throttled(f"throttled={throttled}"), "rails": {"EXT5V": supply}}
 

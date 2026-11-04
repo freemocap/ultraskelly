@@ -81,6 +81,7 @@ class Health:
         self.components: dict[str, Component] = {}
         self.diagnostics: dict = {}  # The live checks (core/bot/diagnostics.py), newest
         self.diagnostics_time: float | None = None  # When they last ran to the end, on `clock`
+        self.diagnostics_error: dict | None = None  # {error, since} while checks fail, else None
         self.version = 0  # Counts changes, so a publisher sends only when something changed
         self._lock = threading.Lock()
 
@@ -123,19 +124,38 @@ class Health:
             ordered = sorted(self.components.values(), key=lambda component: order.index(component.id))
             return [component.to_message() for component in ordered]
 
-    def set_diagnostics(self, diagnostics: dict) -> None:
-        """The newest live checks: new readings count as a change, the same ones checked again do not."""
+    def set_diagnostics(self, diagnostics: dict, errors: dict[str, str] | None = None) -> None:
+        """The newest live checks, and the errors of those that failed (null in `diagnostics`): new
+        readings count as a change, the same ones checked again do not."""
         with self._lock:
             self.diagnostics_time = self.clock()
             if diagnostics != self.diagnostics:
                 self.diagnostics = diagnostics
                 self.version += 1
+            self._set_error("; ".join(f"{name}: {error}" for name, error in (errors or {}).items()) or None)
+
+    def diagnostics_failed(self, error: BaseException) -> None:
+        """The live checks failed as a whole: their readings stay as they were, and the error is sent."""
+        with self._lock:
+            self._set_error(f"{type(error).__name__}: {error}")
+
+    def _set_error(self, text: str | None) -> None:
+        """Holding the lock: the checks' error now, `since` kept while they go on failing."""
+        if text is None:
+            error = None
+        else:
+            since = self.diagnostics_error["since"] if self.diagnostics_error is not None else self.clock()
+            error = {"error": text[:300], "since": since}
+        if error != self.diagnostics_error:
+            self.diagnostics_error = error
+            self.version += 1
 
     def message(self, now: float) -> dict:
         """The health message's payload (docs/stream.md, "health")."""
         with self._lock:
-            diagnostics, checked = self.diagnostics, self.diagnostics_time
-        return {"time": now, "components": self.snapshot(), "diagnostics": diagnostics, "diagnostics_time": checked}
+            diagnostics, checked, error = self.diagnostics, self.diagnostics_time, self.diagnostics_error
+        return {"time": now, "components": self.snapshot(), "diagnostics": diagnostics, "diagnostics_time": checked,
+                "diagnostics_error": error}
 
     def mark(self, id: str, **changes) -> None:
         """Change fields of a reported component (such as `restart`) without touching its status."""
