@@ -170,6 +170,11 @@ adds the one thing only it knows: whether the bot is reachable.
   panel's × and the nodes card's lights open and close it, and that choice holds until a
   problem the page has not seen yet.
 - **Lights** on the nodes card, one per part.
+- **Every view that waits on a part says why**, from the same checks: the OAK tile, the ZED's
+  eyes, the heat map, the face card, the target row (no poses without the AI HAT+), the IMU
+  lanes and a note under the 3D scene's title each give the missing part's message and fix. A
+  feed that stops mid-run keeps its last picture, dimmed, with the reason over it; the 3D
+  scene, the time series and the motor tests keep working whatever is missing.
 
 A bot that sends no checks still gets a panel, from what `robot_state` says anyway: crashed
 or stopped nodes with their errors, and cameras without frames, with no fixes, since only the

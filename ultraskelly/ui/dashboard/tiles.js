@@ -7,6 +7,7 @@
 // follows, and its ring comes from that frame's `ultraskelly.target` channel.
 import { readImagePayload, decodeImageBitmaps } from '/vendor/freemocap-client.js';
 import { drawFinds } from '/faces.js';
+import { setText } from '/dom.js';
 
 const KEYPOINT_VISIBLE = 0.3;  // Keypoints below this confidence are not drawn
 const STALE_MS = 3000;         // A tile with no frame for this long is dimmed
@@ -236,7 +237,20 @@ export class CameraTiles {
     }
   }
 
-  // Without OAK video (a run without cameras, or a camera that stopped), show the target on a grid.
+  // Why a tile has no picture: its part's {message, fix} from the bot's checks (health.js), or null for the tile's
+  // own words, `fallback` or its first ones ("No ZED video yet"), and once it has drawn, that it stopped. Shown
+  // over the tile while it has no frames and over its dimmed last frame once they stop.
+  explain(key, reason, fallback = null) {
+    const tile = this.tiles.get(key), empty = tile?.figure.querySelector('.empty');
+    if (!empty) return;
+    tile.firstWords ??= empty.firstElementChild.textContent;
+    const words = reason?.message ?? fallback ?? (tile.lastAt ? `${tile.label} stopped` : tile.firstWords);
+    setText(empty.firstElementChild, words); setText(empty.lastElementChild, reason?.fix ? `Fix: ${reason.fix}` : '');
+    tile.figure.classList.toggle('down', Boolean(reason));
+  }
+
+  // Without OAK video (a run without cameras, or a camera that stopped), show the target on a grid; the tile's
+  // overlay says why (explain).
   showTargetWithoutVideo(state) {
     this.state = state;
     const tile = this.tiles.get('oak');
@@ -252,8 +266,6 @@ export class CameraTiles {
       for (let y = 0; y <= height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
       // A run without cameras reports no aim point: use the image center and the default jaw zone.
       this.drawGuides(ctx, id, {overlays: [], target}, state.overlays?.[id] ?? {aim: [width / 2, height / 2], jaw_zone: 100});
-      ctx.fillStyle = '#91a2a8'; ctx.font = '16px system-ui, sans-serif';
-      ctx.fillText(hasTarget(state) ? 'No video: target position only' : 'No video and no target', 16, height - 18);
     }
   }
 

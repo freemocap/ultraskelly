@@ -43,6 +43,7 @@ export class TimeSeries {
     this.rings = new Map(LANES.map(lane => [lane.id, lane.traces.map(() => new Ring())]));
     this.now = null;   // Newest time seen, seconds on the Pi's clock
     this.dirty = true; this.drawnAt = -Infinity; this.timer = 0;
+    this.waiting = new Map();  // Lane id -> why it has no data, in place of the lane's own "Waiting for ..."
     new ResizeObserver(() => this.changed()).observe(canvas);
     clock.add(now => this.frame(now));
   }
@@ -50,6 +51,13 @@ export class TimeSeries {
   changed() {
     this.dirty = true;
     this.clock.changed();
+  }
+
+  // Why a lane has no data (the bot's checks, health.js), or null for its own words.
+  setWaiting(laneId, text) {
+    if ((this.waiting.get(laneId) ?? null) === (text ?? null)) return;
+    if (text) this.waiting.set(laneId, text); else this.waiting.delete(laneId);
+    this.changed();
   }
 
   // values: one per trace of the lane, null or NaN for a gap.
@@ -135,7 +143,8 @@ export class TimeSeries {
     ctx.stroke();
     ctx.fillStyle = '#5d6f76'; ctx.font = '10px ui-monospace, monospace';
     if (plotH > 24) { ctx.fillText(hi.toFixed(lane.digits), x + 3, top + 7); ctx.fillText(lo.toFixed(lane.digits), x + 3, top + plotH - 6); }
-    if (!any && lane.waiting) { ctx.fillText(lane.waiting, x + w / 2 - ctx.measureText(lane.waiting).width / 2, top + plotH / 2); return; }
+    const waiting = this.waiting.get(lane.id) ?? lane.waiting;
+    if (!any && waiting) { ctx.fillText(waiting, x + w / 2 - ctx.measureText(waiting).width / 2, top + plotH / 2); return; }
     // Traces, decimated to the pixel columns; a NaN leaves a gap.
     lane.traces.forEach(([, color], i) => {
       ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();

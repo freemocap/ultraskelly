@@ -10,7 +10,7 @@ import { DepthViews } from '/depth.js';
 import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
-import { HealthView, healthOf } from '/health.js';
+import { HealthView, healthOf, reasonOf } from '/health.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -122,6 +122,19 @@ function placeFace(state) {
   facePoint = faceFresh(state.face) ? state.face.position_head : null;
   scene?.gaze.update(gazeTarget, facePoint);
 }
+// Every view that waits on a part says why it is empty and what to do, from the bot's checks (health.js); with
+// the part well, the view's own words.
+let reasons = {};
+function explainParts(model, state) {
+  const why = id => reasonOf(model, id), zed = why('zed_video'), imu = why('zed_imu');
+  reasons = {oak: why('oak'), zed, hailo: why('hailo')};
+  tiles.explain('oak', reasons.oak, hasTarget(state) ? 'No video: target position only' : null);
+  tiles.explain('zed_left', zed); tiles.explain('zed_right', zed);
+  tiles.explain('depth_heat', zed && {message: `No depth: ${zed.message}`, fix: zed.fix});
+  for (const lane of ['accel', 'gyro']) series.setWaiting(lane, imu?.message ?? null);
+  setText($('stage-note'), zed ? `No depth on the head: ${zed.message}` : ''); setProperty($('stage-note'), 'hidden', !zed);
+}
+
 function showFace(state) {
   const face = state.face, fresh = faceFresh(face);
   const nominal = face?.alignment === 'nominal' ? ' (nominal)' : '';
@@ -131,6 +144,7 @@ function showFace(state) {
   setText($('face-alignment'), face?.alignment ?? '');
   const [x, y, z] = facePoint ?? [];
   setText($('face-position'), fresh ? `${metres(x)} fwd · ${metres(y)} left · ${metres(z)} up`
+    : reasons.zed ? `No depth: ${reasons.zed.message}` : reasons.oak ? `No OAK target: ${reasons.oak.message}`
     : !face ? 'No face locator in this run' : 'No face located');
   setText($('face-foot'), fresh && face.pixel ? `from OAK pixel ${face.pixel.map(Math.round).join(', ')} · ${ago(face.age)} old` : '');
 }
@@ -139,7 +153,8 @@ function showTarget(state) {
   const seen = hasTarget(state), target = state.target, servo = state.servo_state;
   setText($('target-state'), seen ? 'Tracking' : 'No target');
   $('target-state').classList.toggle('tracking', seen);
-  setText($('target-pixel'), seen ? `${target.x}, ${target.y} px` : '—');
+  // Without the AI HAT+ there are no poses, so no target: say so.
+  setText($('target-pixel'), seen ? `${target.x}, ${target.y} px` : reasons.hailo ? `no poses: ${reasons.hailo.message}` : '—');
   setText($('target-angle'), seen && target.angle != null ? `body ${target.angle.toFixed(0)}°` : '');
   // The head reports the target inside its jaw zone on both axes: the condition for opening the jaw.
   setText($('target-lock'), seen && servo ? (servo.locked_x && servo.locked_y ? 'in jaw zone' : 'outside jaw zone') : '');
@@ -254,6 +269,7 @@ clock.add(() => {
   stateShown = state;
   tiles.showTargetWithoutVideo(state);
   health.update(healthOf(state));
+  explainParts(health.model, state);
   showMode(state); showTarget(state); showFace(state); showTests(state);
   motorTest.update(state);
   return false;

@@ -42,6 +42,12 @@ export function healthOf(state) {
           i2c: health?.i2c ?? null, servo: health?.servo_board ?? null, power: health?.power ?? null};
 }
 
+// Why a part is not working, {message, fix}, or null while it is well, off, or not checked.
+export function reasonOf(model, id) {
+  const part = model?.components.find(component => component.id === id);
+  return part && PROBLEM.has(part.status) ? {message: part.message || `${part.name}: ${part.status}`, fix: part.fix} : null;
+}
+
 // Without the bot's checks: what robot_state shows anyway, with no fix hints, since only the bot could say.
 function fromNodesAndCameras(state) {
   const parts = [];
