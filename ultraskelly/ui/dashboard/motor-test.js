@@ -22,7 +22,9 @@ const down = (model, id) => { const part = model?.components?.find(component => 
 // What the servo board says about the last servo test's channel, from the bot's checks (health.js's model): its
 // diagnostics.pca9685, pulse widths in microseconds. [words, hint, kind], or null when there is nothing to say.
 function readbackOf(model, name) {
-  const board = down(model, 'servo_board'), chip = model?.diagnostics?.pca9685, channel = chip?.channels?.[name];
+  const part = model?.components?.find(component => component.id === 'servo_board'), board = down(model, 'servo_board');
+  const chip = model?.diagnostics?.pca9685, channel = chip?.channels?.[name];
+  if (part?.status === 'off') return [part.message || 'Simulated: commands are recorded, not sent', part.fix || '', ''];
   if (board && channel?.pulse_us == null) {
     return [`${board.message || 'The servo board does not answer'}: the command went nowhere`, board.fix || '', 'refused'];
   }
@@ -31,9 +33,11 @@ function readbackOf(model, name) {
   const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${Math.round(channel.pulse_us)} µs` +
                (channel.expected_us == null ? '' : `, ${angle} needs ${Math.round(channel.expected_us)} µs`);
   if (chip.awake === false) return [`${said}, but the chip is asleep, so it sends no pulses`, 'The bot wakes it when it starts the servos', 'refused'];
-  const moved = 'If it did not move: the OE wire (it must be low), V+ servo power on the board\'s terminal, the plug\'s orientation';
-  if (channel.expected_us == null) return [said, moved, ''];
-  if (Math.abs(channel.pulse_us - channel.expected_us) > SAME_US) {
+  // The bot's own advice for a board that has the command (its hint), or the usual three places to look.
+  const moved = (part?.status === 'ok' && part.fix) || 'If it did not move: the OE wire (it must be low), V+ servo power on the board\'s terminal, the plug\'s orientation';
+  const same = channel.matches ?? (channel.expected_us == null ? null : Math.abs(channel.pulse_us - channel.expected_us) <= SAME_US);  // The bot's verdict first
+  if (same === null) return [said, moved, ''];
+  if (!same) {
     return [`${said}: the command did not reach the chip`, 'Check the I2C wires to the servo board (SDA, SCL, GND)', 'refused'];
   }
   const rate = chip.frequency_hz != null && Math.abs(chip.frequency_hz - 50) > 5 ? ` at ${chip.frequency_hz.toFixed(0)} Hz, where servos want about 50` : '';

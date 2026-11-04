@@ -60,6 +60,8 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .part .message{grid-area:message;font-size:12px}
 .dashboard .part .fix{grid-area:fix;font-size:11.5px;color:#ffd58a}
 .dashboard .part .fix::before{content:"Fix: ";color:var(--muted)}
+.dashboard .part.ok .fix,.dashboard .part.off .fix{color:var(--muted)}  /* A note on a part that is well or not used */
+.dashboard .part.ok .fix::before,.dashboard .part.off .fix::before{content:none}
 .dashboard .part .because{grid-area:because;font-size:11px;color:var(--muted)}
 .dashboard .part .restart{grid-area:restart;font-size:11px;color:#ffb4a8}
 .dashboard .part.ok .message,.dashboard .part.off .message{color:var(--muted)}

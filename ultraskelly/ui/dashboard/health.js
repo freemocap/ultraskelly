@@ -77,27 +77,42 @@ function describe(value) {
   return String(value);
 }
 
-// The bot's live diagnostics, a line each, in plain words where the reading is known.
+// The bot's live diagnostics (docs/stream.md, "health"), a line each, in plain words where the reading is known.
+const USB_NAMES = {oak: 'OAK', zed_video: 'ZED video', zed_hid: 'ZED HID', zed_imu_device: 'ZED IMU', zed_imu: 'ZED IMU'};
 function diagnosticLines(diagnostics) {
   const lines = [];
   for (const [name, reading] of Object.entries(diagnostics ?? {})) {
-    if (reading == null) continue;
+    if (reading == null || (typeof reading === 'object' && !Object.keys(reading).length)) continue;
     if (name === 'i2c') {
-      const addresses = Object.entries(reading.addresses ?? {}).map(([address, answers]) => `${address} ${answers ? 'answers' : 'silent'}`);
-      lines.push(['I2C', [...addresses, reading.lost_arbitration ? `lost arbitration ${reading.lost_arbitration}` : null].filter(Boolean).join(' · ') || describe(reading)]);
+      if (reading.available === false) { lines.push(['I2C', 'no I2C bus']); continue; }
+      // 0x70 is the boards' all-call address: it goes quiet once the bot sets up the boards.
+      const addresses = Object.entries(reading.addresses ?? {}).map(([address, answers]) =>
+        `${address}${address === '0x70' ? ' (all-call)' : ''} ${answers ? 'answers' : 'silent'}`);
+      lines.push(['I2C', [...addresses, reading.lost_arbitration ? `lost arbitration ${reading.lost_arbitration} times` : null].filter(Boolean).join(' · ') || describe(reading)]);
     } else if (name === 'pca9685') {
       const channels = Object.entries(reading.channels ?? {}).map(([channel, at]) => `${channel} ${at.pulse_us == null ? '—' : `${Math.round(at.pulse_us)} µs`}` +
-        (at.commanded == null ? '' : ` for ${Math.round(at.commanded)}°`) + (at.expected_us == null ? '' : ` (expects ${Math.round(at.expected_us)} µs)`));
+        (at.commanded == null ? '' : ` for ${Math.round(at.commanded)}°`) +
+        (at.expected_us == null ? '' : ` (expects ${Math.round(at.expected_us)} µs${at.matches === false ? ', does not match' : ''})`));
       lines.push(['Servo board', [reading.awake == null ? null : reading.awake ? 'awake' : 'asleep',
                                   reading.frequency_hz == null ? null : `${reading.frequency_hz.toFixed(1)} Hz`, ...channels].filter(Boolean).join(' · ')]);
     } else if (name === 'power') {
+      if (reading.available === false) { lines.push(['Power', 'no readings on this machine']); continue; }
       const rails = Object.entries(reading.rails ?? {}).map(([rail, value]) => `${rail} ${value.toFixed(2)} V`);
       const flags = Array.isArray(reading.flags) ? reading.flags : [], throttled = reading.throttled && !/^0x0+$/i.test(String(reading.throttled));
       lines.push(['Power', [...rails, flags.length ? flags.join(', ') : throttled ? `throttled ${reading.throttled}` : 'not throttled'].join(' · ')]);
     } else if (name === 'hailo') {
-      lines.push(['Hailo', reading.device ? `device ${reading.device}` : 'no device']);
+      const device = typeof reading.device === 'string' ? `device ${reading.device}` : reading.device ? '/dev/hailo0 present' : 'no /dev/hailo0';
+      lines.push(['Hailo', [reading.pci == null ? null : reading.pci ? 'on PCIe' : 'not on PCIe', device].filter(Boolean).join(' · ')]);
+    } else if (name === 'usb') {
+      const there = Object.entries(reading), named = key => USB_NAMES[key] ?? key.replaceAll('_', ' ');
+      const on = there.filter(([, present]) => present).map(([key]) => named(key)), off = there.filter(([, present]) => !present).map(([key]) => named(key));
+      lines.push(['USB', [`on USB: ${on.join(', ') || 'none'}`, off.length ? `not on USB: ${off.join(', ')}` : null].filter(Boolean).join(' · ')]);
+    } else if (name === 'motor_watchdog') {
+      lines.push(['Motor watchdog', reading.trips ? `stopped the motors ${reading.trips} time${reading.trips === 1 ? '' : 's'}` : 'never tripped']);
+    } else if (name === 'retried_writes') {
+      lines.push(['Retried writes', describe(reading)]);
     } else {
-      lines.push([{usb: 'USB', hailo: 'Hailo', motor_watchdog: 'Motor watchdog'}[name] ?? name.replaceAll('_', ' '), describe(reading)]);
+      lines.push([name.replaceAll('_', ' '), describe(reading)]);
     }
   }
   return lines;
