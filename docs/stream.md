@@ -168,11 +168,12 @@ Each component:
 
 | Field | Contents |
 | --- | --- |
-| `id` | `oak_camera`, `oak_models`, `hailo`, `zed_camera`, `zed_imu`, `depth`, `servo_board`, `motor_board`, in that order; only the parts this launch uses |
-| `label`, `group` | for display, such as "OAK camera" in `cameras`; the groups are `cameras`, `ai`, `sensors` and `motors` |
+| `id` | `oak_camera`, `oak_models`, `hailo`, `zed_camera`, `zed_imu`, `depth`, `servo_board`, `motor_board`, `power`, in that order; only the parts this launch uses |
+| `label`, `group` | for display, such as "OAK camera" in `cameras`; the groups are `cameras`, `ai`, `sensors`, `motors` and `power` |
 | `status` | `ok`; `degraded`, working partly (an OAK that sends no frames, depth waiting for the ZED); `missing`, not on USB, PCIe or I²C; `error`, there but failed; `off`, not used on purpose (`--simulate-motors`, `--no-oak-models`) |
 | `message` | what is the matter, in plain words, such as "No OAK on USB (no 03e7 device)" |
 | `hint` | what to do about it, or null |
+| `because` | the `id` of the part whose trouble this one follows from, or null: the ZED's IMU while the whole ZED Mini is off USB, depth while it waits for the ZED's images, the OAK's models and the Hailo-8 while the OAK sends no frames, StereoNet depth without the Hailo-8. Show that part as the problem; a part that follows from another has no `hint` of its own unless it has a way round, so take the other part's |
 | `since` | when the status last changed, on the same clock as `time` |
 | `restart` | null, or why the part is back but the bot must restart to use it |
 | `detail` | small facts, such as the `error` a part failed with |
@@ -183,7 +184,7 @@ Each component:
 
 | Field | Contents |
 | --- | --- |
-| `i2c` | `available`; `addresses`, whether `0x40` (servo board), `0x60` (Motor HAT) and `0x70` (their all-call) answer a zero-length write, as i2cdetect probes; `lost_arbitration`, the I²C bus errors the kernel logged since boot. `0x70` answers only until the bot sets up the boards, which clears their all-call bit |
+| `i2c` | `available`; `addresses`, whether `0x40` (servo board), `0x60` (Motor HAT) and `0x70` (their all-call) answer a zero-length write, as i2cdetect probes; `lost_arbitration`, the I²C bus errors the kernel logged since boot. `0x70` answers only until the bot sets up the boards, which clears their all-call bit. With `--zed-only` the bot holds no robot lock and leaves the bus alone: `available` is false |
 | `pca9685` | the servo board's own registers while the bot drives it, else null: `address`, `mode1`, `awake`, `frequency_hz`, and per head channel (`pan`, `tilt`) its `channel`, `commanded` angle, the `pulse_us` it puts out, the `expected_us` that angle needs, and whether they `matches` (within 20 µs): the proof that commands reach the chip |
 | `usb` | `oak`, `zed_video`, `zed_hid` (the ZED's IMU interface: with it but no video, flip the ZED's plug) and `zed_imu_device` (/dev/zed-mini-imu) |
 | `hailo` | `device` (/dev/hailo0) and `pci` (a Hailo device, vendor 1e60, on PCIe) |
@@ -197,11 +198,24 @@ board's OE wire (held high it switches every output off), the servo power on V+,
 plug's orientation. A board asleep, at the wrong frequency, or with pulses that do not
 match is `degraded`, with what to do.
 
-While a motor board is not `ok` or `off`, `robot_state.motors.commands` still lists its
-actuators: the controllers run and record their commands, but nothing is sent to a board
-that is not there, and dashboard motor tests on it are refused with the reason. The ZED
-Mini and its IMU are picked up as soon as they appear; the OAK, the Hailo-8 and the motor
-boards are used only if they are there when the bot starts.
+The `power` component is the Pi's supply, from the `power` check: `error` while
+under-voltage now, `degraded` while throttled, frequency-capped or at its temperature limit
+now, else `ok`, naming in its message what happened since boot. It is reported only where
+`vcgencmd` works, so not on a PC.
+
+While the bot does not drive a motor board, `robot_state.motors.commands` still lists its
+actuators: the controllers run and record their commands, but nothing is sent to the
+board, and dashboard motor tests on it are refused with the reason.
+
+Parts come back by themselves. The ZED Mini and its IMU are picked up as soon as they
+appear. Every 5 s the bot brings back the OAK once it shows on USB, the Hailo-8 once
+/dev/hailo0 is there, depth once the ZED streams, and a camera or IMU node that crashed;
+one that is there but fails to start, or stops again within a minute, is tried again after
+5 s, then after waits that double up to 5 minutes. The motor boards are set up, and the
+head centred, only when the bot starts: a board that answers later is `degraded`, with a
+`restart` saying so, and one the bot drives that stops answering is an `error` until it
+answers again (the bot stops at its next command to it, for its service to start it
+again).
 
 ## `depth_frame` messages
 

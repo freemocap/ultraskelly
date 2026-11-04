@@ -11,7 +11,8 @@ Every few seconds, off the event loop, the bot looks at:
   chip: the OE wire, V+ servo power, or a reversed plug.
 - USB: the OAK, the ZED's video and its IMU (the ZED with only its IMU needs its plug flipped).
 - The Hailo-8 on PCIe and its /dev/hailo0.
-- Power: the Pi's under-voltage and throttling flags and the PMIC's 5 V input and 3.3 V rails.
+- Power: the Pi's under-voltage and throttling flags and the PMIC's 5 V input and 3.3 V rails,
+  which also make the `power` component (judge_power).
 - I2C bus errors (lost arbitration) the kernel logged since boot, and the motor watchdog's brakes.
 
 The bot holds the robot lock, so probing its boards needs no other coordination: the kernel
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ultraskelly.core.bot.health import HAILO_DEVICE, OAK_VENDOR, ZED_HID, ZED_VIDEO, Status, usb_devices
+from ultraskelly.core.bot.health import HAILO_DEVICE, ZED_HID, ZED_VIDEO, Finding, Status, oak_on_usb, usb_devices
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ ZED_IMU_DEVICE = Path("/dev/zed-mini-imu")
 NOT_MOVING = ("If a servo still does not move: unplug the board's OE wire (held high it switches every output "
               "off), check the servo power on V+ (5-6 V at the screw terminal and at a servo header's middle "
               "pin), and check each servo plug's orientation (its dark wire on GND).")
+UNDER_VOLTAGE = ("Power the Pi from a 5.1 V, 5 A USB-C supply (the official 27 W one) on a short cable; under-voltage "
+                 "can drop the USB cameras and the boards on the header.")
+HEAT = "Give the Pi air (its fan running, the case's vents clear) and check its supply; it runs slower while throttled."
 THROTTLED_FLAGS = {
     0: "under-voltage now", 1: "CPU frequency capped now", 2: "throttled now", 3: "temperature limit now",
     16: "under-voltage since boot", 17: "frequency capped since boot", 18: "throttled since boot",
@@ -199,7 +203,7 @@ class Diagnostics:
     def usb(self) -> dict:
         devices = self.sources.usb()
         return {
-            "oak": any(device.startswith(f"{OAK_VENDOR}:") for device in devices),
+            "oak": oak_on_usb(devices),
             "zed_video": ZED_VIDEO in devices, "zed_hid": ZED_HID in devices,
             "zed_imu_device": self.sources.imu_device(),
         }
@@ -223,22 +227,43 @@ class Diagnostics:
             self.bus = None
 
 
-def judge_servo_board(readback: dict | None) -> tuple[Status, str, str | None] | None:
+def judge_servo_board(readback: dict | None) -> Finding | None:
     """What the servo board's readback says about a board the bot drives, as (status, message,
     hint); None when there is nothing to judge (no readback, or no angle commanded yet)."""
     if readback is None:
         return None
     if not readback["awake"]:
-        return (Status.DEGRADED, f"The PCA9685 is asleep (MODE1 {readback['mode1']}): every output is off",
-                "Restart the bot, which wakes the board when it sets it up.")
+        return Finding(Status.DEGRADED, f"The PCA9685 is asleep (MODE1 {readback['mode1']}): every output is off",
+                       "Restart the bot, which wakes the board when it sets it up.")
     if not 45 <= readback["frequency_hz"] <= 55:
-        return (Status.DEGRADED, f"The PCA9685 runs at {readback['frequency_hz']:g} Hz, not the 50 Hz servos need",
-                "Restart the bot, which sets the servo frequency when it sets up the board.")
+        return Finding(Status.DEGRADED, f"The PCA9685 runs at {readback['frequency_hz']:g} Hz, not the 50 Hz servos need",
+                       "Restart the bot, which sets the servo frequency when it sets up the board.")
     wrong = [f"{name} puts out {channel['pulse_us']} µs where {channel['commanded']:g}° needs "
              f"{channel['expected_us']} µs" for name, channel in readback["channels"].items() if channel["matches"] is False]
     if wrong:
-        return (Status.DEGRADED, "; ".join(wrong),
-                "Another program may be driving the board; check that only the bot holds the robot lock.")
+        return Finding(Status.DEGRADED, "; ".join(wrong),
+                       "Another program may be driving the board; check that only the bot holds the robot lock.")
     if any(channel["matches"] for channel in readback["channels"].values()):
-        return (Status.OK, "Answers; awake at 50 Hz, and the pulses match the commanded angles", NOT_MOVING)
+        return Finding(Status.OK, "Answers; awake at 50 Hz, and the pulses match the commanded angles", NOT_MOVING)
     return None
+
+
+def judge_power(power: dict) -> Finding | None:
+    """The Pi's supply as a component: an error while under-voltage now, degraded while throttled,
+    frequency-capped or at its temperature limit now, else ok, naming what happened since boot;
+    None where the flags cannot be read."""
+    if not power.get("available"):
+        return None
+    supply = power.get("rails", {}).get("EXT5V")
+    reading = "" if supply is None else f" (EXT5V {supply:.2f} V)"
+    now = [flag.removesuffix(" now") for flag in power["flags"] if flag.endswith(" now")]
+    before = [flag.removesuffix(" since boot") for flag in power["flags"] if flag.endswith(" since boot")]
+    if "under-voltage" in now:
+        return Finding(Status.ERROR, f"Under-voltage now{reading}", UNDER_VOLTAGE)
+    if now:
+        named = ", ".join(now)
+        return Finding(Status.DEGRADED, f"{named[:1].upper()}{named[1:]} now{reading}", HEAT)
+    if before:
+        return Finding(Status.OK, f"Fine now{reading}; since boot: {', '.join(before)}",
+                       UNDER_VOLTAGE if "under-voltage" in before else HEAT)
+    return Finding(Status.OK, f"No under-voltage or throttling{reading}")
