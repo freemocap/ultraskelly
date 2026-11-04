@@ -1,18 +1,47 @@
+"""Builds the bot from its launch configuration and runs it with whatever hardware works.
+
+Every part of the robot is tried: the OAK camera and its models, the Hailo-8, the ZED Mini
+and its IMU, depth, the servo board and the Motor HAT. A part that is missing or fails is
+reported with how to fix it (core/bot/health.py, sent to the dashboard as `health`
+messages) and the bot runs on without it: motors without cameras, cameras without motors,
+no Hailo means no tracking. A missing board's actuators are stand-ins that send nothing
+(core/bot/motor/motor_boards.py). Nodes are of two kinds. A camera, detector or depth
+node that stops or crashes takes only its part away; it is reported, and the rest run on.
+Any other node stopping or crashing ends the bot, which brakes the motors, for its service
+to start it again; the stall monitor raises for a stream that was running and went quiet.
+"""
 import asyncio
 import logging
+import time
+from dataclasses import dataclass, field
+from typing import Callable, TypeVar
 
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
+from ultraskelly.core.bot.health import (
+    COMPONENTS,
+    Health,
+    Probes,
+    Status,
+    diagnose_board,
+    diagnose_hailo,
+    diagnose_oak,
+    diagnose_zed,
+    diagnose_zed_imu,
+)
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
+from ultraskelly.core.bot.motor.motor_boards import (
+    MOTOR_BOARD_ADDRESS,
+    SERVO_BOARD_ADDRESS,
+    build_motor_nodes,
+    open_motor_board,
+    open_servo_board,
+)
 from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
 from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
-from ultraskelly.core.bot.motor.simulated_actuators import (
-    CommandRecorder,
-    create_simulated_motor_nodes,
-    record_hardware_commands,
-)
+from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, create_simulated_motor_nodes
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
 from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams
 
@@ -28,6 +57,7 @@ from ultraskelly.core.bot.sensory.hailo_pose_node import (
     HailoPoseDetectorParams,
 )
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
+from ultraskelly.core.bot.sensory.oak_models import missing_models
 from ultraskelly.core.bot.sensory.pose_detection_node import (
     PoseDetectorNode,
     PoseDetectorParams,
@@ -45,6 +75,11 @@ from ultraskelly.core.pubsub.pubsub_abcs import PubSubTopicABC
 from ultraskelly.core.pubsub.pubsub_manager import (
     PubSubTopicManager,
 )
+
+Part = TypeVar("Part")
+Diagnosis = Callable[[BaseException], tuple[Status, str, str | None]]
+STREAMING_WINDOW = 3.0  # Seconds without new data before a camera or the IMU counts as not streaming
+HEALTH_INTERVAL = 1.0  # Seconds between checks of how each part is doing
 
 
 class LaunchConfig(NodeParams):
@@ -117,6 +152,21 @@ class LaunchConfig(NodeParams):
     )
 
 
+@dataclass
+class Hardware:
+    """How the launcher opens each part of the robot; each raises if its part is missing or fails.
+    Tests pass fakes."""
+
+    oak_camera: Callable[..., Node] = OakCameraNode.create
+    hailo_pose: Callable[..., Node] = HailoPoseDetectorNode.create
+    zed_camera: Callable[..., Node] = ZedCameraNode.create  # Also takes wait=True: start without the camera
+    zed_imu: Callable[..., Node] = ZedImuNode.create  # Also takes wait=True
+    stereo_depth: Callable[..., Node] = StereoDepthNode.create
+    servo_board: Callable[[], object] = open_servo_board
+    motor_board: Callable[[float], object] = open_motor_board
+    probes: Probes = field(default_factory=Probes)
+
+
 class BotLauncher(BaseModel):
     """Main launcher for the bot system."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -130,10 +180,36 @@ class BotLauncher(BaseModel):
     # Brakes the DC motors from its own thread if the control loop stalls; None until nodes are created.
     motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(default=None, exclude=True)
     shutting_down: bool = Field(default=False, exclude=True)
+    health: SkipValidation[Health] = Field(default_factory=Health, exclude=True)
+    hardware: SkipValidation[Hardware] = Field(default_factory=Hardware, exclude=True)
+    # Nodes whose stop or crash takes away only their part of the robot: id(node) -> component
+    components_of: dict[int, str] = Field(default_factory=dict, exclude=True)
+    diagnoses: SkipValidation[dict[str, Diagnosis]] = Field(default_factory=dict, exclude=True)
+    # Called every HEALTH_INTERVAL while the bot runs, to keep each part's status current
+    watches: SkipValidation[list[Callable[[], None]]] = Field(default_factory=list, exclude=True)
 
     def healthy(self) -> bool:
         """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
         return not self.shutting_down
+
+    def _attempt(self, component: str, open_part: Callable[[], Part], diagnose: Diagnosis, working: str) -> Part | None:
+        """Open one part of the robot and report it. A part that is missing or fails is reported
+        with how to fix it and None returned, so the bot runs on without it."""
+        self.diagnoses[component] = diagnose
+        try:
+            part = open_part()
+        except Exception as error:
+            status, message, hint = diagnose(error)
+            self.health.report(component, status, message, hint, detail={"error": f"{type(error).__name__}: {error}"})
+            logger.error(f"Running without the {COMPONENTS[component][0]}: {message} ({type(error).__name__}: {error})")
+            return None
+        self.health.report(component, Status.OK, working)
+        return part
+
+    def _add_part(self, node: Node, component: str) -> None:
+        """A node whose stop or crash is reported against `component` instead of ending the bot."""
+        self.nodes.append(node)
+        self.components_of[id(node)] = component
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -141,41 +217,23 @@ class BotLauncher(BaseModel):
         if not self.config.tracking:
             self._create_zed_only_nodes()
             return
-        # The ZED first: an optional camera that fails to start stops the launch before
-        # the motors, the OAK or the Hailo are opened.
         stereo_feeds = self._create_stereo_nodes()
 
         # Create motor and UI nodes
         # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
         # self.nodes.append(WaistNode.create(pubsub=self.pubsub, params=self.config.waist))
-        self.command_recorder = CommandRecorder()
-        if self.config.simulate_motors:
-            logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
-            orientation, mouth = create_simulated_motor_nodes(
-                pubsub=self.pubsub,
-                orientation_params=self.config.orientation,
-                mouth_params=self.config.mouth,
-                recorder=self.command_recorder,
-                limits=self.config.limits,
-            )
-            self.nodes.extend([orientation, mouth])
-        else:
-            pwm = self.config.motor_pwm_hz
-            orientation = OrientationNode.create(pubsub=self.pubsub, params=self.config.orientation, pwm_frequency=pwm)
-            mouth = MouthNode.create(pubsub=self.pubsub, params=self.config.mouth, pwm_frequency=pwm)
-            record_hardware_commands(
-                orientation=orientation, mouth=mouth, recorder=self.command_recorder, limits=self.config.limits,
-            )
-            if self.config.mouth.startup_test:
-                mouth.run_startup_test()  # After wrapping, so the limits apply
-            self.nodes.extend([orientation, mouth])
-        self.motor_tester = MotorTester(orientation=orientation, mouth=mouth, limits=self.config.motor_tests)
+        orientation, mouth = self._create_motor_nodes()
+        self.nodes.extend([orientation, mouth])
+        self.motor_tester = MotorTester(
+            orientation=orientation, mouth=mouth, limits=self.config.motor_tests, unavailable=self._unavailable,
+        )
         self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
         orientation.motor_watchdog = self.motor_watchdog
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
         # Create detector based on type
+        oak = None
         if self.config.detector_type == DetectorType.BRIGHTNESS:
             self.nodes.append(
                 VisionNode.create(pubsub=self.pubsub, params=self.config.vision)
@@ -190,18 +248,12 @@ class BotLauncher(BaseModel):
                 PoseDetectorNode.create(pubsub=self.pubsub, params=self.config.pose_detector)
             )
         elif self.config.detector_type == DetectorType.HAILO_POSE:
-            oak = OakCameraNode.create(pubsub=self.pubsub, params=self.config.oak_camera)
-            self.nodes.append(oak)
-            self.nodes.append(
-                HailoPoseDetectorNode.create(
-                    pubsub=self.pubsub, params=self.config.hailo_pose_detector
-                )
-            )
+            oak = self._create_tracking_nodes()
         else:
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
-        camera_name = "oak" if self.config.detector_type == DetectorType.HAILO_POSE else "camera"
-        oak_running = self.config.detector_type == DetectorType.HAILO_POSE
+        hailo_pose = self.config.detector_type == DetectorType.HAILO_POSE
+        camera_name = "oak" if hailo_pose else "camera"
         aim = self.config.orientation
         self.nodes.append(
             RuntimeServerNode.create(
@@ -216,13 +268,14 @@ class BotLauncher(BaseModel):
                     camera_name: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
                 },
                 # The Hailo detector reports which OAK frame each pose came from.
-                pose_camera=camera_name if self.config.detector_type == DetectorType.HAILO_POSE else None,
+                pose_camera=camera_name if hailo_pose else None,
                 motor_tests=self.motor_tester,
                 # The OAK's own chip finds faces in the same frames.
                 # Only while the OAK runs its models: without them no frame would ever get its results.
-                results_camera=camera_name if oak_running and oak.assembler is not None else None,
-                results_for=oak.results_for if oak_running else None,
-                oak_status=oak.status if oak_running else None,
+                results_camera=camera_name if oak is not None and oak.assembler is not None else None,
+                results_for=oak.results_for if oak is not None else None,
+                oak_status=oak.status if oak is not None else None,
+                health=self.health,
             )
         )
         if self.config.recording is not None:
@@ -244,36 +297,206 @@ class BotLauncher(BaseModel):
                 pubsub=self.pubsub,
                 params=self.config.stall_monitor,
                 # Only the Hailo detector reports the frame each pose result belongs to.
-                watch_poses=self.config.detector_type == DetectorType.HAILO_POSE,
+                watch_poses=hailo_pose,
+                # A stream is watched only while its source works; a missing one is reported, not restarted.
+                frames_expected=(lambda: self.health.ok("oak_camera")) if hailo_pose else None,
+                poses_expected=(
+                    (lambda: self.health.ok("oak_camera") and self.health.ok("hailo")) if hailo_pose else None
+                ),
             )
         )
 
         logger.info(f"Created {len(self.nodes)} nodes")
 
+    def _create_motor_nodes(self) -> tuple[OrientationNode, MouthNode]:
+        """Both controllers, on the boards that answer; simulated with --simulate-motors."""
+        self.command_recorder = CommandRecorder()
+        config = self.config
+        if config.simulate_motors:
+            logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
+            for board in ("servo_board", "motor_board"):
+                self.health.report(
+                    board, Status.OFF, "Simulated (--simulate-motors): commands are recorded, not sent",
+                    "Leave out --simulate-motors (for the service, in /etc/default/ultraskelly-bot) "
+                    "to drive the boards.",
+                )
+            return create_simulated_motor_nodes(
+                pubsub=self.pubsub,
+                orientation_params=config.orientation,
+                mouth_params=config.mouth,
+                recorder=self.command_recorder,
+                limits=config.limits,
+            )
+        probes = self.hardware.probes
+        servo_kit = self._attempt(
+            "servo_board", self.hardware.servo_board,
+            lambda error: diagnose_board("servo board", SERVO_BOARD_ADDRESS, error, probes,
+                                         "Until then the head's pan and tilt are recorded, not sent."),
+            "Answers; the head's pan and tilt are sent to it",
+        )
+        motor_kit = self._attempt(
+            "motor_board", lambda: self.hardware.motor_board(config.motor_pwm_hz),
+            lambda error: diagnose_board("Motor HAT", MOTOR_BOARD_ADDRESS, error, probes,
+                                         "Until then the waist and jaw are recorded, not sent."),
+            "Answers; the waist and jaw are sent to it",
+        )
+        return build_motor_nodes(
+            pubsub=self.pubsub,
+            orientation_params=config.orientation,
+            mouth_params=config.mouth,
+            recorder=self.command_recorder,
+            limits=config.limits,
+            servo_kit=servo_kit,
+            motor_kit=motor_kit,
+        )
+
+    def _unavailable(self, actuator: str) -> str | None:
+        """Why a motor test on `actuator` cannot reach a board now, or None."""
+        component = self.health.get("servo_board" if actuator in ("pan", "tilt") else "motor_board")
+        if component is None or component.status not in (Status.MISSING, Status.ERROR):
+            return None
+        return f"{component.message}, so nothing would move. {component.hint}"
+
+    def _create_tracking_nodes(self) -> OakCameraNode | None:
+        """The OAK camera and the Hailo-8 pose detector, each if it starts; returns the OAK's node."""
+        probes = self.hardware.probes
+        oak = self._attempt(
+            "oak_camera", lambda: self.hardware.oak_camera(pubsub=self.pubsub, params=self.config.oak_camera),
+            lambda error: diagnose_oak(error, probes), "Streaming",
+        )
+        if oak is not None:
+            self._add_part(oak, "oak_camera")
+            self.watches.append(self._watch_oak(oak))
+        self._report_oak_models(oak)
+        hailo = self._attempt(
+            "hailo", lambda: self.hardware.hailo_pose(pubsub=self.pubsub, params=self.config.hailo_pose_detector),
+            lambda error: diagnose_hailo(error, probes), "Finds people in the OAK's frames",
+        )
+        if hailo is not None:
+            self._add_part(hailo, "hailo")
+        return oak
+
+    def _report_oak_models(self, oak: OakCameraNode | None) -> None:
+        models = self.config.oak_camera.models
+        if models is None:
+            self.health.report("oak_models", Status.OFF, "Turned off (--no-oak-models)")
+            return
+        fetch = ("Run .venv/bin/python -m scripts.fetch_oak_models with the internet on (scripts/setup-pi.sh does "
+                 "it too), then restart the bot.")
+        if oak is not None:
+            if oak.models_error:
+                self.health.report("oak_models", Status.MISSING, oak.models_error, fetch)
+            else:
+                self.health.report("oak_models", Status.OK, "Running on the OAK's chip")
+            return
+        missing = missing_models(models.model_cache)
+        if missing:
+            self.health.report("oak_models", Status.MISSING, f"Not downloaded: {', '.join(missing)}", fetch)
+        else:
+            self.health.report("oak_models", Status.OK, "All downloaded; they run once the OAK is plugged in")
+
+    def _watch_oak(self, oak: OakCameraNode) -> Callable[[], None]:
+        """While the OAK node runs: streaming, or started but sending no frames (reported, not restarted)."""
+        started = time.monotonic()
+        quiet_after = self.config.stall_monitor.startup_seconds
+
+        def watch() -> None:
+            current = self.health.get("oak_camera")
+            if current is None or current.status not in (Status.OK, Status.DEGRADED):
+                return  # Stopped or crashed: reported when its node ended
+            if oak.status()["rates"].get("frames", 0.0) > 0:
+                self.health.report("oak_camera", Status.OK, "Streaming")
+            elif time.monotonic() - started > quiet_after:
+                self.health.report("oak_camera", Status.DEGRADED, "Started, but sends no frames",
+                                   "Unplug the OAK, wait 5 s and plug it back in; if it stays quiet, restart the bot.")
+        return watch
+
     def _create_stereo_nodes(self) -> dict[str, dict[str, type[PubSubTopicABC]]]:
-        """The ZED Mini's nodes, when configured: capture, and depth if asked for.
-        Returns the dashboard's stereo and depth camera feeds."""
+        """The ZED Mini's nodes, when configured: capture, its IMU, and depth if asked for. The camera and
+        the IMU start even when missing, and pick them up once they appear. Returns the dashboard's
+        stereo and depth camera feeds."""
         zed = self.config.zed_camera
         if zed is None:
             return {}
-        self.nodes.append(ZedCameraNode.create(pubsub=self.pubsub, params=zed))
+        probes = self.hardware.probes
+        camera = self._attempt(
+            "zed_camera", lambda: self.hardware.zed_camera(pubsub=self.pubsub, params=zed),
+            lambda error: diagnose_zed(error, probes), "Streaming both eyes",
+        )
+        if camera is None:  # It tries once a second until the camera streams
+            camera = self.hardware.zed_camera(pubsub=self.pubsub, params=zed, wait=True)
+        self._add_part(camera, "zed_camera")
+        self.watches.append(self._watch_streaming(
+            "zed_camera", lambda: camera.frames_published if camera.source is not None else None,
+            "Streaming both eyes", lambda: diagnose_zed(RuntimeError("it does not stream"), probes),
+        ))
         if self.config.zed_imu is not None:
-            try:
-                self.nodes.append(ZedImuNode.create(pubsub=self.pubsub, params=self.config.zed_imu))
-            except OSError as error:  # Display and recording only: the robot runs on without it
-                logger.error(f"Running without the ZED's IMU: {error}")
+            imu_params = self.config.zed_imu
+            imu = self._attempt(
+                "zed_imu", lambda: self.hardware.zed_imu(pubsub=self.pubsub, params=imu_params),
+                lambda error: diagnose_zed_imu(error, probes), "Reading the accelerometer and gyroscope",
+            )
+            if imu is None:  # Its reader tries again every few seconds
+                imu = self.hardware.zed_imu(pubsub=self.pubsub, params=imu_params, wait=True)
+            self._add_part(imu, "zed_imu")
+            self.watches.append(self._watch_streaming(
+                "zed_imu", lambda: imu.samples, "Reading the accelerometer and gyroscope",
+                lambda: diagnose_zed_imu(OSError("no samples arrive"), probes),
+            ))
         feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
         if self.config.stereo_depth is not None:
+            depth_params = self.config.stereo_depth
             width, height = ZED_MODES[zed.resolution][0]
-            self.nodes.append(StereoDepthNode.create(
-                pubsub=self.pubsub, params=self.config.stereo_depth, eye_size=(width // 2, height),
-            ))
-            feeds["depth_cameras"] = {"zed": DepthFrameTopic}
+            depth = self._attempt(
+                "depth", lambda: self.hardware.stereo_depth(
+                    pubsub=self.pubsub, params=depth_params, eye_size=(width // 2, height)),
+                lambda error: self._diagnose_depth(error), f"Depth from the ZED's eyes ({depth_params.matcher})",
+            )
+            if depth is not None:
+                self._add_part(depth, "depth")
+                feeds["depth_cameras"] = {"zed": DepthFrameTopic}
+                self.watches.append(self._watch_depth(depth_params.matcher))
             if self.config.tracking:
                 # It uses only pose results that carry the OAK frame they came from (its size and time),
                 # so any detector of OAK images feeds it and the others are ignored.
                 self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
         return feeds
+
+    def _watch_streaming(
+        self, component: str, count: Callable[[], int | None], working: str,
+        diagnose: Callable[[], tuple[Status, str, str | None]],
+    ) -> Callable[[], None]:
+        """A part whose node picks it up by itself: working while `count` (None: not open) keeps
+        rising, else diagnosed from what is plugged in. For its first STREAMING_WINDOW the status
+        from startup stands, while the node opens it."""
+        state = {"count": count(), "rose_at": None, "first": None}
+
+        def watch() -> None:
+            now, latest = time.monotonic(), count()
+            state["first"] = state["first"] or now
+            if latest is not None and state["count"] is not None and latest > state["count"]:
+                state["rose_at"] = now
+            state["count"] = latest
+            if state["rose_at"] is not None and now - state["rose_at"] <= STREAMING_WINDOW:
+                self.health.report(component, Status.OK, working)
+            elif now - state["first"] > STREAMING_WINDOW:
+                self.health.report(component, *diagnose())
+        return watch
+
+    def _diagnose_depth(self, error: BaseException) -> tuple[Status, str, str | None]:
+        if self.config.stereo_depth.matcher == "stereonet" and not self.hardware.probes.hailo_device():
+            return (Status.MISSING, "StereoNet runs on the Hailo-8, which is missing",
+                    "Seat the AI HAT+ (see Hailo-8), or run with --depth, which computes depth on the CPU.")
+        return (Status.ERROR, f"Depth did not start: {error}", None)
+
+    def _watch_depth(self, matcher: str) -> Callable[[], None]:
+        def watch() -> None:
+            if self.health.ok("zed_camera"):
+                self.health.report("depth", Status.OK, f"Depth from the ZED's eyes ({matcher})")
+            else:
+                self.health.report("depth", Status.DEGRADED, "Waiting for the ZED Mini's images",
+                                   "Depth needs the ZED Mini; see its line.")
+        return watch
 
     def _create_zed_only_nodes(self) -> None:
         """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed."""
@@ -288,6 +511,7 @@ class BotLauncher(BaseModel):
                 recorder=None,
                 motors_simulated=True,
                 node_status=self.node_status,
+                health=self.health,
             )
         )
         logger.info(f"Created {len(self.nodes)} nodes without tracking or motors")
@@ -309,13 +533,13 @@ class BotLauncher(BaseModel):
         return status
 
     @classmethod
-    def from_config(cls, config: LaunchConfig) -> "BotLauncher":
-        """Instantiate launcher and nodes based on config."""
+    def from_config(cls, config: LaunchConfig, hardware: Hardware | None = None) -> "BotLauncher":
+        """Instantiate launcher and nodes based on config, on `hardware` (the robot's when None)."""
         logger.info("Creating nodes from launch config...")
 
-        launcher = cls(config=config, pubsub=PubSubTopicManager.create())
+        launcher = cls(config=config, pubsub=PubSubTopicManager.create(), hardware=hardware or Hardware())
         launcher._create_nodes()
-        
+
         return launcher
 
     async def _shutdown_nodes(self) -> None:
@@ -335,17 +559,17 @@ class BotLauncher(BaseModel):
         await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.motor_watchdog is not None:
             self.motor_watchdog.stop()
-        
+
         # Clear task list
         self.tasks.clear()
-        
+
         # Explicitly close camera resources for PoseDetectorNode
         for node in self.nodes:
             if hasattr(node, 'picam2') and node.picam2 is not None:
                 logger.info(f"Closing camera for {node.__class__.__name__}")
                 node.picam2.close()
                 node.picam2 = None
-        
+
         # Clear nodes to release resources
         self.nodes.clear()
 
@@ -360,11 +584,29 @@ class BotLauncher(BaseModel):
         for node in self.nodes:
             task = asyncio.create_task(node.run())
             self.tasks.append(task)
-        
+
         logger.info(f"Started {len(self.tasks)} node tasks")
 
+    def _report_stopped(self, component: str, task: asyncio.Task) -> None:
+        """A camera, detector or depth node ended: report why, against its part, and run on."""
+        if task.cancelled():
+            return
+        error = task.exception() or RuntimeError("it stopped")
+        diagnose = self.diagnoses.get(component, lambda error: (Status.ERROR, str(error), None))
+        status, message, hint = diagnose(error)
+        self.health.report(component, status, message, hint, detail={"error": f"{type(error).__name__}: {error}"})
+        logger.error(f"The {COMPONENTS[component][0]} stopped; running on without it: {message}")
+
+    async def _watch_health(self) -> None:
+        """Keep each part's status current while the bot runs."""
+        while True:
+            for watch in self.watches:
+                watch()
+            await asyncio.sleep(HEALTH_INTERVAL)
+
     async def run(self) -> None:
-        """Run all nodes until any one stops or crashes, then stop the rest.
+        """Run all nodes until one that is not a camera, detector or depth node stops or crashes,
+        then stop the rest. Those three report their end against their part and the rest run on.
 
         A crashed node's exception is re-raised so failures surface instead of being hidden.
         """
@@ -372,13 +614,32 @@ class BotLauncher(BaseModel):
         logger.info("LAUNCHING TARGET TRACKER WITH SOPHISTICATED PUBSUB")
         logger.info("=" * 60)
 
+        watcher = None
         try:
             await self._start_nodes()
-            done, _ = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()  # Re-raises if the node crashed
-            logger.info("A node stopped; stopping the others...")
+            watcher = asyncio.create_task(self._watch_health())
+            pending = {*self.tasks, watcher}
+            while True:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                core_ended = False
+                for task in done:
+                    if task is watcher:
+                        task.result()  # Re-raises; it never returns
+                        core_ended = True
+                        continue
+                    component = self.components_of.get(id(self.nodes[self.tasks.index(task)]))
+                    if component is None:
+                        task.result()  # Re-raises if the node crashed
+                        core_ended = True
+                    else:
+                        self._report_stopped(component, task)
+                if core_ended:
+                    logger.info("A node stopped; stopping the others...")
+                    break
         finally:
+            if watcher is not None:
+                watcher.cancel()
+                await asyncio.gather(watcher, return_exceptions=True)
             await self._shutdown_nodes()
             self.pubsub.close()
             logger.info("All nodes stopped and pubsub closed")

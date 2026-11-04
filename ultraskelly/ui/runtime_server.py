@@ -38,6 +38,7 @@ from freemocap_stream import (
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.health import Health
 from ultraskelly.core.bot.motor.motor_test import MotorTester
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
@@ -256,7 +257,9 @@ def person_trackers(camera: str, image_size: tuple[int, int], poses: PoseDataMes
     return trackers
 
 
-STATE_KIND, DEPTH_KIND, IMU_KIND = "robot_state", "depth_frame", "imu"
+STATE_KIND, DEPTH_KIND, IMU_KIND, HEALTH_KIND = "robot_state", "depth_frame", "imu", "health"
+HEALTH_SECONDS = 2.0  # health goes out on every change, and at least this often
+HEALTH_CHECK_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -300,8 +303,8 @@ class Viewer:
     display: Display | None = None
 
     def wants(self, cameras: tuple[str, ...] = (), kind: str | None = None) -> bool:
-        """Whether the viewer draws one of `cameras` or wants `kind` messages; robot_state always."""
-        if self.display is None or kind == STATE_KIND or kind in self.display.kinds:
+        """Whether the viewer draws one of `cameras` or wants `kind` messages; robot_state and health always."""
+        if self.display is None or kind in (STATE_KIND, HEALTH_KIND) or kind in self.display.kinds:
             return True
         return any(camera in self.display.sizes for camera in cameras)
 
@@ -396,6 +399,9 @@ class RuntimeServerNode(Node):
     depth_sequence: int = Field(default=0, exclude=True)
     imu_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # imu messages
     imu_sequence: int = Field(default=0, exclude=True)
+    health: SkipValidation[Health | None] = Field(default=None, exclude=True)  # What works on the robot
+    health_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # health messages
+    health_sequence: int = Field(default=0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
     results_camera: str | None = Field(default=None, description="Camera whose frames the OAK's own models read")
     results_for: SkipValidation[Callable[[int], OakResultsMessage | None]] = Field(default=lambda number: None, exclude=True)
@@ -425,6 +431,7 @@ class RuntimeServerNode(Node):
         results_camera: str | None = None,
         results_for: Callable[[int], OakResultsMessage | None] | None = None,
         oak_status: Callable[[], dict] | None = None,
+        health: Health | None = None,
     ) -> "RuntimeServerNode":
         """Factory method: subscribes to bot state and each camera's frame topic.
 
@@ -435,7 +442,7 @@ class RuntimeServerNode(Node):
         two images travel together in one frame message, as cameras `<name>_left` and
         `<name>_right`; a depth frame's as `<name>_rectified` and, with `depth_previews`,
         `<name>_depth`, the depth drawn in colour. `oak_status` reports the OAK's model rates and
-        chip load for robot_state.
+        chip load for robot_state. `health`, what works on the robot, goes out as health messages.
         """
         node = cls(
             pubsub=pubsub,
@@ -448,6 +455,7 @@ class RuntimeServerNode(Node):
             motor_tests=motor_tests,
             results_camera=results_camera,
             oak_status=oak_status,
+            health=health,
         )
         if results_for is not None:
             node.results_for = results_for
@@ -560,7 +568,8 @@ class RuntimeServerNode(Node):
         self.viewers.append(viewer)
         self.watched.set()
         streams = [
-            (self.state_stream, (), STATE_KIND), (self.imu_stream, (), IMU_KIND), (self.depth_stream, (), DEPTH_KIND),
+            (self.state_stream, (), STATE_KIND), (self.health_stream, (), HEALTH_KIND),
+            (self.imu_stream, (), IMU_KIND), (self.depth_stream, (), DEPTH_KIND),
             *((feed.stream, feed.views, None) for feed in self.feeds.values()),
         ]
         sending = [asyncio.create_task(self._send(viewer, stream, cameras, kind)) for stream, cameras, kind in streams]
@@ -768,6 +777,21 @@ class RuntimeServerNode(Node):
             )
             await asyncio.sleep(1 / self.params.state_hz)
 
+    async def _publish_health(self) -> None:
+        """Publish what works on the robot on every change, and every HEALTH_SECONDS, while anyone watches."""
+        sent_version, sent_at = -1, float("-inf")
+        while True:
+            await self.watched.wait()
+            now = time.monotonic()
+            if self.health.version != sent_version or now - sent_at >= HEALTH_SECONDS:
+                sent_version, sent_at = self.health.version, now
+                self.health_sequence += 1
+                self.health_stream.publish(encode_message(
+                    HEALTH_KIND, {"time": now, "components": self.health.snapshot()},
+                    timestamp=now, sequence=self.health_sequence,
+                ))
+            await asyncio.sleep(HEALTH_CHECK_SECONDS)
+
     async def pump(self) -> None:
         """Take each topic's messages as they arrive into the latest state; while anyone watches,
         encode the newest frames someone shows and publish robot state. Runs until stopped; a
@@ -776,6 +800,7 @@ class RuntimeServerNode(Node):
             *(asyncio.create_task(self._take(name, subscription)) for name, subscription in self.subscriptions.items()),
             *(asyncio.create_task(self._take_frames(feed)) for feed in self.feeds.values()),
             asyncio.create_task(self._publish_state()),
+            *([asyncio.create_task(self._publish_health())] if self.health is not None else []),
         ]
         stopped = asyncio.create_task(self.stop_event.wait())
         try:
