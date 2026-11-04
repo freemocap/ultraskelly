@@ -93,7 +93,7 @@ function diagnosticLines(diagnostics) {
       // 0x70 is the boards' all-call address: it goes quiet once the bot sets up the boards.
       const addresses = Object.entries(reading.addresses ?? {}).map(([address, answers]) =>
         `${address}${address === '0x70' ? ' (all-call)' : ''} ${answers ? 'answers' : 'silent'}`);
-      lines.push(['I2C', [...addresses, reading.lost_arbitration ? `lost arbitration ${reading.lost_arbitration} times` : null].filter(Boolean).join(' · ') || describe(reading)]);
+      lines.push(['I2C', [...addresses, reading.lost_arbitration ? `lost arbitration ${reading.lost_arbitration} time${reading.lost_arbitration === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || describe(reading)]);
     } else if (name === 'pca9685') {
       const channels = Object.entries(reading.channels ?? {}).map(([channel, at]) => `${channel} ${at.pulse_us == null ? '—' : `${Math.round(at.pulse_us)} µs`}` +
         (at.commanded == null ? '' : ` for ${Math.round(at.commanded)}°`) +
@@ -217,7 +217,9 @@ export class HealthView {
       setText(message, part.message || (part.status === 'ok' ? 'OK' : part.status === 'off' ? 'Not used in this run' : part.word));
       setText(because, part.root ? `Because the ${part.root.name} is ${part.root.word}` : ''); setProperty(because, 'hidden', !part.root);
       setText(fix, part.fix); setProperty(fix, 'hidden', !part.fix);
-      setText(restart, part.restart ? `Restart the bot to use it: ${part.restart}` : ''); setProperty(restart, 'hidden', !part.restart);
+      // The bot's words when they already say to restart ("Restart the bot to drive ..."), else its reason after that.
+      setText(restart, !part.restart ? '' : /^restart\b/i.test(part.restart) ? part.restart : `Restart the bot to use it: ${part.restart}`);
+      setProperty(restart, 'hidden', !part.restart);
     }
   }
 
