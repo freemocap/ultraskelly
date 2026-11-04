@@ -2,7 +2,6 @@ import asyncio
 import logging
 import time
 
-import cv2
 import numpy as np
 from pydantic import Field, SkipValidation
 
@@ -21,7 +20,6 @@ from ultraskelly.core.pubsub.pubsub_abcs import TopicSubscriptionQueue
 logger = logging.getLogger(__name__)
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-from ultraskelly.ui.overlay import draw_skeleton
 
 
 class UINodeParams(NodeParams):
@@ -67,6 +65,10 @@ class UINode(Node):
 
     def _draw_visualization(self, *, frame: np.ndarray) -> np.ndarray:
         """Draw tracking visualization on frame."""
+        import cv2  # Here, so the module loads where OpenCV is not installed
+
+        from ultraskelly.ui.overlay import draw_skeleton
+
         h, w = frame.shape[:2]
         center_x = w // 2
         center_y = h // 2
@@ -227,6 +229,8 @@ class UINode(Node):
 
     async def run(self) -> None:
         """Main UI loop."""
+        import cv2
+
         logger.info(f"Starting UINode [window='{self.params.window_name}']")
 
         # Start update task

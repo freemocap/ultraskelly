@@ -4,10 +4,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from pydantic import Field, SkipValidation
-from picamera2 import CompletedRequest, Picamera2
-from picamera2.devices.imx500 import IMX500, NetworkIntrinsics
-from picamera2.devices.imx500.postprocess_highernet import postprocess_higherhrnet
-from libcamera import Transform  # Import Transform for camera flipping
 
 from ultraskelly import FAIL_ON_IMPORTS
 from ultraskelly.core.pubsub.bot_topics import (
@@ -69,8 +65,8 @@ class PoseDetectorParams(NodeParams):
 class PoseDetectorNode(DetectorNode):
     """Detects human poses using IMX500 and tracks specific body part."""
     params: PoseDetectorParams
-    imx500: SkipValidation[IMX500] = Field(default=None, exclude=True)
-    picam2: SkipValidation[Picamera2] = Field(default=None, exclude=True)
+    imx500: SkipValidation[object] = Field(default=None, exclude=True)  # picamera2's IMX500
+    picam2: SkipValidation[object] = Field(default=None, exclude=True)  # picamera2's Picamera2
 
     # Latest detection results (shared between callback and coroutine)
     latest_keypoints: np.ndarray | None = Field(default=None, exclude=True)
@@ -80,6 +76,11 @@ class PoseDetectorNode(DetectorNode):
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: PoseDetectorParams) -> "PoseDetectorNode":
         """Factory method to create and initialize PoseDetectorNode."""
+        # The Pi camera stack, imported here so the module loads on any computer
+        from libcamera import Transform  # Import Transform for camera flipping
+        from picamera2 import Picamera2
+        from picamera2.devices.imx500 import IMX500, NetworkIntrinsics
+
         node = cls(pubsub=pubsub, params=params)
 
         # Initialize IMX500 before Picamera2
@@ -116,12 +117,15 @@ class PoseDetectorNode(DetectorNode):
 
         return node
 
-    def _pose_callback(self, request: CompletedRequest) -> None:
+    def _pose_callback(self, request: object) -> None:
         """Callback to process pose detection results (runs in picamera2 thread).
 
-        Since the image is now flipped BEFORE inference, the keypoints are already
-        in the correct coordinate space and don't need transformation.
+        `request` is picamera2's CompletedRequest. Since the image is now flipped BEFORE
+        inference, the keypoints are already in the correct coordinate space and don't
+        need transformation.
         """
+        from picamera2.devices.imx500.postprocess_highernet import postprocess_higherhrnet
+
         metadata = request.get_metadata()
         np_outputs = self.imx500.get_outputs(metadata=metadata, add_batch=True)
 

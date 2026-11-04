@@ -3,7 +3,6 @@ import asyncio
 import contextlib
 import logging
 
-import cv2
 import numpy as np
 from pydantic import Field, SkipValidation
 
@@ -126,6 +125,8 @@ class HailoPoseDetectorNode(DetectorNode):
     def _letterbox(self, frame: np.ndarray) -> Letterbox:
         """Write an RGB frame into the model input. The padding around it is filled once per frame
         size, since only the image region changes."""
+        import cv2  # Here, so the module loads where OpenCV is not installed
+
         height, width = frame.shape[:2]
         letterbox = Letterbox.fit(width=width, height=height, size=self.input_size)
         rgb = frame[..., :3]

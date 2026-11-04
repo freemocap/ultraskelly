@@ -5,8 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.fetch_oak_models import missing_models
-from ultraskelly.core.bot.sensory.oak_models import MODELS, PLATFORM
+from ultraskelly.core.bot.sensory.oak_models import MODELS, PLATFORM, missing_models
 
 REPO = Path(__file__).parents[1]
 

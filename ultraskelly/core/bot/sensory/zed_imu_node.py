@@ -212,9 +212,11 @@ class ZedImuNode(Node):
     last_time: float = Field(default=float("-inf"), exclude=True)
 
     @classmethod
-    def create(cls, *, pubsub: PubSubTopicManager, params: ZedImuNodeParams) -> "ZedImuNode":
-        """Factory method: finds the IMU, so a missing one fails at startup; its reader starts with the node."""
-        openable_zed_imu(params.device)
+    def create(cls, *, pubsub: PubSubTopicManager, params: ZedImuNodeParams, wait: bool = False) -> "ZedImuNode":
+        """Factory method: finds the IMU, so a missing one fails at startup unless `wait`; its reader
+        starts with the node, which tries again every few seconds until it can read the IMU."""
+        if not wait:
+            openable_zed_imu(params.device)
         return cls(pubsub=pubsub, params=params,
                    start_reader=lambda: ReaderProcess.start(openable_zed_imu(params.device)))
 

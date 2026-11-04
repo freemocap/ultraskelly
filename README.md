@@ -108,8 +108,11 @@ lock (below). The older `python -m ultraskelly.__main__bot` entry point also rem
 available. Both center the head when they start; the full-power jaw test runs only with
 `MouthNodeParams.startup_test`. Every servo angle and motor throttle is clamped to
 `LaunchConfig.limits` before it reaches a board.
-Add `--simulate-motors` to run the cameras and controllers while recording motor
-commands in memory instead of driving the motor boards. Add `--window` to also show the
+It starts with whatever hardware works: a missing camera, Hailo-8 or motor board is
+reported on the dashboard with how to fix it, and the rest runs. A missing board's
+actuators record their commands and send nothing. Add `--simulate-motors` to run the
+cameras and controllers while recording motor commands in memory instead of driving the
+motor boards. Add `--window` to also show the
 camera in an OpenCV window, which needs a graphical session; `--no-window` is accepted
 and does nothing, since the window is off by default. While the bot runs, port
 8080 serves the live dashboard to the network. One read-only WebSocket, `/stream`,
@@ -176,10 +179,14 @@ minute. If the bot's event loop stalls for 30 s, systemd kills it with SIGUSR1, 
 first logs every thread's Python traceback. After every exit, crashes and kills
 included, the service brakes the DC motors with `scripts/stop_motors.py`, giving up
 after 10 s; it leaves them alone when the bot never started because another program
-holds the robot lock. A motor board, camera or pose detector that drops out also ends the
-bot, and the restart reconnects everything: a board write that still fails after its
-retries, 5 s without camera frames, or 5 s without the Hailo detector's pose results
-(`StallMonitorNode`). Once the bot starts shutting down it stops feeding the watchdog,
+holds the robot lock. Missing or failing hardware never stops the bot: it runs with what
+works, and the dashboard's health panel says what is missing and how to fix it (`health`
+messages, [docs/stream.md](docs/stream.md)). A motor board that stops answering mid-run
+(a write that still fails after its retries) ends the bot, and the restart starts without
+it. A camera or detector that stops with an error is reported and the rest runs on; one
+that stops sending while it still counts as working, 5 s without camera frames or the
+Hailo detector's pose results after they had arrived, is the old freeze and ends the bot
+for a restart (`StallMonitorNode`). Once the bot starts shutting down it stops feeding the watchdog,
 so a shutdown that hangs is ended too. Re-run the script after moving the checkout.
 Extra bot options go in `/etc/default/ultraskelly-bot`, for example while the motor
 boards are disconnected:

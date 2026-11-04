@@ -150,6 +150,38 @@ values are the commands sent, not measured positions.
 | `motor_test` | the dashboard motor tests' limits and what is running or ran last |
 | `oak` | the OAK's own chip: `rates` per second over the last 2 s (`frames`; with its models `face_detection` and `palm_detection`, and `head_pose`, `gaze`, `face_landmarks` as faces measured per second and `hand_landmarks` as hands), `chip` (`leon_os_cpu` and `leon_rt_cpu` from 0 to 1, `ddr_used_mib`, `ddr_total_mib`, `temperature_c`), `models_error`, why the OAK runs without its models (a model missing from the cache), or null, `faces_incomplete`, frames sent before all their measurements came, and `missing`, which answers those lacked (`results`, `mesh`, `palms`, `hands`). Null without the OAK |
 
+## `health` messages
+
+UltraSkelly's application kind, version 0: what works on the robot, what does not, and how
+to fix it. The bot runs with whatever hardware works, so a camera, the Hailo-8 or a motor
+board that is missing or failing is reported here instead of stopping it. Every viewer
+gets these, like `robot_state`, whatever its `kinds`: on every change and at least every
+2 s while a viewer is connected; a viewer that connects gets the newest at once.
+
+| Field | Contents |
+| --- | --- |
+| `time` | when it was sent, in seconds on the Pi's `time.monotonic()` clock, as `robot_state.time` |
+| `components` | one entry per part this launch uses, in a fixed order |
+
+Each component:
+
+| Field | Contents |
+| --- | --- |
+| `id` | `oak_camera`, `oak_models`, `hailo`, `zed_camera`, `zed_imu`, `depth`, `servo_board`, `motor_board`, in that order; only the parts this launch uses |
+| `label`, `group` | for display, such as "OAK camera" in `cameras`; the groups are `cameras`, `ai`, `sensors` and `motors` |
+| `status` | `ok`; `degraded`, working partly (an OAK that sends no frames, depth waiting for the ZED); `missing`, not on USB, PCIe or I²C; `error`, there but failed; `off`, not used on purpose (`--simulate-motors`, `--no-oak-models`) |
+| `message` | what is the matter, in plain words, such as "No OAK on USB (no 03e7 device)" |
+| `hint` | what to do about it, or null |
+| `since` | when the status last changed, on the same clock as `time` |
+| `restart` | null, or why the part is back but the bot must restart to use it |
+| `detail` | small facts, such as the `error` a part failed with |
+
+While a motor board is not `ok` or `off`, `robot_state.motors.commands` still lists its
+actuators: the controllers run and record their commands, but nothing is sent to a board
+that is not there, and dashboard motor tests on it are refused with the reason. The ZED
+Mini and its IMU are picked up as soon as they appear; the OAK, the Hailo-8 and the motor
+boards are used only if they are there when the bot starts.
+
 ## `depth_frame` messages
 
 UltraSkelly's application kind for ZED depth, version 0, with `--depth`: up to 10 per
@@ -235,8 +267,8 @@ It sends one JSON text message on `/stream`, FreeMoCap's inbound display feedbac
 - `displayImageSizes`: every camera ID the viewer draws, with the size in device pixels it
   draws it at. A camera that is not listed is not wanted. A stereo pair is wanted when
   either eye is listed.
-- `kinds`: the application kinds the viewer wants besides `robot_state`, which always
-  flows. Today those are `depth_frame` and, with the ZED, `imu`.
+- `kinds`: the application kinds the viewer wants besides `robot_state` and `health`,
+  which always flow. Today those are `depth_frame` and, with the ZED, `imu`.
 - `frameNumber`: the newest frame the viewer drew.
 
 The dashboard sends it after every connect and whenever what it shows changes, at most
