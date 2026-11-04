@@ -152,6 +152,88 @@ def test_the_pis_supply_is_judged():
     assert judge_power({"available": False}) is None  # Not a Pi: no power line at all
 
 
+def launch_on(boards: dict, tmp_path, monkeypatch, **robot):
+    """The bot on a fake I2C bus holding `boards`, which the test may change while it runs."""
+    from ultraskelly import bot_launcher
+    from tests.test_degraded_startup import Robot, start
+
+    monkeypatch.setattr(bot_launcher, "DIAGNOSTICS_INTERVAL", 0.05)
+    robot = Robot(oak=False, hailo=False, zed=False, imu=False, **robot)
+    hardware = robot.hardware()
+    hardware.sources = sources(boards)
+    robot.hardware = lambda: hardware
+    return start(robot, tmp_path)
+
+
+def test_a_motor_board_that_answers_after_the_start_asks_for_a_restart(tmp_path, monkeypatch):
+    from tests.test_degraded_startup import stop
+    from ultraskelly.core.bot.motor.motor_test import MotorTestRefused, MotorTestRequest
+
+    boards = {0x60: servo_board(prescale=3)}  # The servo board is off the header when the bot starts
+    launcher = launch_on(boards, tmp_path, monkeypatch, servo_board=False)
+
+    async def scenario():
+        task = asyncio.create_task(launcher.run())
+        await asyncio.sleep(0.2)
+        before = launcher.health.get("servo_board")
+        boards[0x40] = servo_board()  # Pressed back on
+        await asyncio.sleep(0.2)
+        back = launcher.health.get("servo_board")
+        with pytest.raises(MotorTestRefused) as refused:
+            launcher.motor_tester.check(MotorTestRequest(actuator="pan", angle=95.0))
+        del boards[0x40]  # Loose again
+        await asyncio.sleep(0.2)
+        gone = launcher.health.get("servo_board")
+        await stop(launcher, task)
+        return before, back, str(refused.value), gone
+
+    before, back, refusal, gone = asyncio.run(scenario())
+    assert before.status == Status.MISSING
+    assert (back.status, back.message) == (Status.DEGRADED, "Answers at 0x40 now, but the bot started without it")
+    assert back.restart == "Restart the bot to drive the head's pan and tilt: it sets up its motor boards only when it starts."
+    assert refusal.endswith(back.restart)  # The motor test says why nothing would move
+    assert gone.status == Status.MISSING and gone.restart is None
+
+
+def test_a_driven_board_that_stops_answering_is_an_error_until_it_answers(tmp_path, monkeypatch):
+    from tests.test_degraded_startup import stop
+
+    boards = {0x40: servo_board(), 0x60: servo_board(prescale=3)}
+    launcher = launch_on(boards, tmp_path, monkeypatch)
+
+    async def scenario():
+        task = asyncio.create_task(launcher.run())
+        await asyncio.sleep(0.2)
+        seen = [launcher.health.get("servo_board")]
+        del boards[0x40]  # Off the header: the bot finds out before its next command does
+        await asyncio.sleep(0.3)
+        seen.append(launcher.health.get("servo_board"))
+        boards[0x40] = servo_board()
+        await asyncio.sleep(0.2)
+        seen.append(launcher.health.get("servo_board"))
+        await stop(launcher, task)
+        return seen
+
+    working, lost, back = asyncio.run(scenario())
+    assert working.status == Status.OK and lost.status == Status.ERROR
+    assert lost.message == "Stopped answering at 0x40" and "stops at its next command" in lost.hint
+    assert (back.status, back.message) == (Status.OK, "Answers; awake at 50 Hz, and the pulses match the commanded angles")
+
+
+def test_the_zed_only_bot_leaves_the_motor_boards_bus_alone(tmp_path):
+    from tests.test_degraded_startup import Robot, free_port
+    from ultraskelly.__main__bot import launch_config
+    from ultraskelly.bot_launcher import BotLauncher
+
+    opened = []
+    hardware = Robot().hardware()
+    hardware.sources = sources({0x40: servo_board()}, open_bus=lambda: opened.append("bus") or FakeBus({}))
+    launcher = BotLauncher.from_config(launch_config(zed_only=True, port=free_port()), hardware=hardware)
+
+    result = launcher.diagnostics.collect(head_channels={}, commanded={})
+    assert opened == [] and result["i2c"] == {"available": False}  # It holds no robot lock
+
+
 def test_the_bot_reports_that_commands_reach_the_servo_chip(tmp_path, monkeypatch):
     from ultraskelly import bot_launcher
     from tests.test_degraded_startup import Robot, start, stop

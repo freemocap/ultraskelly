@@ -9,11 +9,17 @@ no Hailo means no tracking. A missing board's actuators are stand-ins that send 
 node that stops or crashes takes only its part away; it is reported, and the rest run on.
 Any other node stopping or crashing ends the bot, which brakes the motors, for its service
 to start it again; the stall monitor raises for a stream that was running and went quiet.
+
+Every few seconds the bot brings back each part whose node is not running once it can
+start: the OAK once it shows on USB, the Hailo-8 once /dev/hailo0 is there, depth once the
+ZED Mini streams, and a camera or IMU node that crashed. The motor boards are set up, and the
+head centred, only when the bot starts, so a board that answers later is reported with a
+restart to use it.
 """
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, TypeVar
 
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
@@ -84,6 +90,11 @@ Diagnosis = Callable[[BaseException], Finding]
 STREAMING_WINDOW = 3.0  # Seconds without new data before a camera or the IMU counts as not streaming
 HEALTH_INTERVAL = 1.0  # Seconds between checks of how each part is doing
 DIAGNOSTICS_INTERVAL = 5.0  # Seconds between the live hardware checks (core/bot/diagnostics.py)
+RECOVERY_INTERVAL = 5.0  # Seconds between looks for parts to bring back
+RETRY_LIMIT = 300.0  # The longest wait, in seconds, between tries at a part that is there but fails to start
+STEADY_SECONDS = 60.0  # How long a part brought back must run before its waits start over
+BOARD_MISSES = 2  # Checks in a row a board the bot drives must miss before it counts as gone
+OAK_FEED = "oak"  # The dashboard's name for the OAK's camera
 
 
 class LaunchConfig(NodeParams):
@@ -172,6 +183,23 @@ class Hardware:
     sources: Sources = field(default_factory=Sources)  # Where the live hardware checks look
 
 
+@dataclass
+class Revival:
+    """How the launcher brings a part back while it runs: once `present` finds it, `open` makes its
+    node, in a worker thread, and `started` tells the rest of the bot. A part that is there but
+    fails to start, or stops again within STEADY_SECONDS, is tried again after a wait that doubles,
+    from RECOVERY_INTERVAL to RETRY_LIMIT."""
+
+    component: str
+    present: Callable[[], bool]
+    open: Callable[[], Node]
+    working: str | None  # Its message once it runs; None when its watch reports it
+    started: Callable[[Node], None] = lambda node: None
+    failures: int = 0  # Tries since it last ran for STEADY_SECONDS
+    next_try: float = 0.0  # On time.monotonic()'s clock
+    launched_at: float = 0.0  # When the last node it made started
+
+
 class BotLauncher(BaseModel):
     """Main launcher for the bot system."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -199,6 +227,15 @@ class BotLauncher(BaseModel):
     oak_started: float = Field(default=0.0, exclude=True)
     # The OAK models not downloaded, read once while the OAK is out (with it, the OAK says)
     models_missing: dict[str, str] | None = Field(default=None, exclude=True)
+    # Each part's node, the newest when one was brought back; every task's node
+    parts: SkipValidation[dict[str, Node]] = Field(default_factory=dict, exclude=True)
+    task_nodes: SkipValidation[dict[asyncio.Task, Node]] = Field(default_factory=dict, exclude=True)
+    revivals: SkipValidation[list[Revival]] = Field(default_factory=list, exclude=True)
+    ended: SkipValidation[asyncio.Queue | None] = Field(default=None, exclude=True)  # Tasks as they end, for run()
+    server: SkipValidation[RuntimeServerNode | None] = Field(default=None, exclude=True)
+    # Whether each motor board's actuators reach it (else stand-ins record them), and checks it missed in a row
+    driven: dict[str, bool] = Field(default_factory=dict, exclude=True)
+    board_misses: dict[str, int] = Field(default_factory=dict, exclude=True)
 
     def healthy(self) -> bool:
         """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
@@ -223,6 +260,7 @@ class BotLauncher(BaseModel):
         """A node whose stop or crash is reported against `component` instead of ending the bot."""
         self.nodes.append(node)
         self.components_of[id(node)] = component
+        self.parts[component] = node
 
     def _create_nodes(self) -> None:
         """Create all nodes from config."""
@@ -268,31 +306,31 @@ class BotLauncher(BaseModel):
             raise ValueError(f"Unknown detector type: {self.config.detector_type}")
 
         hailo_pose = self.config.detector_type == DetectorType.HAILO_POSE
-        camera_name = "oak" if hailo_pose else "camera"
+        camera_name = OAK_FEED if hailo_pose else "camera"
         aim = self.config.orientation
-        self.nodes.append(
-            RuntimeServerNode.create(
-                pubsub=self.pubsub,
-                params=self.config.runtime_server,
-                cameras={camera_name: FrameTopic},
-                **stereo_feeds,
-                recorder=self.command_recorder,
-                motors_simulated=self.config.simulate_motors,
-                node_status=self.node_status,
-                overlays={
-                    camera_name: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
-                },
-                # The Hailo detector reports which OAK frame each pose came from.
-                pose_camera=camera_name if hailo_pose else None,
-                motor_tests=self.motor_tester,
-                # The OAK's own chip finds faces in the same frames.
-                # Only while the OAK runs its models: without them no frame would ever get its results.
-                results_camera=camera_name if oak is not None and oak.assembler is not None else None,
-                results_for=oak.results_for if oak is not None else None,
-                oak_status=oak.status if oak is not None else None,
-                health=self.health,
-            )
+        self.server = RuntimeServerNode.create(
+            pubsub=self.pubsub,
+            params=self.config.runtime_server,
+            cameras={camera_name: FrameTopic},
+            **stereo_feeds,
+            recorder=self.command_recorder,
+            motors_simulated=self.config.simulate_motors,
+            node_status=self.node_status,
+            overlays={
+                camera_name: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
+            },
+            # The Hailo detector reports which OAK frame each pose came from.
+            pose_camera=camera_name if hailo_pose else None,
+            motor_tests=self.motor_tester,
+            # The OAK's own chip finds faces in the same frames.
+            # Only while the OAK runs its models: without them no frame would ever get its results.
+            # An OAK brought back later sets it (_oak_started); its results and status follow the newest OAK.
+            results_camera=camera_name if oak is not None and oak.assembler is not None else None,
+            results_for=self._oak_results if hailo_pose else None,
+            oak_status=self._oak_status if hailo_pose else None,
+            health=self.health,
         )
+        self.nodes.append(self.server)
         if self.config.recording is not None:
             self.nodes.append(
                 RunRecorderNode.create(
@@ -328,6 +366,7 @@ class BotLauncher(BaseModel):
         self.command_recorder = CommandRecorder()
         config = self.config
         if config.simulate_motors:
+            self.driven = {"servo_board": False, "motor_board": False}
             logger.info("Simulating motors: commands are recorded, the motor boards are not touched")
             for board in ("servo_board", "motor_board"):
                 self.health.report(
@@ -355,6 +394,7 @@ class BotLauncher(BaseModel):
                                          "Until then the waist and jaw are recorded, not sent."),
             "Answers; the waist and jaw are sent to it",
         )
+        self.driven = {"servo_board": servo_kit is not None, "motor_board": motor_kit is not None}
         return build_motor_nodes(
             pubsub=self.pubsub,
             orientation_params=config.orientation,
@@ -366,15 +406,19 @@ class BotLauncher(BaseModel):
         )
 
     def _unavailable(self, actuator: str) -> str | None:
-        """Why a motor test on `actuator` cannot reach a board now, or None."""
-        component = self.health.get("servo_board" if actuator in ("pan", "tilt") else "motor_board")
-        if component is None or component.status not in (Status.MISSING, Status.ERROR):
+        """Why a motor test on `actuator` cannot reach a board now, or None; simulated tests run."""
+        board = "servo_board" if actuator in ("pan", "tilt") else "motor_board"
+        component = self.health.get(board)
+        if self.config.simulate_motors or component is None:
             return None
-        return f"{component.message}, so nothing would move. {component.hint}"
+        if self.driven.get(board) and component.status not in (Status.MISSING, Status.ERROR):
+            return None
+        return f"{component.message}, so nothing would move. {component.restart or component.hint}"
 
     def _create_tracking_nodes(self) -> OakCameraNode | None:
-        """The OAK camera and the Hailo-8 pose detector, each if it starts; returns the OAK's node.
-        Neither is searched for when its probe finds it missing: depthai would look for 11 s."""
+        """The OAK camera and the Hailo-8 pose detector, each if it starts, and each brought back once
+        it can start; returns the OAK's node. Neither is searched for when its probe finds it
+        missing: depthai would look for 11 s."""
         probes = self.hardware.probes
 
         def open_oak() -> Node:
@@ -390,7 +434,9 @@ class BotLauncher(BaseModel):
         oak = self._attempt("oak_camera", open_oak, lambda error: diagnose_oak(error, probes), "Streaming")
         if oak is not None:
             self._add_part(oak, "oak_camera")
-            self.oak, self.oak_started = oak, time.monotonic()
+            self._oak_started(oak)
+        self.revivals.append(Revival("oak_camera", lambda: oak_on_usb(probes.usb()), open_oak, "Streaming",
+                                     self._oak_started))
         self.watches.append(self._watch_oak)
         self._report_oak_models()
         self.watches.append(self._report_oak_models)
@@ -399,9 +445,24 @@ class BotLauncher(BaseModel):
         )
         if hailo is not None:
             self._add_part(hailo, "hailo")
+        self.revivals.append(Revival("hailo", probes.hailo_device, open_hailo, "Finds people in the OAK's frames"))
         self._watch_hailo()
         self.watches.append(self._watch_hailo)
         return oak
+
+    def _oak_started(self, oak: OakCameraNode) -> None:
+        """A new OAK node: the dashboard's results and the OAK's status follow it."""
+        self.oak, self.oak_started = oak, time.monotonic()
+        if self.server is not None and oak.assembler is not None:
+            self.server.results_camera = OAK_FEED
+
+    def _oak_results(self, frame_number: int) -> object | None:
+        """What the OAK of the moment found in a frame, for the dashboard."""
+        return self.oak.results_for(frame_number) if self.oak is not None else None
+
+    def _oak_status(self) -> dict | None:
+        """The OAK's chip and model rates while it runs, else None."""
+        return self.oak.status() if self.oak is not None and self.health.ok("oak_camera") else None
 
     def _streaming(self, component: str) -> bool:
         """Whether `component` fully works: ok, not just started."""
@@ -455,8 +516,9 @@ class BotLauncher(BaseModel):
 
     def _create_stereo_nodes(self) -> dict[str, dict[str, type[PubSubTopicABC]]]:
         """The ZED Mini's nodes, when configured: capture, its IMU, and depth if asked for. The camera and
-        the IMU start even when missing, and pick them up once they appear. Returns the dashboard's
-        stereo and depth camera feeds."""
+        the IMU start even when missing, and pick them up once they appear; depth reads its calibration
+        from the camera, so it starts once the camera streams. Returns the dashboard's stereo and depth
+        camera feeds."""
         zed = self.config.zed_camera
         if zed is None:
             return {}
@@ -468,8 +530,12 @@ class BotLauncher(BaseModel):
         if camera is None:  # It tries once a second until the camera streams
             camera = self.hardware.zed_camera(pubsub=self.pubsub, params=zed, wait=True)
         self._add_part(camera, "zed_camera")
+        # Should its node crash, a new one starts waiting for the camera
+        self.revivals.append(Revival(
+            "zed_camera", lambda: True, lambda: self.hardware.zed_camera(pubsub=self.pubsub, params=zed, wait=True), None,
+        ))
         self.watches.append(self._watch_streaming(
-            "zed_camera", lambda: camera.frames_published if camera.source is not None else None,
+            "zed_camera", lambda node: node.frames_published if node.source is not None else None,
             "Streaming both eyes", lambda: diagnose_zed(RuntimeError("it does not stream"), probes),
         ))
         if self.config.zed_imu is not None:
@@ -481,23 +547,36 @@ class BotLauncher(BaseModel):
             if imu is None:  # Its reader tries again every few seconds
                 imu = self.hardware.zed_imu(pubsub=self.pubsub, params=imu_params, wait=True)
             self._add_part(imu, "zed_imu")
+            self.revivals.append(Revival(
+                "zed_imu", lambda: True, lambda: self.hardware.zed_imu(pubsub=self.pubsub, params=imu_params, wait=True),
+                None,
+            ))
             self.watches.append(self._watch_streaming(
-                "zed_imu", lambda: imu.samples, "Reading the accelerometer and gyroscope",
+                "zed_imu", lambda node: node.samples, "Reading the accelerometer and gyroscope",
                 lambda: diagnose_zed_imu(OSError("no samples arrive"), probes),
             ))
         feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
         if self.config.stereo_depth is not None:
             depth_params = self.config.stereo_depth
             width, height = ZED_MODES[zed.resolution][0]
-            depth = self._attempt(
-                "depth", lambda: self.hardware.stereo_depth(
-                    pubsub=self.pubsub, params=depth_params, eye_size=(width // 2, height)),
-                lambda error: self._diagnose_depth(error), f"Depth from the ZED's eyes ({depth_params.matcher})",
-            )
-            if depth is not None:
-                self._add_part(depth, "depth")
-                feeds["depth_cameras"] = {"zed": DepthFrameTopic}
-                self.watches.append(self._watch_depth(depth_params.matcher))
+            working = f"Depth from the ZED's eyes ({depth_params.matcher})"
+
+            def open_depth() -> Node:
+                return self.hardware.stereo_depth(pubsub=self.pubsub, params=depth_params, eye_size=(width // 2, height))
+
+            def depth_possible() -> bool:  # The camera streams; StereoNet also needs the Hailo-8
+                return self._streaming("zed_camera") and (depth_params.matcher != "stereonet" or probes.hailo_device())
+
+            self.diagnoses["depth"] = self._diagnose_depth
+            if self._streaming("zed_camera"):
+                depth = self._attempt("depth", open_depth, self._diagnose_depth, working)
+                if depth is not None:
+                    self._add_part(depth, "depth")
+            else:
+                self.health.report("depth", Status.DEGRADED, "Starts once the ZED Mini streams", None, "zed_camera")
+            self.revivals.append(Revival("depth", depth_possible, open_depth, working))
+            feeds["depth_cameras"] = {"zed": DepthFrameTopic}  # Also before depth starts: the server waits for it
+            self.watches.append(self._watch_depth(depth_params.matcher))
             if self.config.tracking:
                 # It uses only pose results that carry the OAK frame they came from (its size and time),
                 # so any detector of OAK images feeds it and the others are ignored.
@@ -505,17 +584,18 @@ class BotLauncher(BaseModel):
         return feeds
 
     def _watch_streaming(
-        self, component: str, count: Callable[[], int | None], working: str,
-        diagnose: Callable[[], tuple[Status, str, str | None]],
+        self, component: str, count: Callable[[Node], int | None], working: str, diagnose: Callable[[], Finding],
     ) -> Callable[[], None]:
-        """A part whose node picks it up by itself: working while `count` (None: not open) keeps
-        rising, else diagnosed from what is plugged in. For its first STREAMING_WINDOW the status
-        from startup stands, while the node opens it."""
-        state = {"count": count(), "rose_at": None, "first": None}
+        """A part whose node picks it up by itself: working while `count` of its node (None: not open)
+        keeps rising, else diagnosed from what is plugged in. For each node's first STREAMING_WINDOW
+        the status it had stands, while the node opens it."""
+        state = {"node": None, "count": None, "rose_at": None, "first": None}
 
         def watch() -> None:
-            now, latest = time.monotonic(), count()
-            state["first"] = state["first"] or now
+            now, node = time.monotonic(), self.parts.get(component)
+            latest = count(node) if node is not None else None
+            if node is not state["node"]:  # The first look, or a node brought back: count afresh
+                state.update(node=node, count=latest, rose_at=None, first=now)
             if latest is not None and state["count"] is not None and latest > state["count"]:
                 state["rose_at"] = now
             state["count"] = latest
@@ -533,16 +613,24 @@ class BotLauncher(BaseModel):
         return Finding(Status.ERROR, f"Depth did not start: {error}")
 
     def _watch_depth(self, matcher: str) -> Callable[[], None]:
+        """Depth while it runs, else what it waits for; one that failed to start keeps its report."""
         def watch() -> None:
-            if self.health.ok("zed_camera"):
-                self.health.report("depth", Status.OK, f"Depth from the ZED's eyes ({matcher})")
-            else:
-                self.health.report("depth", Status.DEGRADED, "Waiting for the ZED Mini's images", None, "zed_camera")
+            if self._part_running("depth"):
+                if self.health.ok("zed_camera"):
+                    self.health.report("depth", Status.OK, f"Depth from the ZED's eyes ({matcher})")
+                else:
+                    self.health.report("depth", Status.DEGRADED, "Waiting for the ZED Mini's images", None, "zed_camera")
+            elif not self._streaming("zed_camera"):
+                self.health.report("depth", Status.DEGRADED, "Starts once the ZED Mini streams", None, "zed_camera")
+            elif matcher == "stereonet" and not self.hardware.probes.hailo_device():
+                self.health.report("depth", *self._diagnose_depth(LookupError("no /dev/hailo0")))
         return watch
 
     def _create_zed_only_nodes(self) -> None:
-        """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed."""
+        """Only the ZED Mini and the dashboard: no OAK, Hailo or motors, so no robot lock is needed,
+        and the live checks leave the motor boards' I2C bus alone."""
         self.command_recorder = None
+        self.diagnostics = Diagnostics(replace(self.hardware.sources, open_bus=lambda: None))
         stereo_feeds = self._create_stereo_nodes()
         self.nodes.append(
             RuntimeServerNode.create(
@@ -624,10 +712,105 @@ class BotLauncher(BaseModel):
             self.motor_watchdog.start()  # Armed by the control loop's first tick
 
         for node in self.nodes:
-            task = asyncio.create_task(node.run())
+            task = self._start_task(node.run())
+            self.task_nodes[task] = node
             self.tasks.append(task)
 
         logger.info(f"Started {len(self.tasks)} node tasks")
+
+    def _start_task(self, coroutine) -> asyncio.Task:
+        """A task whose end reaches run() through `ended`."""
+        task = asyncio.create_task(coroutine)
+        task.add_done_callback(lambda done: self.ended.put_nowait(done) if self.ended is not None else None)
+        return task
+
+    def _part_running(self, component: str) -> bool:
+        """Whether the part's newest node is running."""
+        node = self.parts.get(component)
+        task = next((task for task, each in zip(self.tasks, self.nodes) if each is node), None)
+        return task is not None and not task.done()
+
+    def _launch(self, node: Node, component: str) -> None:
+        """Run a part's node made while the bot runs, in the place of the node it replaces."""
+        old = self.parts.get(component)
+        task = self._start_task(node.run())
+        self.task_nodes[task] = node
+        self.components_of[id(node)] = component
+        self.parts[component] = node
+        index = next((index for index, each in enumerate(self.nodes) if each is old), None)
+        if index is None:
+            self.nodes.append(node)
+            self.tasks.append(task)
+        else:
+            self.nodes[index], self.tasks[index] = node, task
+
+    async def _recover(self) -> None:
+        """Every RECOVERY_INTERVAL, bring back each part whose node is not running, once it can start."""
+        while True:
+            await asyncio.sleep(RECOVERY_INTERVAL)
+            for revival in self.revivals:
+                if not self._part_running(revival.component):
+                    await self._revive(revival)
+                elif revival.failures and time.monotonic() - revival.launched_at > STEADY_SECONDS:
+                    revival.failures, revival.next_try = 0, 0.0  # Well again: its next stop is tried at once
+
+    async def _revive(self, revival: Revival) -> None:
+        """Make the part's node again if its probe finds it and its wait is over, and run it."""
+        if not revival.present():
+            revival.failures, revival.next_try = 0, 0.0  # Tried at once when it appears
+            return
+        if time.monotonic() < revival.next_try:
+            return
+        label = COMPONENTS[revival.component][0]
+        wait = min(RECOVERY_INTERVAL * 2 ** revival.failures, RETRY_LIMIT)
+        revival.failures += 1  # Counted until the part has run for STEADY_SECONDS
+        try:
+            # In a worker thread, so the motors' control loop runs on meanwhile. A factory opens its
+            # device and makes its subscriptions (a queue each, added to its topic's list); every
+            # operation on those queues stays on this loop.
+            node = await asyncio.to_thread(revival.open)
+        except Exception as error:
+            revival.next_try = time.monotonic() + wait
+            finding = self.diagnoses[revival.component](error)
+            self.health.report(revival.component, *finding, detail={"error": f"{type(error).__name__}: {error}"})
+            logger.warning(f"The {label} did not start: {finding.message}; trying again in {wait:g} s")
+            return
+        revival.launched_at = time.monotonic()
+        revival.next_try = revival.launched_at + wait  # Should it stop again soon, it waits its turn
+        self._launch(node, revival.component)
+        revival.started(node)
+        if revival.working is not None:
+            self.health.report(revival.component, Status.OK, revival.working)
+        logger.info(f"Brought back the {label}")
+
+    def _check_boards(self, i2c: dict) -> None:
+        """The motor boards, from the I2C probe. The bot sets the boards up and centres the head only
+        when it starts, so a board it started without that answers now needs a restart; one it drives
+        that stops answering is reported before its next command fails, which stops the bot."""
+        if self.config.simulate_motors or not i2c.get("available"):
+            return
+        for board, address, drives in (("servo_board", SERVO_BOARD_ADDRESS, "the head's pan and tilt"),
+                                       ("motor_board", MOTOR_BOARD_ADDRESS, "the waist and jaw")):
+            answers, current = i2c["addresses"].get(f"{address:#04x}"), self.health.get(board)
+            if answers is None or current is None or board not in self.driven:
+                continue
+            if self.driven[board]:
+                self.board_misses[board] = 0 if answers else self.board_misses.get(board, 0) + 1
+                if self.board_misses[board] >= BOARD_MISSES:
+                    self.health.report(
+                        board, Status.ERROR, f"Stopped answering at {address:#04x}",
+                        "Press the HAT stack down onto the Pi's 40-pin header and check the board's power LED. "
+                        "The bot stops at its next command to the board; its service then starts it again.",
+                    )
+                elif answers and current.status == Status.ERROR:
+                    self.health.report(board, Status.OK, f"Answers again at {address:#04x}; {drives} are sent to it")
+            elif answers:
+                self.health.report(
+                    board, Status.DEGRADED, f"Answers at {address:#04x} now, but the bot started without it",
+                    restart=f"Restart the bot to drive {drives}: it sets up its motor boards only when it starts.",
+                )
+            elif current.status == Status.DEGRADED:  # Gone again
+                self.health.report(board, *self.diagnoses[board](OSError(f"No I2C device at address: {address:#x}")))
 
     def _report_stopped(self, component: str, task: asyncio.Task) -> None:
         """A camera, detector or depth node ended: report why, against its part, and run on."""
@@ -660,7 +843,7 @@ class BotLauncher(BaseModel):
             await asyncio.sleep(DIAGNOSTICS_INTERVAL)
 
     async def _diagnose(self) -> None:
-        driven = self.controllers is not None and self.health.ok("servo_board")  # The real board, in use
+        driven = self.driven.get("servo_board", False) and self.health.ok("servo_board")  # The real board, in use
         params = self.config.orientation
         head = {"pan": params.pan_channel, "tilt": params.tilt_channel} if driven else {}
         latest = self.command_recorder.latest if self.command_recorder is not None else {}
@@ -676,14 +859,16 @@ class BotLauncher(BaseModel):
                 for name, motor in (("waist", orientation.waist_motor), ("mouth", mouth.mouth_motor))
             }
         self.health.set_diagnostics(result)
-        if driven and (judged := judge_servo_board(result["pca9685"])) is not None:
+        self._check_boards(result["i2c"])
+        if driven and self.health.ok("servo_board") and (judged := judge_servo_board(result["pca9685"])) is not None:
             self.health.report("servo_board", *judged)
         if (power := judge_power(result["power"])) is not None:
             self.health.report("power", *power)
 
     async def run(self) -> None:
-        """Run all nodes until one that is not a camera, detector or depth node stops or crashes,
-        then stop the rest. Those three report their end against their part and the rest run on.
+        """Run all nodes until one that is not a part of the robot (a camera, detector or depth node)
+        stops or crashes, then stop the rest. A part's node that ends is reported against its part,
+        the rest run on, and the recovery brings the part back once it can start.
 
         A crashed node's exception is re-raised so failures surface instead of being hidden.
         """
@@ -691,34 +876,31 @@ class BotLauncher(BaseModel):
         logger.info("LAUNCHING TARGET TRACKER WITH SOPHISTICATED PUBSUB")
         logger.info("=" * 60)
 
-        watcher = checks = None
+        self.ended = asyncio.Queue()  # Each task as it ends, from its done callback, on this loop
+        background: list[asyncio.Task] = []
         try:
             await self._start_nodes()
-            watcher = asyncio.create_task(self._watch_health())
-            checks = asyncio.create_task(self._watch_diagnostics()) if self.diagnostics is not None else None
-            pending = {*self.tasks, watcher, *([checks] if checks is not None else [])}
+            jobs = [self._watch_health(), self._recover()]
+            if self.diagnostics is not None:
+                jobs.append(self._watch_diagnostics())
+            background = [self._start_task(job) for job in jobs]
             while True:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                core_ended = False
-                for task in done:
-                    if task in (watcher, checks):
-                        task.result()  # Re-raises; they never return
-                        core_ended = True
-                        continue
-                    component = self.components_of.get(id(self.nodes[self.tasks.index(task)]))
-                    if component is None:
-                        task.result()  # Re-raises if the node crashed
-                        core_ended = True
-                    else:
-                        self._report_stopped(component, task)
-                if core_ended:
-                    logger.info("A node stopped; stopping the others...")
+                task = await self.ended.get()
+                if task in background:
+                    task.result()  # Re-raises; they never return
                     break
+                node = self.task_nodes.get(task)
+                component = self.components_of.get(id(node))
+                if component is None:
+                    task.result()  # Re-raises if the node crashed
+                    break
+                if self.parts.get(component) is node:  # Not a node already replaced
+                    self._report_stopped(component, task)
+            logger.info("A node stopped; stopping the others...")
         finally:
-            for task in (watcher, checks):
-                if task is not None:
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+            for task in background:
+                task.cancel()
+            await asyncio.gather(*background, return_exceptions=True)
             await self._shutdown_nodes()
             if self.diagnostics is not None:
                 self.diagnostics.close()

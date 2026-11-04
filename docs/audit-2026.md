@@ -603,8 +603,8 @@ a board that is not there; the motor watchdog stays on, and dashboard motor test
 missing board are refused with the reason. A camera, detector or depth node that stops or
 crashes is reported against its part and the bot runs on; any other node ending still ends
 the bot, which brakes the motors, for the service to restart it. The ZED Mini and its IMU
-start without their device and pick it up when it appears; the OAK, the Hailo-8 and the
-motor boards are used only if they are there at startup.
+start without their device and pick it up when it appears; the other parts come back as
+"Recovery" below describes.
 
 The stall monitor keeps its restart only for a stream that was running and went quiet
 while its source still counted as working, the freeze it was made for. A stream that never
@@ -638,6 +638,39 @@ the pulses match. The bot already holds the robot lock, and the kernel runs each
 transfer whole, so probing beside the controllers needs no other coordination: reads and
 zero-length writes change nothing on a PCA9685. `tests/test_diagnostics.py` checks the
 arithmetic, the readings of the Pi's own command output, and the judgement, on a fake bus.
+
+Recovery. Every 5 s the bot brings back each part whose node is not running once it can
+start: the OAK once 03e7 shows on USB, the Hailo-8 once /dev/hailo0 is there (after
+another program lets go of it; seating the AI HAT+ takes a power cycle anyway), depth once
+the ZED streams, and a camera or IMU node that crashed. Depth finds its calibration by the
+camera's serial number, so it now waits for the ZED instead of failing at startup with
+"The ZED reports no serial number", which the robot showed on 2026-11-04 with the ZED
+simply unplugged. The new node takes the old one's place; the dashboard's OAK results and
+status follow it, and the stall monitor watches its stream only after it has delivered.
+Each part is made in a worker thread, so the motors' control loop and its watchdog run on
+while an OAK boots, which takes seconds. A part that is there but fails to start, or stops
+again within a minute of starting, is tried again after 5 s, then after waits that double
+up to 5 minutes. The OAK is no longer searched for when USB lists no 03e7 device: on the
+robot that search added 11.6 s to every start.
+
+The motor boards are not brought back live. The bot sets them up and centres the head only
+at startup, and the controllers, the motor watchdog and the dashboard's motor tests all
+hold the actuators they started with; a restart re-initialises the board's outputs and
+starts from a known state. So a board that answers after the start is degraded, with
+`restart` saying to restart the bot, and motor tests on it are refused with that reason. A
+board the bot drives that misses two checks in a row is an error before its next command
+fails, which stops the bot for its service to start it again. In `--zed-only` mode the bot
+holds no robot lock, so its checks leave the I²C bus alone.
+
+Evidence for recovery, in the same tests on fake parts: an OAK plugged in later is brought
+back, made off the event loop, and the dashboard's results follow it; an OAK unplugged and
+plugged back in replaces its old node instead of running beside it; a Hailo-8 held by
+another program is picked up once free; an OAK that stops each time it opens is tried less
+and less often; tries at a part that keeps failing wait 5, 10, 20 s and then the limit,
+and start over once the part is gone; depth starts once the ZED streams; a servo board
+that answers after the start asks for a restart and refuses pan tests until then; a driven
+board that stops answering is an error until it answers again; the ZED-only bot never
+opens the I²C bus.
 
 ## ZED Mini stereo capture (2026-11-02)
 
