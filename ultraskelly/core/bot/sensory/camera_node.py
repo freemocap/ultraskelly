@@ -11,7 +11,6 @@ from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.pubsub.bot_topics import FrameMessage, FrameTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
-from picamera2 import Picamera2
 
 class VisionNodeParams(NodeParams):
     """Parameters for VisionNode."""
@@ -24,11 +23,13 @@ class VisionNode(Node):
     """Captures frames and publishes them."""
 
     params: VisionNodeParams
-    picam2: SkipValidation[Picamera2] = Field(default=None, exclude=True)
+    picam2: SkipValidation[object] = Field(default=None, exclude=True)  # picamera2's Picamera2
 
     @classmethod
     def create(cls, *, pubsub: PubSubTopicManager, params: VisionNodeParams) -> "VisionNode":
         """Factory method to create and initialize VisionNode."""
+        from picamera2 import Picamera2  # The Pi camera stack, imported here so the module loads anywhere
+
         node = cls(pubsub=pubsub, params=params)
 
         # Initialize camera

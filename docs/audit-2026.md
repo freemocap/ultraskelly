@@ -582,6 +582,49 @@ like the service started all six nodes, tripped nothing and stopped cleanly. Sti
 real I2C and USB losses on the rebuilt robot, by unbinding the OAK's USB port and the I2C
 adapter in software with the waist at rest.
 
+## Running with missing hardware (2026-11-04)
+
+After the rebuild on 2026-11-04 the robot had its AI HAT+ out (no /dev/hailo0), both
+cameras off USB (the ZED had earlier shown only its 2b03:f681 IMU), and I²C boards that
+came and went with the HAT stack's seating. The bot refused to start on each missing part.
+To reach the motor-test panel at all it ran from a temporary launcher that stubbed the
+OAK, the Hailo detector and the stall monitor, which ended the bot when no frame came
+within 20 s.
+
+The launcher now tries every part and runs with whatever works (`core/bot/health.py`,
+`core/bot/motor/motor_boards.py`). Each part is a component with a status, a
+plain-language message, a hint and since when, sent to the dashboard as `health` messages
+(docs/stream.md). Presence probes tell a missing part from a failing one: the USB device
+list for the OAK (03e7) and the ZED (2b03:f682 video, f681 IMU), /dev/hailo0 for the
+Hailo-8 and /dev/i2c-1 for I²C, so "no OAK on USB" and "the OAK is on USB but failed" get
+different hints. The servo board and the Motor HAT open separately. A missing one's
+actuators are stand-ins that record their commands and send nothing, so no command goes to
+a board that is not there; the motor watchdog stays on, and dashboard motor tests on a
+missing board are refused with the reason. A camera, detector or depth node that stops or
+crashes is reported against its part and the bot runs on; any other node ending still ends
+the bot, which brakes the motors, for the service to restart it. The ZED Mini and its IMU
+start without their device and pick it up when it appears; the OAK, the Hailo-8 and the
+motor boards are used only if they are there at startup.
+
+The stall monitor keeps its restart only for a stream that was running and went quiet
+while its source still counted as working, the freeze it was made for. A stream that never
+started is reported instead: restarting cannot plug a camera in, and a bot that restarts
+every 20 s cannot be used to find out what is wrong. A stream whose source crashed or was
+unplugged is not watched until it runs again. The cost: a camera that drops off USB
+without its node noticing looks like a freeze, so the bot restarts once, then starts
+without it and reports it missing.
+
+Evidence. `tests/test_degraded_startup.py` runs the real launcher, controllers and server
+on fake parts. With nothing plugged in the bot starts and reports every part missing with
+its hint. A missing servo board leaves the waist and jaw driven (their writes reach the
+fake Motor HAT) and refuses pan tests; a missing Motor HAT leaves the head driven. A ZED
+showing only its IMU says to flip the plug; an OAK on USB that fails is an error, not
+missing; StereoNet without the Hailo says to use the CPU matcher. An OAK unplugged while
+running is reported missing and the bot runs on past five frame timeouts; a ZED plugged in
+later is picked up; an OAK that freezes while connected still restarts the bot; health
+reaches a viewer that asked for nothing. The launcher now imports without the Pi's camera
+libraries, so these tests and the recovery tests above run on any computer.
+
 ## ZED Mini stereo capture (2026-11-02)
 
 The ZED Mini (serial 12395566) is read as a plain UVC camera, because the ZED SDK

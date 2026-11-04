@@ -179,8 +179,10 @@ class ZedCameraNode(Node):
     frames_lost: int = Field(default=0, exclude=True, description="Frames with rows lost in the USB transfer, not published")
 
     @classmethod
-    def create(cls, *, pubsub: PubSubTopicManager, params: ZedCameraNodeParams) -> "ZedCameraNode":
-        """Factory method: finds the ZED and opens its side-by-side stream in the configured mode."""
+    def create(cls, *, pubsub: PubSubTopicManager, params: ZedCameraNodeParams, wait: bool = False) -> "ZedCameraNode":
+        """Factory method: finds the ZED and opens its side-by-side stream in the configured mode.
+        With `wait`, a ZED that cannot be opened now does not fail here: the node tries once a
+        second until it streams, as it does after losing the camera mid-run."""
         size = ZED_MODES[params.resolution][0]
 
         def open_source() -> SideBySideSource:
@@ -190,7 +192,8 @@ class ZedCameraNode(Node):
             return OpenCvSideBySideSource.open(device, size, params.fps)
 
         node = cls(pubsub=pubsub, params=params, open_source=open_source)
-        node.source = open_source()  # Fails at startup, not mid-run, if the camera cannot stream this mode
+        if not wait:
+            node.source = open_source()  # Fails at startup, not mid-run, if the camera cannot stream this mode
         return node
 
     async def run(self) -> None:

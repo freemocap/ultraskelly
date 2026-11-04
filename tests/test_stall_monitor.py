@@ -25,10 +25,11 @@ async def publish(pubsub, seconds, *, frames=True, poses=True, pose_frames=True)
         await asyncio.sleep(0.01)
 
 
-def run_monitor(scenario, *, watch_poses=True):
+def run_monitor(scenario, *, watch_poses=True, frames_expected=None):
     async def main():
         pubsub = PubSubTopicManager.create()
-        monitor = StallMonitorNode.create(pubsub=pubsub, params=FAST, watch_poses=watch_poses)
+        monitor = StallMonitorNode.create(pubsub=pubsub, params=FAST, watch_poses=watch_poses,
+                                          frames_expected=frames_expected)
         task = asyncio.create_task(monitor.run())
         try:
             await scenario(pubsub)
@@ -63,9 +64,35 @@ def test_a_detector_that_stops_answering_stops_the_bot():
         run_monitor(scenario)
 
 
-def test_streams_that_never_start_stop_the_bot_after_the_startup_allowance():
-    with pytest.raises(StreamStalledError, match="No camera frames within 0.2 s of starting"):
-        run_monitor(lambda pubsub: asyncio.sleep(0.4))
+def test_streams_that_never_start_are_reported_elsewhere_not_restarted():
+    run_monitor(lambda pubsub: asyncio.sleep(0.4))  # Twice the old startup allowance; returns once stopped
+
+
+def test_a_stream_whose_source_is_down_is_not_a_freeze():
+    working = [True]
+
+    async def scenario(pubsub):
+        await publish(pubsub, 0.2)
+        working[0] = False  # Its camera crashed or was unplugged, and is reported so
+        await asyncio.sleep(0.3)
+
+    run_monitor(scenario, watch_poses=False, frames_expected=lambda: working[0])
+
+
+def test_a_source_that_comes_back_must_run_again_before_it_can_freeze():
+    working = [True]
+
+    async def scenario(pubsub):
+        await publish(pubsub, 0.2)
+        working[0] = False
+        await asyncio.sleep(0.05)
+        working[0] = True  # Back, but has sent nothing yet: still not a freeze
+        await asyncio.sleep(0.3)
+        await publish(pubsub, 0.1)  # Running again; then silent
+        await asyncio.sleep(0.3)
+
+    with pytest.raises(StreamStalledError, match="No camera frames for"):
+        run_monitor(scenario, watch_poses=False, frames_expected=lambda: working[0])
 
 
 def test_pose_results_are_ignored_unless_watched():

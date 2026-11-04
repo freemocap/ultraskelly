@@ -76,11 +76,14 @@ class MotorTester:
         mouth: MouthNode,
         limits: MotorTestLimits,
         clock: Callable[[], float] = time.monotonic,
+        unavailable: Callable[[str], str | None] | None = None,
     ) -> None:
         self.orientation = orientation
         self.mouth = mouth
         self.limits = limits
         self.clock = clock
+        # Why an actuator's board cannot be driven now (missing or failed), or None; a test on it is refused
+        self.unavailable = unavailable
         self.task: asyncio.Task | None = None
         self.stopping = asyncio.Event()
         self.current: dict | None = None  # The running test
@@ -102,6 +105,8 @@ class MotorTester:
         limits = self.limits
         if not limits.enabled:
             raise MotorTestRefused("Motor tests are turned off in the launch configuration")
+        if self.unavailable is not None and (reason := self.unavailable(request.actuator)) is not None:
+            raise MotorTestRefused(reason)
         if self.task is not None and not self.task.done():
             raise MotorTestRefused(f"Busy: {self.current['description']} is running", busy=True)
         if request.actuator in ("pan", "tilt"):
