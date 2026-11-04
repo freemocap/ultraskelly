@@ -4,6 +4,7 @@ import struct
 import cbor2
 import numpy as np
 import pytest
+from aiohttp import WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
@@ -62,6 +63,23 @@ async def connect_stream(client, server):
     return socket
 
 
+async def eventually(condition, timeout: float = 5.0) -> None:
+    """Let the event loop run until `condition()` holds, however long the machine takes; fail after `timeout`."""
+    async def poll():
+        while not condition():
+            await asyncio.sleep(0.001)
+
+    await asyncio.wait_for(poll(), timeout)
+
+
+async def receive_text(socket) -> str:
+    """The next text message, such as the server's pong. Stream messages keep coming meanwhile, in
+    any order with it, so the binary ones before it are passed over."""
+    while (message := await asyncio.wait_for(socket.receive(), timeout=5)).type != WSMsgType.TEXT:
+        pass
+    return message.data
+
+
 async def receive_stream(socket, until) -> dict[str, list[dict]]:
     received: dict[str, list[dict]] = {"frame": [], "robot_state": []}
     while not until(received):
@@ -85,7 +103,7 @@ def test_robot_state_reports_motor_commands_bot_state_guides_and_nodes():
         )
         await bus.publish(TargetLocationTopic, TargetLocationMessage(x=330, y=200, angle=85.0))
         await bus.publish(FrameTopic, FrameMessage(frame=frame(1)))
-        await asyncio.sleep(0.05)
+        await eventually(lambda: {"servo_state", "target"} <= server.latest.keys() and server.feeds["oak"].frames_seen)
         state = server.robot_state()
         server.stop()
         await pump
@@ -136,7 +154,7 @@ def test_stream_sends_each_frame_with_its_own_poses_and_the_robot_state():
                              overlays={"oak": TrackingOverlay(aim=(320, 240), jaw_zone=100)})
         pump = asyncio.create_task(server.pump())
         await bus.publish(FrameTopic, FrameMessage(frame=frame(5)))
-        await asyncio.sleep(0.05)
+        await eventually(lambda: server.feeds["oak"].frames_seen)  # Taken, and not encoded: nobody watches
         encoded_unwatched = list(encoded)
         async with TestClient(TestServer(server.build_app())) as client:
             socket = await connect_stream(client, server)
@@ -149,7 +167,7 @@ def test_stream_sends_each_frame_with_its_own_poses_and_the_robot_state():
             received = await receive_stream(
                 socket, lambda got: got["robot_state"] and any(message["trackers"] for message in got["frame"]))
             await socket.send_str("ping")
-            pong = await asyncio.wait_for(socket.receive_str(), timeout=5)
+            pong = await receive_text(socket)
             await socket.close()
         server.stop()
         await pump
