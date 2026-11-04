@@ -787,8 +787,7 @@ class RuntimeServerNode(Node):
                 sent_version, sent_at = self.health.version, now
                 self.health_sequence += 1
                 self.health_stream.publish(encode_message(
-                    HEALTH_KIND, {"time": now, "components": self.health.snapshot()},
-                    timestamp=now, sequence=self.health_sequence,
+                    HEALTH_KIND, self.health.message(now), timestamp=now, sequence=self.health_sequence,
                 ))
             await asyncio.sleep(HEALTH_CHECK_SECONDS)
 

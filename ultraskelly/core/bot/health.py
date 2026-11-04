@@ -65,6 +65,7 @@ class Health:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock
         self.components: dict[str, Component] = {}
+        self.diagnostics: dict = {}  # The live checks (core/bot/diagnostics.py), newest
         self.version = 0  # Counts changes, so a publisher sends only when something changed
         self._lock = threading.Lock()
 
@@ -104,6 +105,18 @@ class Health:
             order = list(COMPONENTS)
             ordered = sorted(self.components.values(), key=lambda component: order.index(component.id))
             return [component.to_message() for component in ordered]
+
+    def set_diagnostics(self, diagnostics: dict) -> None:
+        with self._lock:
+            if diagnostics != self.diagnostics:
+                self.diagnostics = diagnostics
+                self.version += 1
+
+    def message(self, now: float) -> dict:
+        """The health message's payload (docs/stream.md, "health")."""
+        with self._lock:
+            diagnostics = self.diagnostics
+        return {"time": now, "components": self.snapshot(), "diagnostics": diagnostics}
 
     def mark(self, id: str, **changes) -> None:
         """Change fields of a reported component (such as `restart`) without touching its status."""
