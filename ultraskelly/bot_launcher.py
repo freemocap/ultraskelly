@@ -18,9 +18,10 @@ from typing import Callable, TypeVar
 
 from pydantic import BaseModel, Field, SkipValidation, ConfigDict
 
-from ultraskelly.core.bot.diagnostics import Diagnostics, Sources, judge_servo_board
+from ultraskelly.core.bot.diagnostics import Diagnostics, Sources, judge_power, judge_servo_board
 from ultraskelly.core.bot.health import (
     COMPONENTS,
+    Finding,
     Health,
     Probes,
     Status,
@@ -29,6 +30,7 @@ from ultraskelly.core.bot.health import (
     diagnose_oak,
     diagnose_zed,
     diagnose_zed_imu,
+    oak_on_usb,
 )
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.motor_boards import (
@@ -78,7 +80,7 @@ from ultraskelly.core.pubsub.pubsub_manager import (
 )
 
 Part = TypeVar("Part")
-Diagnosis = Callable[[BaseException], tuple[Status, str, str | None]]
+Diagnosis = Callable[[BaseException], Finding]
 STREAMING_WINDOW = 3.0  # Seconds without new data before a camera or the IMU counts as not streaming
 HEALTH_INTERVAL = 1.0  # Seconds between checks of how each part is doing
 DIAGNOSTICS_INTERVAL = 5.0  # Seconds between the live hardware checks (core/bot/diagnostics.py)
@@ -192,6 +194,11 @@ class BotLauncher(BaseModel):
     watches: SkipValidation[list[Callable[[], None]]] = Field(default_factory=list, exclude=True)
     diagnostics: SkipValidation[Diagnostics | None] = Field(default=None, exclude=True)
     controllers: SkipValidation[tuple[OrientationNode, MouthNode] | None] = Field(default=None, exclude=True)
+    # The OAK's node while there is one, and when it was made
+    oak: SkipValidation[OakCameraNode | None] = Field(default=None, exclude=True)
+    oak_started: float = Field(default=0.0, exclude=True)
+    # The OAK models not downloaded, read once while the OAK is out (with it, the OAK says)
+    models_missing: dict[str, str] | None = Field(default=None, exclude=True)
 
     def healthy(self) -> bool:
         """True until the bot starts shutting down; the boot service's watchdog is fed only while it holds."""
@@ -204,9 +211,10 @@ class BotLauncher(BaseModel):
         try:
             part = open_part()
         except Exception as error:
-            status, message, hint = diagnose(error)
-            self.health.report(component, status, message, hint, detail={"error": f"{type(error).__name__}: {error}"})
-            logger.error(f"Running without the {COMPONENTS[component][0]}: {message} ({type(error).__name__}: {error})")
+            finding = diagnose(error)
+            self.health.report(component, *finding, detail={"error": f"{type(error).__name__}: {error}"})
+            logger.error(f"Running without the {COMPONENTS[component][0]}: {finding.message} "
+                         f"({type(error).__name__}: {error})")
             return None
         self.health.report(component, Status.OK, working)
         return part
@@ -365,58 +373,85 @@ class BotLauncher(BaseModel):
         return f"{component.message}, so nothing would move. {component.hint}"
 
     def _create_tracking_nodes(self) -> OakCameraNode | None:
-        """The OAK camera and the Hailo-8 pose detector, each if it starts; returns the OAK's node."""
+        """The OAK camera and the Hailo-8 pose detector, each if it starts; returns the OAK's node.
+        Neither is searched for when its probe finds it missing: depthai would look for 11 s."""
         probes = self.hardware.probes
-        oak = self._attempt(
-            "oak_camera", lambda: self.hardware.oak_camera(pubsub=self.pubsub, params=self.config.oak_camera),
-            lambda error: diagnose_oak(error, probes), "Streaming",
-        )
+
+        def open_oak() -> Node:
+            if not oak_on_usb(probes.usb()):
+                raise LookupError("no OAK (03e7) device on USB")
+            return self.hardware.oak_camera(pubsub=self.pubsub, params=self.config.oak_camera)
+
+        def open_hailo() -> Node:
+            if not probes.hailo_device():
+                raise LookupError("no /dev/hailo0")
+            return self.hardware.hailo_pose(pubsub=self.pubsub, params=self.config.hailo_pose_detector)
+
+        oak = self._attempt("oak_camera", open_oak, lambda error: diagnose_oak(error, probes), "Streaming")
         if oak is not None:
             self._add_part(oak, "oak_camera")
-            self.watches.append(self._watch_oak(oak))
-        self._report_oak_models(oak)
+            self.oak, self.oak_started = oak, time.monotonic()
+        self.watches.append(self._watch_oak)
+        self._report_oak_models()
+        self.watches.append(self._report_oak_models)
         hailo = self._attempt(
-            "hailo", lambda: self.hardware.hailo_pose(pubsub=self.pubsub, params=self.config.hailo_pose_detector),
-            lambda error: diagnose_hailo(error, probes), "Finds people in the OAK's frames",
+            "hailo", open_hailo, lambda error: diagnose_hailo(error, probes), "Finds people in the OAK's frames",
         )
         if hailo is not None:
             self._add_part(hailo, "hailo")
+        self._watch_hailo()
+        self.watches.append(self._watch_hailo)
         return oak
 
-    def _report_oak_models(self, oak: OakCameraNode | None) -> None:
+    def _streaming(self, component: str) -> bool:
+        """Whether `component` fully works: ok, not just started."""
+        current = self.health.get(component)
+        return current is not None and current.status == Status.OK
+
+    def _report_oak_models(self) -> None:
+        """The OAK's own models: off, not downloaded, running, or waiting for the OAK."""
         models = self.config.oak_camera.models
         if models is None:
             self.health.report("oak_models", Status.OFF, "Turned off (--no-oak-models)")
             return
         fetch = ("Run .venv/bin/python -m scripts.fetch_oak_models with the internet on (scripts/setup-pi.sh does "
                  "it too), then restart the bot.")
-        if oak is not None:
-            if oak.models_error:
-                self.health.report("oak_models", Status.MISSING, oak.models_error, fetch)
-            else:
+        if self.oak is not None and self.health.ok("oak_camera"):
+            if self.oak.models_error:
+                self.health.report("oak_models", Status.MISSING, self.oak.models_error, fetch)
+            elif self._streaming("oak_camera"):
                 self.health.report("oak_models", Status.OK, "Running on the OAK's chip")
+            else:
+                self.health.report("oak_models", Status.DEGRADED, "Loaded on the OAK; waiting for its frames",
+                                   None, "oak_camera")
             return
-        missing = missing_models(models.model_cache)
-        if missing:
-            self.health.report("oak_models", Status.MISSING, f"Not downloaded: {', '.join(missing)}", fetch)
+        if self.models_missing is None:
+            self.models_missing = missing_models(models.model_cache)
+        if self.models_missing:
+            self.health.report("oak_models", Status.MISSING, f"Not downloaded: {', '.join(self.models_missing)}", fetch)
         else:
-            self.health.report("oak_models", Status.OK, "All downloaded; they run once the OAK is plugged in")
+            self.health.report("oak_models", Status.DEGRADED, "Downloaded; they run once the OAK streams",
+                               None, "oak_camera")
 
-    def _watch_oak(self, oak: OakCameraNode) -> Callable[[], None]:
+    def _watch_oak(self) -> None:
         """While the OAK node runs: streaming, or started but sending no frames (reported, not restarted)."""
-        started = time.monotonic()
-        quiet_after = self.config.stall_monitor.startup_seconds
+        current = self.health.get("oak_camera")
+        if self.oak is None or current is None or current.status not in (Status.OK, Status.DEGRADED):
+            return  # Missing, or stopped or crashed: reported when its node ended
+        if self.oak.status()["rates"].get("frames", 0.0) > 0:
+            self.health.report("oak_camera", Status.OK, "Streaming")
+        elif time.monotonic() - self.oak_started > self.config.stall_monitor.startup_seconds:
+            self.health.report("oak_camera", Status.DEGRADED, "Started, but sends no frames",
+                               "Unplug the OAK, wait 5 s and plug it back in; if it stays quiet, restart the bot.")
 
-        def watch() -> None:
-            current = self.health.get("oak_camera")
-            if current is None or current.status not in (Status.OK, Status.DEGRADED):
-                return  # Stopped or crashed: reported when its node ended
-            if oak.status()["rates"].get("frames", 0.0) > 0:
-                self.health.report("oak_camera", Status.OK, "Streaming")
-            elif time.monotonic() - started > quiet_after:
-                self.health.report("oak_camera", Status.DEGRADED, "Started, but sends no frames",
-                                   "Unplug the OAK, wait 5 s and plug it back in; if it stays quiet, restart the bot.")
-        return watch
+    def _watch_hailo(self) -> None:
+        """The Hailo-8 finds people in the OAK's frames, so it waits while the OAK sends none."""
+        if not self.health.ok("hailo"):
+            return  # Missing or failed: its own report stands
+        if self._streaming("oak_camera"):
+            self.health.report("hailo", Status.OK, "Finds people in the OAK's frames")
+        else:
+            self.health.report("hailo", Status.DEGRADED, "Waiting for the OAK camera's frames", None, "oak_camera")
 
     def _create_stereo_nodes(self) -> dict[str, dict[str, type[PubSubTopicABC]]]:
         """The ZED Mini's nodes, when configured: capture, its IMU, and depth if asked for. The camera and
@@ -490,19 +525,19 @@ class BotLauncher(BaseModel):
                 self.health.report(component, *diagnose())
         return watch
 
-    def _diagnose_depth(self, error: BaseException) -> tuple[Status, str, str | None]:
+    def _diagnose_depth(self, error: BaseException) -> Finding:
         if self.config.stereo_depth.matcher == "stereonet" and not self.hardware.probes.hailo_device():
-            return (Status.MISSING, "StereoNet runs on the Hailo-8, which is missing",
-                    "Seat the AI HAT+ (see Hailo-8), or run with --depth, which computes depth on the CPU.")
-        return (Status.ERROR, f"Depth did not start: {error}", None)
+            return Finding(Status.MISSING, "StereoNet runs on the Hailo-8, which is missing",
+                           "Seat the AI HAT+ (see Hailo-8), or run with --depth, which computes depth on the CPU.",
+                           "hailo")
+        return Finding(Status.ERROR, f"Depth did not start: {error}")
 
     def _watch_depth(self, matcher: str) -> Callable[[], None]:
         def watch() -> None:
             if self.health.ok("zed_camera"):
                 self.health.report("depth", Status.OK, f"Depth from the ZED's eyes ({matcher})")
             else:
-                self.health.report("depth", Status.DEGRADED, "Waiting for the ZED Mini's images",
-                                   "Depth needs the ZED Mini; see its line.")
+                self.health.report("depth", Status.DEGRADED, "Waiting for the ZED Mini's images", None, "zed_camera")
         return watch
 
     def _create_zed_only_nodes(self) -> None:
@@ -599,10 +634,10 @@ class BotLauncher(BaseModel):
         if task.cancelled():
             return
         error = task.exception() or RuntimeError("it stopped")
-        diagnose = self.diagnoses.get(component, lambda error: (Status.ERROR, str(error), None))
-        status, message, hint = diagnose(error)
-        self.health.report(component, status, message, hint, detail={"error": f"{type(error).__name__}: {error}"})
-        logger.error(f"The {COMPONENTS[component][0]} stopped; running on without it: {message}")
+        diagnose = self.diagnoses.get(component, lambda error: Finding(Status.ERROR, str(error)))
+        finding = diagnose(error)
+        self.health.report(component, *finding, detail={"error": f"{type(error).__name__}: {error}"})
+        logger.error(f"The {COMPONENTS[component][0]} stopped; running on without it: {finding.message}")
 
     async def _watch_health(self) -> None:
         """Keep each part's status current while the bot runs."""
@@ -643,6 +678,8 @@ class BotLauncher(BaseModel):
         self.health.set_diagnostics(result)
         if driven and (judged := judge_servo_board(result["pca9685"])) is not None:
             self.health.report("servo_board", *judged)
+        if (power := judge_power(result["power"])) is not None:
+            self.health.report("power", *power)
 
     async def run(self) -> None:
         """Run all nodes until one that is not a camera, detector or depth node stops or crashes,

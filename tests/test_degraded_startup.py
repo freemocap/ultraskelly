@@ -123,9 +123,11 @@ class Robot:
         self.servo_board, self.motor_board, self.oak_fails = servo_board, motor_board, oak_fails
         self.oak_options, self.zed_opens_after = oak_options or {}, zed_opens_after
         self.servo_kit, self.motor_kit = ServoKit(), MotorKit()
+        self.opened = []  # The OAK and Hailo-8 factories called, in order
 
     def hardware(self) -> Hardware:
         def oak_camera(*, pubsub, params):
+            self.opened.append("oak_camera")
             if self.oak_fails:
                 raise RuntimeError("X_LINK_DEVICE_NOT_FOUND")
             if not self.oak:
@@ -133,6 +135,7 @@ class Robot:
             return FakeOak(pubsub=pubsub, **self.oak_options)
 
         def hailo_pose(*, pubsub, params):
+            self.opened.append("hailo")
             if not self.hailo:
                 raise RuntimeError("HAILO_OUT_OF_PHYSICAL_DEVICES")
             return Idle(pubsub=pubsub)
@@ -240,11 +243,43 @@ def test_a_zed_showing_only_its_imu_says_to_flip_its_plug(tmp_path):
 
 
 def test_an_oak_on_usb_that_fails_is_an_error_not_missing(tmp_path):
-    launcher = start(Robot(oak=False, oak_fails=True), tmp_path)
+    robot = Robot(oak=False, oak_fails=True)
+    launcher = start(robot, tmp_path)
 
     oak = launcher.health.get("oak_camera")
     assert oak.status == Status.ERROR and "X_LINK_DEVICE_NOT_FOUND" in oak.message
     assert oak.detail == {"error": "RuntimeError: X_LINK_DEVICE_NOT_FOUND"}
+    assert robot.opened == ["oak_camera", "hailo"]
+
+
+def test_an_oak_or_hailo_that_is_not_there_is_not_searched_for(tmp_path):
+    robot = Robot(oak=False, hailo=False)  # depthai would search USB for 11 s before giving up
+    launcher = start(robot, tmp_path)
+
+    assert robot.opened == []
+    assert launcher.health.get("oak_camera").message == "No OAK on USB (no 03e7 device)"
+    assert launcher.health.get("hailo").message == "No Hailo-8 (no /dev/hailo0)"
+
+
+def test_parts_that_wait_for_another_name_it(tmp_path, quick, monkeypatch):
+    monkeypatch.setattr(bot_launcher, "missing_models", lambda cache: {})  # Every OAK model downloaded
+    launcher = start(Robot(oak=False, zed=False, imu=False), tmp_path)  # The Hailo-8 in, the OAK and ZED out
+
+    async def scenario():
+        task = await run_for(launcher, 0.4)
+        found = {component["id"]: component for component in launcher.health.snapshot()}
+        await stop(launcher, task)
+        return found
+
+    found = asyncio.run(scenario())
+    because = {name: (part["status"], part["because"]) for name, part in found.items()}
+    assert because == {
+        "oak_camera": ("missing", None), "oak_models": ("degraded", "oak_camera"), "hailo": ("degraded", "oak_camera"),
+        "zed_camera": ("missing", None), "zed_imu": ("missing", "zed_camera"), "depth": ("degraded", "zed_camera"),
+        "servo_board": ("ok", None), "motor_board": ("ok", None),
+    }
+    assert found["zed_imu"]["hint"] is None and found["depth"]["hint"] is None  # The ZED's own hint applies
+    assert found["hailo"]["message"] == "Waiting for the OAK camera's frames"
 
 
 def test_stereonet_without_the_hailo_reports_depth_missing(tmp_path):
@@ -261,6 +296,7 @@ def test_stereonet_without_the_hailo_reports_depth_missing(tmp_path):
 
     depth = launcher.health.get("depth")
     assert depth.status == Status.MISSING and "--depth, which computes depth on the CPU" in depth.hint
+    assert depth.because == "hailo"
 
 
 def test_simulated_motors_are_reported_off_and_not_opened(tmp_path):
@@ -380,8 +416,8 @@ def test_health_goes_to_every_viewer(tmp_path):
     message = asyncio.run(scenario())
     components = {component["id"]: component for component in message["components"]}
     assert components["oak_camera"]["status"] == "missing" and components["hailo"]["status"] == "missing"
-    assert set(components["oak_camera"]) == {"id", "label", "group", "status", "message", "hint", "since",
-                                             "restart", "detail"}
+    assert set(components["oak_camera"]) == {"id", "label", "group", "status", "message", "hint", "because",
+                                             "since", "restart", "detail"}
     assert message["time"] >= components["oak_camera"]["since"]
 
 

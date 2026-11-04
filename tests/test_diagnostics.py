@@ -4,18 +4,21 @@ import asyncio
 import pytest
 
 from ultraskelly.core.bot.diagnostics import (
+    HEAT,
     NOT_MOVING,
+    UNDER_VOLTAGE,
     Diagnostics,
     Sources,
     count_lost_arbitration,
     decode_throttled,
+    judge_power,
     judge_servo_board,
     parse_pmic,
     pulse_us,
     pwm_frequency,
     servo_pulse_us,
 )
-from ultraskelly.core.bot.health import Status
+from ultraskelly.core.bot.health import Finding, Status
 
 # From the robot's Pi on 2026-11-04, `vcgencmd pmic_read_adc`, shortened
 PMIC = """ 3V7_WL_SW_A current(0)=0.05855580A
@@ -129,9 +132,24 @@ def test_the_servo_boards_readback_is_judged():
     stale = judge_servo_board(readback())  # Pan still at 1.5 ms although 95 degrees was commanded
     assert stale[0] == Status.DEGRADED and stale[1] == "pan puts out 1498 µs where 95° needs 1542 µs"
     sent = judge_servo_board(readback(pulses={PAN: 316, TILT: HALF_MS}))  # 1543 µs for 95 degrees
-    assert sent == (Status.OK, "Answers; awake at 50 Hz, and the pulses match the commanded angles", NOT_MOVING)
+    assert sent == Finding(Status.OK, "Answers; awake at 50 Hz, and the pulses match the commanded angles", NOT_MOVING)
     assert "OE wire" in NOT_MOVING and "V+" in NOT_MOVING and "orientation" in NOT_MOVING
     assert judge_servo_board(None) is None
+
+
+def power(throttled: str, supply: float = 5.113) -> dict:
+    return {"available": True, **decode_throttled(f"throttled={throttled}"), "rails": {"EXT5V": supply}}
+
+
+def test_the_pis_supply_is_judged():
+    assert judge_power(power("0x50005", 4.79)) == Finding(Status.ERROR, "Under-voltage now (EXT5V 4.79 V)", UNDER_VOLTAGE)
+    assert judge_power(power("0x6")) == Finding(
+        Status.DEGRADED, "CPU frequency capped, throttled now (EXT5V 5.11 V)", HEAT)
+    assert judge_power(power("0x80008")).message == "Temperature limit now (EXT5V 5.11 V)"
+    assert judge_power(power("0x10000")) == Finding(
+        Status.OK, "Fine now (EXT5V 5.11 V); since boot: under-voltage", UNDER_VOLTAGE)
+    assert judge_power(power("0x0")) == Finding(Status.OK, "No under-voltage or throttling (EXT5V 5.11 V)")
+    assert judge_power({"available": False}) is None  # Not a Pi: no power line at all
 
 
 def test_the_bot_reports_that_commands_reach_the_servo_chip(tmp_path, monkeypatch):
@@ -148,11 +166,13 @@ def test_the_bot_reports_that_commands_reach_the_servo_chip(tmp_path, monkeypatc
     async def scenario():
         task = asyncio.create_task(launcher.run())
         await asyncio.sleep(0.3)
-        board, diagnostics = launcher.health.get("servo_board"), launcher.health.diagnostics
+        board, diagnostics, supply = (launcher.health.get("servo_board"), launcher.health.diagnostics,
+                                      launcher.health.get("power"))
         await stop(launcher, task)
-        return board, diagnostics
+        return board, diagnostics, supply
 
-    board, diagnostics = asyncio.run(scenario())
+    board, diagnostics, supply = asyncio.run(scenario())
+    assert (supply.status, supply.message) == (Status.OK, "No under-voltage or throttling (EXT5V 5.11 V)")
     assert board.status == Status.OK and board.message.startswith("Answers; awake at 50 Hz") and board.hint == NOT_MOVING
     assert diagnostics["i2c"]["addresses"] == {"0x40": True, "0x60": True, "0x70": False}
     assert diagnostics["motor_watchdog"] == {"trips": 0, "tripped_at": None}

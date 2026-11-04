@@ -168,11 +168,12 @@ Each component:
 
 | Field | Contents |
 | --- | --- |
-| `id` | `oak_camera`, `oak_models`, `hailo`, `zed_camera`, `zed_imu`, `depth`, `servo_board`, `motor_board`, in that order; only the parts this launch uses |
-| `label`, `group` | for display, such as "OAK camera" in `cameras`; the groups are `cameras`, `ai`, `sensors` and `motors` |
+| `id` | `oak_camera`, `oak_models`, `hailo`, `zed_camera`, `zed_imu`, `depth`, `servo_board`, `motor_board`, `power`, in that order; only the parts this launch uses |
+| `label`, `group` | for display, such as "OAK camera" in `cameras`; the groups are `cameras`, `ai`, `sensors`, `motors` and `power` |
 | `status` | `ok`; `degraded`, working partly (an OAK that sends no frames, depth waiting for the ZED); `missing`, not on USB, PCIe or I²C; `error`, there but failed; `off`, not used on purpose (`--simulate-motors`, `--no-oak-models`) |
 | `message` | what is the matter, in plain words, such as "No OAK on USB (no 03e7 device)" |
 | `hint` | what to do about it, or null |
+| `because` | the `id` of the part whose trouble this one follows from, or null: the ZED's IMU while the whole ZED Mini is off USB, depth while it waits for the ZED's images, the OAK's models and the Hailo-8 while the OAK sends no frames, StereoNet depth without the Hailo-8. Show that part as the problem; a part that follows from another has no `hint` of its own unless it has a way round, so take the other part's |
 | `since` | when the status last changed, on the same clock as `time` |
 | `restart` | null, or why the part is back but the bot must restart to use it |
 | `detail` | small facts, such as the `error` a part failed with |
@@ -196,6 +197,11 @@ its component says so, and its hint lists what to check if a servo still does no
 board's OE wire (held high it switches every output off), the servo power on V+, and each
 plug's orientation. A board asleep, at the wrong frequency, or with pulses that do not
 match is `degraded`, with what to do.
+
+The `power` component is the Pi's supply, from the `power` check: `error` while
+under-voltage now, `degraded` while throttled, frequency-capped or at its temperature limit
+now, else `ok`, naming in its message what happened since boot. It is reported only where
+`vcgencmd` works, so not on a PC.
 
 While a motor board is not `ok` or `off`, `robot_state.motors.commands` still lists its
 actuators: the controllers run and record their commands, but nothing is sent to a board
