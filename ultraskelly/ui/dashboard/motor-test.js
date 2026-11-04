@@ -16,7 +16,9 @@ const element = (tag, properties = {}, ...children) => {
 };
 const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
 const BOARDS = [['servo_board', 'Servo board 0x40'], ['motor_board', 'Motor HAT 0x60']];
-const SAME_US = 15;  // A read-back pulse this close to the one the commanded angle needs is the command: about 1.4 degrees
+// A read-back pulse this close to the one the commanded angle needs is the command: about 2.4 degrees. The bot's own
+// tolerance (diagnostics.py, PULSE_TOLERANCE_US), so this panel and the servo board's status never disagree.
+const SAME_US = 20;
 export const down = (model, id) => { const part = model?.components?.find(component => component.id === id); return part && (part.status === 'fail' || part.status === 'warn') ? part : null; };
 
 // What the servo board says about the last servo test's channel, from the bot's checks (health.js's model): its
