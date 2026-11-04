@@ -56,7 +56,8 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
   orientation; when it does not, the command never reached the chip. Angles stay commands:
   the read-back is the chip's own register, not where the servo is. While a board is down
   the controllers still run and record their commands, but nothing reaches it, so the
-  commands read "not sent" there and in the time series.
+  commands read "not sent" there and in the time series, the bot refuses that board's
+  tests with its message and fix, and the strip card shows the board's message, not "Ready".
 
 Click a video tile to enlarge it over the 3D scene; click it again or press Esc to return.
 

@@ -78,7 +78,7 @@ function describe(value) {
 }
 
 // The bot's live diagnostics (docs/stream.md, "health"), a line each, in plain words where the reading is known.
-const USB_NAMES = {oak: 'OAK', zed_video: 'ZED video', zed_hid: 'ZED HID', zed_imu_device: 'ZED IMU', zed_imu: 'ZED IMU'};
+const USB_NAMES = {oak: 'OAK', zed_video: 'ZED video', zed_hid: 'ZED HID (its IMU)'};
 function diagnosticLines(diagnostics) {
   const lines = [];
   for (const [name, reading] of Object.entries(diagnostics ?? {})) {
@@ -104,13 +104,16 @@ function diagnosticLines(diagnostics) {
       const device = typeof reading.device === 'string' ? `device ${reading.device}` : reading.device ? '/dev/hailo0 present' : 'no /dev/hailo0';
       lines.push(['Hailo', [reading.pci == null ? null : reading.pci ? 'on PCIe' : 'not on PCIe', device].filter(Boolean).join(' · ')]);
     } else if (name === 'usb') {
-      const there = Object.entries(reading), named = key => USB_NAMES[key] ?? key.replaceAll('_', ' ');
+      // zed_imu_device is not a USB device: it is the /dev/zed-mini-imu link the udev rule makes for the bot.
+      const {zed_imu_device: link, ...devices} = reading, there = Object.entries(devices), named = key => USB_NAMES[key] ?? key.replaceAll('_', ' ');
       const on = there.filter(([, present]) => present).map(([key]) => named(key)), off = there.filter(([, present]) => !present).map(([key]) => named(key));
-      lines.push(['USB', [`on USB: ${on.join(', ') || 'none'}`, off.length ? `not on USB: ${off.join(', ')}` : null].filter(Boolean).join(' · ')]);
+      lines.push(['USB', [`on USB: ${on.join(', ') || 'none'}`, off.length ? `not on USB: ${off.join(', ')}` : null,
+                          link == null ? null : link ? '/dev/zed-mini-imu present' : 'no /dev/zed-mini-imu'].filter(Boolean).join(' · ')]);
     } else if (name === 'motor_watchdog') {
       lines.push(['Motor watchdog', reading.trips ? `stopped the motors ${reading.trips} time${reading.trips === 1 ? '' : 's'}` : 'never tripped']);
     } else if (name === 'retried_writes') {
-      lines.push(['Retried writes', describe(reading)]);
+      const counted = Object.entries(reading).filter(([, count]) => count != null);  // None for a motor that is simulated
+      if (counted.length) lines.push(['Retried writes', counted.map(([motor, count]) => `${motor} ${count}`).join(' · ')]);
     } else {
       lines.push([name.replaceAll('_', ' '), describe(reading)]);
     }

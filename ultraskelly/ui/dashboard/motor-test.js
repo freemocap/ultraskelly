@@ -17,17 +17,15 @@ const element = (tag, properties = {}, ...children) => {
 const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
 const BOARDS = [['servo_board', 'Servo board 0x40'], ['motor_board', 'Motor HAT 0x60']];
 const SAME_US = 15;  // A read-back pulse this close to the one the commanded angle needs is the command: about 1.4 degrees
-const down = (model, id) => { const part = model?.components?.find(component => component.id === id); return part && (part.status === 'fail' || part.status === 'warn') ? part : null; };
+export const down = (model, id) => { const part = model?.components?.find(component => component.id === id); return part && (part.status === 'fail' || part.status === 'warn') ? part : null; };
 
 // What the servo board says about the last servo test's channel, from the bot's checks (health.js's model): its
 // diagnostics.pca9685, pulse widths in microseconds. [words, hint, kind], or null when there is nothing to say.
+// A board that does not answer has nothing to read back: the bot refuses the test with its message and hint.
 function readbackOf(model, name) {
-  const part = model?.components?.find(component => component.id === 'servo_board'), board = down(model, 'servo_board');
+  const part = model?.components?.find(component => component.id === 'servo_board');
   const chip = model?.diagnostics?.pca9685, channel = chip?.channels?.[name];
   if (part?.status === 'off') return [part.message || 'Simulated: commands are recorded, not sent', part.fix || '', ''];
-  if (board && channel?.pulse_us == null) {
-    return [`${board.message || 'The servo board does not answer'}: the command went nowhere`, board.fix || '', 'refused'];
-  }
   if (channel?.pulse_us == null) return null;
   const angle = channel.commanded == null ? 'the command' : `${Math.round(channel.commanded)}°`;
   const said = `${name[0].toUpperCase()}${name.slice(1)} commanded ${angle}; the chip reads ${Math.round(channel.pulse_us)} µs` +
@@ -49,6 +47,8 @@ export class MotorTestPanel {
     this.root = root;
     this.limits = null;
     this.running = false;
+    this.own = null;  // `started` of the last test this page ran: a robot_state sent before it ended is not another screen's
+    this.foreign = null;  // `started` of a test another screen is running, to show how it ended
     this.commands = {};
     this.lastServo = null;  // The actuator of the last servo test, whose read-back is shown
     this.load();
@@ -139,8 +139,8 @@ export class MotorTestPanel {
   }
 
   show(text, kind = '') {
-    this.result.textContent = text;
-    this.result.className = `motor-test-result ${kind}`;
+    setText(this.result, text);
+    setProperty(this.result, 'className', `motor-test-result ${kind}`);
   }
 
   async post(path, body) {
@@ -156,7 +156,10 @@ export class MotorTestPanel {
     try {
       const [reply, body] = await this.post('/api/motor-test', test);
       if (!reply.ok) this.show(`Refused: ${body.error}`, 'refused');
-      else this.show(`${body.test.outcome[0].toUpperCase()}${body.test.outcome.slice(1)}: ${body.test.description}`, body.ok ? 'done' : 'refused');
+      else {
+        this.own = body.test.started;
+        this.show(`${body.test.outcome[0].toUpperCase()}${body.test.outcome.slice(1)}: ${body.test.description}`, body.ok ? 'done' : 'refused');
+      }
     } catch (problem) {
       this.show(`No answer from the robot: ${problem.message}`, 'refused');
     } finally {
@@ -188,7 +191,14 @@ export class MotorTestPanel {
     if (!this.root.closest('[hidden]')) { this.showBoards(model); this.showReadback(model); }  // Only while open
     if (!test) return;
     setText(this.travel, `${signed(test.waist_travel)}${motorsDown ? ' not sent' : ''}`);
-    if (test.running && !this.running) this.show(`Running from another screen: ${test.running.description}`);
+    if (test.running && !this.running && test.running.started !== this.own) {
+      this.foreign = test.running.started;
+      this.show(`Running from another screen: ${test.running.description}`);
+    } else if (!test.running && this.foreign != null && test.last?.started === this.foreign) {
+      this.foreign = null;  // It ended: say how, once
+      const outcome = test.last.outcome;
+      this.show(`${outcome[0].toUpperCase()}${outcome.slice(1)} from another screen: ${test.last.description}`, outcome === 'done' ? 'done' : 'refused');
+    }
   }
 
   // Whether each board answers, from the bot's checks; nothing without them.

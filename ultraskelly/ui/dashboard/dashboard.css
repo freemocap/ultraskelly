@@ -161,8 +161,9 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .motor-test-inputs{text-align:left;font-size:11px;color:var(--muted)}
 .motor-test-inputs input[type=number]{display:inline-block;width:62px;height:24px;margin:0 4px}
 .motor-test-value{font:12px ui-monospace,monospace;color:var(--accent)}
-.motor-test-foot{display:flex;align-items:center;gap:8px;margin-top:8px}
-.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.35}
+.motor-test-foot{display:flex;align-items:baseline;gap:8px;margin-top:8px}
+.motor-test-foot .motor-test-stop{flex:none}  /* A long refusal wraps beside it, never under it */
+.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.35;min-width:0}
 .motor-test-result.done{color:var(--accent)}.motor-test-result.refused{color:var(--orange)}
 .dashboard .drawer .section-title{margin:0 32px 6px 0}
 .dashboard .drawer .section-title>span{font-size:10px}

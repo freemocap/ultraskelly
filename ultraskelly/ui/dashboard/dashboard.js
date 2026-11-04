@@ -3,7 +3,7 @@
 // FreeMoCap `frame` messages carry camera JPEGs with the poses found in that very image. Everything the
 // page shows changes in one frame per tracking-camera frame (frameclock.js).
 import { TransportService } from '/vendor/freemocap-client.js';
-import { MotorTestPanel } from '/motor-test.js';
+import { MotorTestPanel, down as boardDown } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
@@ -66,6 +66,7 @@ addEventListener('keydown', event => {
 function showTestStatus(text, kind = '') {
   setText($('tests-status'), text);
   setProperty($('tests-status'), 'className', `tests-status ${kind}`);
+  setProperty($('tests-status'), 'title', text);  // The whole text where two lines cut it
 }
 let stopNotice = null;  // The Stop button's answer, shown for a few seconds over the test status
 $('tests-stop').onclick = async () => {
@@ -79,14 +80,17 @@ $('tests-stop').onclick = async () => {
     notice(`No answer from the robot: ${problem.message}`, 'refused');
   }
 };
-function showTests(state) {
+function showTests(state, model) {
   const test = state.motor_test;
   setProperty($('tests-open'), 'hidden', !test); setProperty($('tests-stop'), 'hidden', !test);
   if (!test) { setText($('tests-travel'), ''); showTestStatus('Not available in this run'); return; }
   setText($('tests-travel'), `waist ${signed(test.waist_travel)}`);
+  // Not "Ready" while a board does not answer: the bot refuses that board's tests, so say why in its words.
+  const boards = ['servo_board', 'motor_board'].map(id => boardDown(model, id)).filter(Boolean);
   if (stopNotice && performance.now() < stopNotice.until && !test.running) showTestStatus(stopNotice.text, stopNotice.kind);
   else if (!test.enabled) showTestStatus('Turned off in the launch configuration');
   else if (test.running) showTestStatus(`Running: ${test.running.description}`);
+  else if (boards.length) showTestStatus(boards.map(part => part.message || `${part.name}: ${part.word}`).join(' · '), 'refused');
   else if (test.last) {
     const outcome = test.last.outcome;
     showTestStatus(`${outcome[0].toUpperCase()}${outcome.slice(1)}: ${test.last.description}`, outcome === 'done' ? 'done' : 'refused');
@@ -282,7 +286,7 @@ clock.add(() => {
   tiles.showTargetWithoutVideo(state);
   health.update(healthOf(state, latestHealth));
   explainParts(health.model, state);
-  showMode(state); showTarget(state); showFace(state); showTests(state);
+  showMode(state); showTarget(state); showFace(state); showTests(state, health.model);
   motorTest.update(state, health.model);
   return false;
 });
