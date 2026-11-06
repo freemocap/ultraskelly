@@ -45,14 +45,14 @@ class WaistDriveParams(NodeParams):
     start_angle: float = Field(default=15.0, ge=0.0, le=90.0, description="Target bearing from the body (degrees) that starts a move")
     stop_angle: float = Field(default=5.0, ge=0.0, le=90.0, description="A move stops once the target bearing is this small")
     min_throttle: float = Field(default=0.5, ge=0.0, le=1.0, description="Running drive with the target at start_angle")
-    max_throttle: float = Field(default=0.7, ge=0.0, le=1.0, description="Largest running drive")
+    max_throttle: float = Field(default=0.6, ge=0.0, le=1.0, description="Largest running drive (gentler since 2026-11-06)")
     gain: float = Field(default=0.008, gt=0.0, le=0.05, description="Extra running drive per degree of bearing beyond start_angle")
     breakaway_throttle: float = Field(
-        default=0.8, ge=0.0, le=1.0, description="Most the drive rises to while the bearing shows the waist is not moving",
+        default=0.7, ge=0.0, le=1.0, description="Most the drive rises to while the bearing shows the waist is not moving",
     )
     start_throttle: float = Field(default=0.15, gt=0.0, le=1.0, description="A move begins here, well below where the waist breaks loose")
     release_throttle: float = Field(default=0.2, ge=0.0, le=1.0, description="A stopping move releases the motor at this drive")
-    ramp_up: float = Field(default=1.5, gt=0.0, description="Largest drive increase per second")
+    ramp_up: float = Field(default=1.0, gt=0.0, description="Largest drive increase per second")
     ramp_down: float = Field(default=2.0, gt=0.0, description="Largest drive decrease per second")
     jerk: float = Field(default=10.0, gt=0.0, description="Largest change of the ramp rate per second squared: the S-curves' corners")
     coast_duration: float = Field(

@@ -25,6 +25,8 @@ PLANTS = [
     {"pan_ratio": 0.20}, {"pan_ratio": 0.36}, {"tilt_ratio": 0.07}, {"tilt_ratio": 0.14},
     {"waist_speed": 17.0}, {"waist_speed": 32.0}, {"head_backlash": 4.0},
     {"pan_ratio": 0.20, "waist_speed": 17.0}, {"pan_ratio": 0.30, "waist_speed": 32.0},
+    # The robot took about 0.15 s from a servo command to the camera seeing it (2026-11-06).
+    {"camera_latency": 0.10, "servo_lag": 0.10}, {"camera_latency": 0.055, "servo_lag": 0.12},
 ]
 
 

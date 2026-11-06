@@ -594,6 +594,10 @@ more than 1.5 degrees away. While the waist turns, the head counter-rotates agai
 waist's estimated turn (27 deg/s at full drive) at once. The waist now follows the person's
 bearing from the body rather than the pan servo, waits until the head has held still for
 0.3 s unless the person is beyond 40 degrees, and keeps its 15 and 5 degree start and stop.
+It also drives more gently, as the interim tuning on main had it that afternoon: at most
+0.6 running and 0.7 to break loose (the hard limit stays 0.8), rising at most 1.0 per
+second. That tuning's 3 s limit on a move is not kept: it stopped the waist mid-chase
+when someone walked off, so the 6 s limit stays.
 The pose node follows the credible person (half the best score or more) nearest the image
 centre, so two people with swapping scores no longer pull the head between them.
 
@@ -601,7 +605,8 @@ centre, so two people with swapping scores no longer pull the head between them.
 (overshoot at most 0.8 degrees, one waist move where one is needed), and the suite checks
 every scenario at the edges of camera delay 40-100 ms, servo lag 20-80 ms, field of view
 64-74 degrees (their eight corners), pan ratio 0.20-0.36, tilt ratio 0.07-0.14, waist speed
-17-32 deg/s and 4 servo degrees of slack. Outside that it degrades: a pan ratio of 0.18 or a waist much faster than
+17-32 deg/s, 4 servo degrees of slack, and 0.18-0.2 s from a servo command to the camera
+seeing it (the robot took about 0.15 s). Outside that it degrades: a pan ratio of 0.18 or a waist much faster than
 assumed overshoots by 2-4 degrees while the waist turns, and 8 degrees of slack by 2.4. The
 11-06 picture also shows the waist moving the picture 105 px at -0.7 drive for 0.5 s but 47 px
 at +0.7, and pan 11 px one way and 35 px the other: either slack in the linkage or a

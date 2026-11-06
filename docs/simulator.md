@@ -135,10 +135,10 @@ more than 15 degrees, and the head has held still for 0.3 s (or the person is be
 40 degrees), the waist turns toward them in one continuous move while the head
 counter-rotates; the move continues until the bearing is within 5 degrees; a stopping
 move never resumes, so the waist rests between the two angles instead of hunting. A move starts at 0.15 drive and follows
-S-curves (rate up to 1.5 per second rising and 2 falling, its change limited to 10
-per second squared) toward a running drive of 0.5 at 15 degrees, up to 0.7. While
+S-curves (rate up to 1.0 per second rising and 2 falling, its change limited to 10
+per second squared) toward a running drive of 0.5 at 15 degrees, up to 0.6. While
 the bearing shows no progress (2 degrees within 0.5 s at the running drive), the drive
-rises 0.3 per second toward 0.8 to break the waist loose, and eases off as soon as
+rises 0.3 per second toward 0.7 to break the waist loose, and eases off as soon as
 the bearing shrinks again. A stopping move ramps down, releases the motor to coast at 0.2,
 and brakes it 0.3 s later. Reversing passes through that stop. A move lasting 6 s
 ramps down and rests 2 s. Target loss ramps the waist to a stop. On the robot the
@@ -167,7 +167,8 @@ uv run --locked python -m pytest -q tests/test_scenarios.py
 
 The tests run every scenario on the plant above and on its variations within what was
 measured or assumed: camera delay 40-100 ms, servo lag 20-80 ms, field of view 64-74°, pan
-ratio 0.20-0.36, tilt ratio 0.07-0.14, waist 17-32°/s, and 4 servo degrees of slack. A
+ratio 0.20-0.36, tilt ratio 0.07-0.14, waist 17-32°/s, 4 servo degrees of slack, and up
+to 0.2 s from a servo command to the camera seeing it (the robot took about 0.15 s). A
 reversed pan servo must be caught as a runaway. `scenarios.run(scenario, prepare)` returns
 the trace and the verdict, so a tuning change can be checked the same way; `prepare`
 receives the `Simulation` before the run to change controller parameters.

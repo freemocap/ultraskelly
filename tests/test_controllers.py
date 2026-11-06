@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationMessage, TargetLocationTopic
 from ultraskelly.replay import create_controllers, replay
 
@@ -123,5 +124,7 @@ def test_the_robot_launches_with_the_calmer_tuning():
     from ultraskelly.__main__bot import launch_config
 
     head = launch_config().orientation
-    assert head.head_gain <= 0.012 and head.centering_tolerance >= 20 and head.follow
-    assert head.waist.start_angle >= 45 and head.waist.max_throttle <= 0.6
+    assert head.follow
+    assert head.model_dump() == OrientationNodeParams().model_dump()  # The defaults the closed-loop scenarios check
+    assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
+    assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7
