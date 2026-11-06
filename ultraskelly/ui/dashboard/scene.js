@@ -1,6 +1,7 @@
 // The dashboard's 3D scene, in metres: the simulator's schematic skeleton driven by the live motor
 // commands, with the ZED's depth on its head (depth3d.js). Motor values are the commands sent to the
-// boards, not measured positions; the waist has no angle sensor, so its drive shows as an arrow.
+// boards, not measured positions; the waist has no angle sensor, so its drive shows as an arrow. The
+// head's pan, tilt and roll follow headpose.js's convention.
 // The scene draws in the page's frame (frameclock.js), only when something in it changed, so the Pi's GPU
 // idles between updates.
 import * as THREE from 'three';
@@ -8,6 +9,7 @@ import { OrbitControls } from '/vendor/OrbitControls.js';
 import { buildSkeleton } from '/skeleton.js';
 import { createDepthLayer } from '/depth3d.js';
 import { createGazeLayer } from '/gaze.js';
+import { headAngles } from '/headpose.js';
 
 const deg = THREE.MathUtils.degToRad;
 const JAW_OPEN_DEGREES = 28;   // Same jaw travel as the simulator's model
@@ -171,11 +173,14 @@ export function createScene(viewport, clock) {
   function update(state) {
     const command = name => state.motors?.commands?.[name]?.value ?? null;
     const pan = command('pan'), tilt = command('tilt'), waist = command('waist'), mouth = command('mouth');
-    const pose = `${pan} ${tilt} ${waist} ${mouth}`;
+    const roll = command('roll') ?? state.servo_state?.roll ?? null;  // Held level (90) while no controller turns it
+    const pose = `${pan} ${tilt} ${roll} ${waist} ${mouth}`;
     if (pose === posed) return;
     posed = pose;
-    if (pan != null) skeleton.pan.rotation.y = deg(pan - 90);
-    if (tilt != null) skeleton.tilt.rotation.x = deg(tilt - 90);
+    const head = headAngles({pan, tilt, roll});  // The depth on the head turns with all three
+    if (head.yaw != null) skeleton.pan.rotation.y = head.yaw;
+    if (head.pitch != null) skeleton.tilt.rotation.x = head.pitch;
+    if (head.roll != null) skeleton.tilt.rotation.z = head.roll;
     const goal = mouth != null && mouth < 0 ? JAW_OPEN_DEGREES : 0;  // Negative jaw drive opens it
     if (goal !== jawGoal) { if (jawShown === jawGoal) jawAt = performance.now(); jawGoal = goal; }
     waistArrow.visible = waist != null && Math.abs(waist) > .01;

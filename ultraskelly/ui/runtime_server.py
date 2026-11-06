@@ -87,6 +87,7 @@ ASSETS: dict[str, tuple[Path, str]] = {
     "/frameclock.js": (DASHBOARD / "frameclock.js", "text/javascript"),
     "/faces.js": (DASHBOARD / "faces.js", "text/javascript"),
     "/health.js": (DASHBOARD / "health.js", "text/javascript"),
+    "/headpose.js": (DASHBOARD / "headpose.js", "text/javascript"),
     "/motor-test.js": (DASHBOARD / "motor-test.js", "text/javascript"),
     "/style.css": (SHARED / "style.css", "text/css"),
     "/skeleton.js": (SHARED / "skeleton.js", "text/javascript"),

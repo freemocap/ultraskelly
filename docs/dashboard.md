@@ -142,11 +142,22 @@ is busy, only the newest frame waits.
 - **In 3D:** the scene is in metres, with the schematic skeleton drawn at the robot's estimated
   eye height of 1.88 m (skellycad's UltraSkelly mock-up). The vertex shaders unproject the
   16-bit depth with the message's intrinsics and place it on the head through
-  `camera_to_head`, whose head frame starts midway between the eye sockets. The depth turns
-  with the commanded pan and tilt; the waist angle is not measured, so where it points in the
-  room is an estimate. **Cloud** shows every depth pixel and **Mesh** joins every second one,
-  dropping triangles at unknown pixels and at depth jumps over 6%. The ZED's view cone reaches
-  1.5 m. Depth that stops arriving disappears after 3 s.
+  `camera_to_head`, whose head frame starts midway between the eye sockets. Depth runs out of
+  the face, never up: the ZED's lens axis is the head frame's forward axis, and its image down
+  is the head's down. The depth turns with the commanded pan, tilt and roll; the waist angle is
+  not measured, so where it points in the room is an estimate. **Cloud** shows every depth
+  pixel and **Mesh** joins every second one, dropping triangles at unknown pixels and at depth
+  jumps over 6%. The ZED's view cone reaches 1.5 m. Depth that stops arriving disappears after 3 s.
+- **Head angles** (`headpose.js`, tested in `tests/test_dashboard_head_pose.py`): servo degrees,
+  90 level and straight ahead, one servo degree drawn as one degree of the head. Pan above 90
+  turns the head to its own left, tilt above 90 nods it down: the simulator's convention, the
+  one the head controller converges with. Roll above 90 tips it toward its left shoulder; the
+  bot holds roll at 90. The real servos' directions and their linkage to the skull are not
+  yet checked, so the drawn head is the commands' picture. A command at the end of its range
+  says so under the scene's title, such as "Tilt commanded to its 180° limit: drawn nodded
+  fully down": a tracking loop that runs away pins the skull into the floor, and the depth
+  lies flat in front of it. The ZED's IMU cannot pose the head yet: its axes have no measured
+  place in the head frame (docs/stream.md, "imu").
 
 ## Gaze
 
