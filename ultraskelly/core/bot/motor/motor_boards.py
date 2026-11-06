@@ -1,6 +1,7 @@
 """The head and jaw controllers on whichever motor boards answer.
 
-The servo board (PCA9685, I2C 0x40) moves the head's pan and tilt servos; the Motor HAT
+The servo board (PCA9685, I2C 0x40) moves the head's pan and tilt servos and holds its roll
+servo level; the Motor HAT
 (0x60) drives the waist and the jaw. Each board is opened on its own, so a missing one
 takes away only its actuators: with the Motor HAT alone the head stays still, with the
 servo board alone the waist and jaw do. A missing board's actuators are stand-ins that
@@ -54,7 +55,7 @@ def build_motor_nodes(
     """Both controllers: a board's actuators go through the limit-and-record wrappers to it, or to
     recording stand-ins when it is None. The head is commanded to its starting angles, and the
     jaw's opt-in startup test runs only on a real Motor HAT, as in the hardware factories."""
-    names = {orientation_params.pan_channel: "pan", orientation_params.tilt_channel: "tilt"}
+    names = orientation_params.servo_names
     if servo_kit is not None:
         servos = RecordingServoKit(kit=servo_kit, recorder=recorder, names=names, limits=limits)
     else:
@@ -79,8 +80,7 @@ def build_motor_nodes(
         waist_motor=waist,
         target_subscription=pubsub.get_subscription(TargetLocationTopic),
     )
-    servos.servo[orientation_params.pan_channel].angle = orientation.pan_angle
-    servos.servo[orientation_params.tilt_channel].angle = orientation.tilt_angle
+    orientation.command_start_angles()
     mouth = MouthNode(
         pubsub=pubsub,
         params=mouth_params,

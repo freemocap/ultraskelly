@@ -63,7 +63,7 @@ def test_both_motor_factories_set_the_same_board_frequency_and_the_waist_brakes_
     assert isinstance(orientation.waist_motor, BridgeMotor) and isinstance(mouth.mouth_motor, BridgeMotor)
     assert orientation.waist_motor.decay_mode == SLOW_DECAY
     assert mouth.mouth_motor.decay_mode == FAST_DECAY  # The jaw runs at full drive or none: no PWM to shape
-    assert orientation.servo_kit.servo[11].angle == orientation.servo_kit.servo[3].angle == 90.0
+    assert [orientation.servo_kit.servo[channel].angle for channel in orientation.params.servo_names] == [90.0] * 3
     mouth.mouth_motor.throttle = 0.0  # Motor 2: channels 11 and 12, braked in one transfer
     assert boards[1]._pca.i2c_device.transfers == [bytes([0x06 + 4 * 11]) + struct.pack("<HHHH", 0x1000, 0, 0x1000, 0)]
     bus.close()

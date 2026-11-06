@@ -27,7 +27,7 @@ PMIC = """ 3V7_WL_SW_A current(0)=0.05855580A
    VDD_CORE_V volt(15)=0.87570120V
      EXT5V_V volt(24)=5.11344000V
 """
-PAN, TILT = 11, 3
+PAN, TILT, ROLL = 3, 11, 7  # OrientationNodeParams' channels
 HALF_MS = 307  # 12-bit OFF count of a 1.5 ms pulse at 50 Hz: 90 degrees
 
 
@@ -56,7 +56,7 @@ class FakeBus:
 def servo_board(*, mode1=0x20, prescale=121, pulses=None):
     """A PCA9685's registers: MODE1, PRESCALE, and each channel's OFF count (ON at 0)."""
     registers = {0x00: mode1, 0xFE: prescale}
-    for channel, off in (pulses or {PAN: HALF_MS, TILT: HALF_MS}).items():
+    for channel, off in (pulses or {PAN: HALF_MS, TILT: HALF_MS, ROLL: HALF_MS}).items():
         base = 0x06 + 4 * channel
         registers.update({base: 0, base + 1: 0, base + 2: off & 0xFF, base + 3: off >> 8})
     return registers

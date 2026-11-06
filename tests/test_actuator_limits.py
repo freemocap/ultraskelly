@@ -39,8 +39,8 @@ class BoardKit:
 
 def test_simulated_commands_are_clamped_to_the_limits():
     recorder, orientation, mouth, bus = build()
-    orientation.servo_kit.servo[11].angle = 200.0
-    orientation.servo_kit.servo[3].angle = -5.0
+    orientation.servo_kit.servo[orientation.params.pan_channel].angle = 200.0
+    orientation.servo_kit.servo[orientation.params.tilt_channel].angle = -5.0
     orientation.waist_motor.throttle = 0.9
     mouth.mouth_motor.throttle = -1.0
     bus.close()

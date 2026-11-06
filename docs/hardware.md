@@ -24,7 +24,7 @@ Observed through the re-imaged Pi and the owner's description, not by inspecting
 | Camera | Raspberry Pi AI Camera / Sony IMX500 family (original build; not fitted as of 2026-11-02) | `PoseDetectorNode` constructs IMX500 and Picamera2. Exact module branding and cable routing are unverified. |
 | Servo controller | 16-channel PCA9685 board, possibly Adafruit Servo HAT, bonnet, or breakout | `ServoKit(channels=16)` uses default address `0x40` and 50 Hz. Library supports multiple physical boards; source cannot identify the SKU. |
 | DC driver | Likely Adafruit DC & Stepper Motor HAT or compatible MotorKit board | Both active motor factories select `0x60`, 1600 Hz. Scratch code explicitly calls it a DC+Stepper HAT. HAT versus bonnet and revision remain unverified. |
-| Head actuators | Two positional hobby servos | `servo[11].angle` controls pan; `servo[3].angle` controls tilt. Model, torque and rated supply voltage are absent. |
+| Head actuators | Three positional hobby servos | `servo[3].angle` controls pan, `servo[11].angle` tilt, `servo[7].angle` roll (held level at 90). Found 2026-11-06 by wiggling each channel with the user watching. Model, torque and rated supply voltage are absent. |
 | Waist actuator | DC rotary motor, plausibly geared and encoder-equipped | Active `motor1.throttle`; historical encoder experiments use the same output. Gearbox and encoder identity are unknown. |
 | Jaw actuator | Two-terminal load driven as a DC motor, mechanically spring-return | Active `motor2.throttle`; your description establishes powered-open and spring-closed behavior. Exact motor/solenoid mechanism is not established by the API. |
 | Power | Pi supply plus actuator power rail(s) | Required functional paths, not a known inventory. The number of adapters, converters, jumpers, voltage and current ratings cannot be recovered from software. |
@@ -41,8 +41,9 @@ Channel numbers below are board channel labels, not Raspberry Pi GPIO numbers. S
 | Pi GPIO2 / physical pin 3 | Servo board SDA and motor board SDA | Shared I²C data net. A stacked HAT carries this through its header rather than needing an extra jumper. |
 | Pi GPIO3 / physical pin 5 | Servo board SCL and motor board SCL | Shared I²C clock net. Both boards coexist at different addresses. |
 | Pi ground, e.g. physical pin 6 | Both driver logic grounds | Common signal reference. Stacked headers can provide it. Exact return harness is not documented. |
-| Servo board CH11 | Head pan servo | Signal, servo V+, ground. Match board silkscreen and servo connector pinout; do not infer physical row order from the diagram. |
-| Servo board CH3 | Head tilt servo | Signal, servo V+, ground. Same connector checks as pan. |
+| Servo board CH3 | Head pan servo | Signal, servo V+, ground. Match board silkscreen and servo connector pinout; do not infer physical row order from the diagram. |
+| Servo board CH11 | Head tilt servo | Signal, servo V+, ground. Same connector checks as pan. |
+| Servo board CH7 | Head roll servo | Signal, servo V+, ground. Held level; no controller turns it yet. |
 | Motor driver M1 terminal pair | Waist motor's two motor leads | H-bridge outputs; neither lead is a permanent ground. Encoder leads, if present, are separate. Physical polarity is unrecorded. |
 | Motor driver M2 terminal pair | Jaw actuator's two drive leads | Negative throttle is the software opening direction; zero releases power. Wire colors and terminal polarity must be identified on the mechanism. |
 | Pi supply | Pi USB-C power input | Expected Pi 5 supply path; actual adapter unknown. |
@@ -62,7 +63,7 @@ The diagram's colored lines identify signal functions, not observed wire insulat
 
 These are historical comments, not confirmation of current wiring. Encoder supply, return, output type and logic level are absent. Do not apply an unverified encoder output to Pi GPIO; its signal must be compatible with 3.3 V logic. The active OrientationNode does not consume encoder data. The simulator's waist angle is an estimate, not an encoder measurement.
 
-Old tracking scripts disagree on servo channels, and some include roll. The active launcher constructs OrientationNode and MouthNode, whose current defaults are pan 11, tilt 3, waist M1, jaw M2. There is no active roll actuator. The Hailo-8 is used by the default `HAILO_POSE` launch path; the ESP32 experiment is used by no launch path. Both are omitted from the primary diagram rather than assumed to be physically absent.
+Old tracking scripts disagree on servo channels, and some include roll. The active launcher constructs OrientationNode and MouthNode, whose current defaults are pan 3, tilt 11, roll 7, waist M1, jaw M2. Roll is held level at 90; no controller turns it. The Hailo-8 is used by the default `HAILO_POSE` launch path; the ESP32 experiment is used by no launch path. Both are omitted from the primary diagram rather than assumed to be physically absent.
 
 ## Reassembly checks supported by the evidence
 

@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 class HeadNodeParams(NodeParams):
     """Parameters for HeadNode."""
 
-    pan_channel: int = Field(default=11, ge=0, le=15)
-    tilt_channel: int = Field(default=3, ge=0, le=15)
+    pan_channel: int = Field(default=3, ge=0, le=15)  # Found 2026-11-06; see OrientationNodeParams
+    tilt_channel: int = Field(default=11, ge=0, le=15)
     roll_channel: int = Field(default=7, ge=0, le=15)
     target_x: int = Field(default=320, ge=0)
     target_y: int = Field(default=240, ge=0)

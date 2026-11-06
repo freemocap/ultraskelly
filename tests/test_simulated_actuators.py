@@ -150,6 +150,7 @@ def test_record_hardware_commands_wraps_both_controllers():
         assert {name: command.value for name, command in recorder.latest.items()} == {
             "pan": 90.0,
             "tilt": 90.0,
+            "roll": 90.0,
             "mouth": 0.0,
         }
 
@@ -157,8 +158,8 @@ def test_record_hardware_commands_wraps_both_controllers():
         await head.step()
         await mouth.step()
 
-        assert board_kit.servo[11].written[-1] == recorder.latest["pan"].value == 106
-        assert board_kit.servo[3].written[-1] == recorder.latest["tilt"].value == 78
+        assert board_kit.servo[head.params.pan_channel].written[-1] == recorder.latest["pan"].value == 106
+        assert board_kit.servo[head.params.tilt_channel].written[-1] == recorder.latest["tilt"].value == 78
         assert waist_board.written[-1] == recorder.latest["waist"].value
         assert mouth_board.written == [0]
         bus.close()

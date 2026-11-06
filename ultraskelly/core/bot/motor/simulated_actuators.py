@@ -15,7 +15,7 @@ from typing import Callable
 
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits, clamp
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
-from ultraskelly.core.bot.motor.orientation_node import OrientationNode, OrientationNodeParams
+from ultraskelly.core.bot.motor.orientation_node import ROLL_LEVEL, OrientationNode, OrientationNodeParams
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
@@ -305,7 +305,7 @@ def record_hardware_commands(
     orientation.servo_kit = RecordingServoKit(
         kit=orientation.servo_kit,
         recorder=recorder,
-        names={params.pan_channel: "pan", params.tilt_channel: "tilt"},
+        names=params.servo_names,
         limits=limits,
     )
     orientation.waist_motor = RecordingMotor(
@@ -316,6 +316,7 @@ def record_hardware_commands(
     )
     recorder.record("pan", orientation.pan_angle)
     recorder.record("tilt", orientation.tilt_angle)
+    recorder.record("roll", ROLL_LEVEL)
     recorder.record("mouth", 0.0)
 
 
@@ -335,7 +336,7 @@ def create_simulated_motor_nodes(
     limits = limits or ActuatorLimits()
     servo_kit = SimulatedServoKit(
         recorder=recorder,
-        names={orientation_params.pan_channel: "pan", orientation_params.tilt_channel: "tilt"},
+        names=orientation_params.servo_names,
         limits=limits,
     )
     orientation = OrientationNode(
@@ -345,8 +346,7 @@ def create_simulated_motor_nodes(
         waist_motor=SimulatedMotor(name="waist", recorder=recorder, max_throttle=limits.waist_max_throttle),
         target_subscription=pubsub.get_subscription(TargetLocationTopic),
     )
-    servo_kit.servo[orientation_params.pan_channel].angle = orientation.pan_angle
-    servo_kit.servo[orientation_params.tilt_channel].angle = orientation.tilt_angle
+    orientation.command_start_angles()
 
     mouth = MouthNode(
         pubsub=pubsub,

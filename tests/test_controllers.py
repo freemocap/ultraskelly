@@ -64,3 +64,14 @@ def test_target_replay_exercises_production_coroutines():
         assert states[-1]["target_x"] is None
         assert states[-1]["waist_throttle"] in (None, 0.0)  # Ramped down; coasting or braked
     asyncio.run(scenario())
+
+
+def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
+    # Found 2026-11-06 by wiggling one channel at a time with the user watching.
+    bus, node, _ = create_controllers()
+    assert node.params.servo_names == {3: "pan", 11: "tilt", 7: "roll"}
+    assert node.servo_kit.servo[7].angle == 90.0
+    for _ in range(100):
+        node._update_head_servos(target_x=640, target_y=0)
+    assert (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle) == (180, 0, 90.0)
+    bus.close()

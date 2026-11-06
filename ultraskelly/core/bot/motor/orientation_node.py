@@ -21,14 +21,18 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
 
+ROLL_LEVEL = 90.0  # Degrees; the roll servo holds here, as no controller turns it yet
+
 
 class OrientationNodeParams(NodeParams):
     """Parameters for OrientationNode."""
-    
-    # Servo channels
-    pan_channel: int = Field(default=11, ge=0, le=15)
-    tilt_channel: int = Field(default=3, ge=0, le=15)
-    
+
+    # Servo channels, found 2026-11-06 by wiggling one channel at a time with the user
+    # watching: channel 3 turns the head left-right, 11 nods it, 7 tilts it ear to shoulder.
+    pan_channel: int = Field(default=3, ge=0, le=15)
+    tilt_channel: int = Field(default=11, ge=0, le=15)
+    roll_channel: int = Field(default=7, ge=0, le=15, description="Held level at ROLL_LEVEL while the bot runs")
+
     # Waist motor channel
     waist_motor_channel: int = Field(default=1, ge=1, le=4)
     
@@ -49,6 +53,11 @@ class OrientationNodeParams(NodeParams):
         default_factory=WaistDriveParams, description="How the waist turns the torso toward the head's gaze"
     )
     
+    @property
+    def servo_names(self) -> dict[int, str]:
+        """The head's servo board channels by role, as the command recorder names them."""
+        return {self.pan_channel: "pan", self.tilt_channel: "tilt", self.roll_channel: "roll"}
+
     @property
     def x_offset(self) -> int:
         return int(self.offset_x_ratio * self.target_x * 2)
@@ -115,9 +124,8 @@ class OrientationNode(Node):
         
         # Initialize servo kit
         node.servo_kit = ServoKit(channels=16)
-        node.servo_kit.servo[params.pan_channel].angle = node.pan_angle
-        node.servo_kit.servo[params.tilt_channel].angle = node.tilt_angle
-        
+        node.command_start_angles()
+
         # Initialize motor kit
         node.motor_kit = MotorKit(address=0x60, pwm_frequency=pwm_frequency)
         
@@ -130,7 +138,13 @@ class OrientationNode(Node):
         node.target_subscription = pubsub.get_subscription(TargetLocationTopic)
         
         return node
-    
+
+    def command_start_angles(self) -> None:
+        """Send the head's servos their starting angles: pan and tilt as tracking holds them, roll level."""
+        self.servo_kit.servo[self.params.pan_channel].angle = self.pan_angle
+        self.servo_kit.servo[self.params.tilt_channel].angle = self.tilt_angle
+        self.servo_kit.servo[self.params.roll_channel].angle = ROLL_LEVEL
+
     def _update_head_servos(
         self,
         *,
@@ -174,7 +188,7 @@ class OrientationNode(Node):
             fresh = True
         if self.manual:
             await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
-                pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=90.0,
+                pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=ROLL_LEVEL,
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,
             ))
             return
@@ -198,7 +212,7 @@ class OrientationNode(Node):
         self.waist_mode = self.waist_drive.state
         # Publish explicit loss as well as valid lock state so the jaw can release.
         await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
-            pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=90.0,
+            pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=ROLL_LEVEL,
             is_locked_x=locked_x, is_locked_y=locked_y, is_locked_roll=False,
         ))
 
@@ -231,5 +245,6 @@ class OrientationNode(Node):
             self.waist_motor.throttle = 0.0
             self.servo_kit.servo[self.params.pan_channel].angle = 90.0
             self.servo_kit.servo[self.params.tilt_channel].angle = 90.0
+            self.servo_kit.servo[self.params.roll_channel].angle = ROLL_LEVEL
             await asyncio.sleep(0.5)
             logger.info("OrientationNode stopped")

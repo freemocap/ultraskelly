@@ -57,7 +57,11 @@ separate processes: these nodes share one asyncio event loop.
 
 ### Hardware facts encoded in source
 
-- Pan servo channel 11, tilt channel 3, software range 0–180 degrees, startup 90.
+- Pan servo channel 3, tilt channel 11, roll channel 7 held at 90, software range 0–180
+  degrees, startup 90. Until 2026-11-06 the code had pan 11 and tilt 3 and left roll
+  unpowered. That day each channel was wiggled alone (others held at 90, ±10° then ±30°)
+  with the user watching: channel 3 turned the head left-right, 11 nodded it, 7 tilted it
+  ear to shoulder, and 0 had no servo. Signs (which way positive turns) are not yet checked.
 - Waist MotorKit at I2C address `0x60`, channel 1, PWM 1600 Hz, magnitude roughly
   0.7–0.8; mouth independently constructs another MotorKit at the same address,
   channel 2. Shared board ownership needs review.

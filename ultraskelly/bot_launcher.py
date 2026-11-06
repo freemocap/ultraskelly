@@ -850,7 +850,7 @@ class BotLauncher(BaseModel):
     async def _diagnose(self) -> None:
         driven = self.driven.get("servo_board", False) and self.health.ok("servo_board")  # The real board, in use
         params = self.config.orientation
-        head = {"pan": params.pan_channel, "tilt": params.tilt_channel} if driven else {}
+        head = {role: channel for channel, role in params.servo_names.items()} if driven else {}
         latest = self.command_recorder.latest if self.command_recorder is not None else {}
         commanded = {name: latest[name].value for name in head if name in latest}
         result = await asyncio.to_thread(self.diagnostics.collect, head_channels=head, commanded=commanded)
