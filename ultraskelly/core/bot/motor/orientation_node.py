@@ -32,6 +32,9 @@ class OrientationNodeParams(NodeParams):
     pan_channel: int = Field(default=3, ge=0, le=15)
     tilt_channel: int = Field(default=11, ge=0, le=15)
     roll_channel: int = Field(default=7, ge=0, le=15, description="Held level at ROLL_LEVEL while the bot runs")
+    follow: bool = Field(
+        default=True, description="Turn the head and waist toward the target; off, they move only for motor tests",
+    )
 
     # Waist motor channel
     waist_motor_channel: int = Field(default=1, ge=1, le=4)
@@ -171,7 +174,7 @@ class OrientationNode(Node):
             self.latest_target = await self.target_subscription.get()
             self.target_received_at = self.clock()
             fresh = True
-        if self.manual:
+        if self.manual or not self.params.follow:  # A motor test drives, or nothing follows the target
             await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
                 pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=ROLL_LEVEL,
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,

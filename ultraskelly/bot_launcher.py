@@ -282,7 +282,10 @@ class BotLauncher(BaseModel):
         self.nodes.extend([orientation, mouth])
         self.motor_tester = MotorTester(
             orientation=orientation, mouth=mouth, limits=self.config.motor_tests, unavailable=self._unavailable,
+            simulated=self.config.simulate_motors,
         )
+        if not self.config.orientation.follow:
+            logger.info("Not following the target (--no-follow): the head and waist move only for motor tests")
         self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
         orientation.motor_watchdog = self.motor_watchdog
         if self.config.show_window:

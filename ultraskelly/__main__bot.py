@@ -8,6 +8,8 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 def launch_config(
     *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
-    port: int = 8080, oak_models: bool = True,
+    port: int = 8080, oak_models: bool = True, follow: bool = True,
 ) -> LaunchConfig:
     """The robot's declarative launch configuration.
 
@@ -36,6 +38,7 @@ def launch_config(
         depth_previews: With depth, also stream it as colour images, besides the depth_frame messages.
         port: The dashboard's port.
         oak_models: Run the face and hand models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).
+        follow: Turn the head and waist toward the target; without, they move only for motor tests.
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
@@ -86,18 +89,32 @@ def launch_config(
     config.runtime_server.depth_previews = depth_previews
     config.tracking = not zed_only
     config.runtime_server.port = port
+    # Calmer interim tuning, 2026-11-06 (the user: "turn down the aggressiveness"), until the head and waist
+    # are retuned for the measured gearing: about 0.24 degrees of view per pan servo degree and 0.1 per tilt
+    # degree, with ~0.15 s before the camera sees a move. Closing the loop on the robot
+    # (scripts/check_tracking_loop.py) overshot 84 px at gain 0.05 and settled without overshoot at 0.012.
+    config.orientation = OrientationNodeParams(
+        head_gain=0.01,
+        centering_tolerance=20,  # Pixels: closer than this the head holds, so tilt does not creep to its end
+        follow=follow,
+        waist=WaistDriveParams(  # Turn the body only once the head has turned far, and more gently
+            start_angle=45.0, stop_angle=15.0, max_throttle=0.6, breakaway_throttle=0.7, ramp_up=1.0,
+            max_move_duration=3.0,
+        ),
+    )
     return config
 
 
 async def main(
     *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
-    port: int = 8080, oak_models: bool = True,
+    port: int = 8080, oak_models: bool = True, follow: bool = True,
 ) -> None:
     """Launch with the configuration above; the options are `launch_config`'s."""
     launcher = BotLauncher.from_config(launch_config(
         simulate_motors=simulate_motors, show_window=show_window, record=record, microphone=microphone,
         zed=zed, zed_only=zed_only, depth=depth, depth_previews=depth_previews, port=port, oak_models=oak_models,
+        follow=follow,
     ))
     await launcher.run()
 
