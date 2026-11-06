@@ -60,14 +60,20 @@ def main() -> None:
         "--no-oak-models", action="store_true",
         help="With --hardware: run no models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).",
     )
+    parser.add_argument(
+        "--no-follow", action="store_true",
+        help="With --hardware: the head and waist hold still and move only for dashboard motor tests.",
+    )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    if (args.simulate_motors or args.window or args.record or args.zed or args.no_oak_models) and not args.hardware:
-        parser.error("--simulate-motors, --window, --record, --zed and --no-oak-models are used together with --hardware")
+    hardware_options = (args.simulate_motors, args.window, args.record, args.zed, args.no_oak_models, args.no_follow)
+    if any(hardware_options) and not args.hardware:
+        parser.error("--simulate-motors, --window, --record, --zed, --no-oak-models and --no-follow are used together "
+                     "with --hardware")
     if args.window and args.no_window:
         parser.error("--window and --no-window contradict each other")
     if args.microphone and not args.record:
@@ -100,7 +106,7 @@ def main() -> None:
             simulate_motors=args.simulate_motors, show_window=args.window,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
-            port=args.port, oak_models=not args.no_oak_models,
+            port=args.port, oak_models=not args.no_oak_models, follow=not args.no_follow,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

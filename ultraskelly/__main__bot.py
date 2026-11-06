@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def launch_config(
     *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
-    port: int = 8080, oak_models: bool = True,
+    port: int = 8080, oak_models: bool = True, follow: bool = True,
 ) -> LaunchConfig:
     """The robot's declarative launch configuration.
 
@@ -36,6 +36,7 @@ def launch_config(
         depth_previews: With depth, also stream it as colour images, besides the depth_frame messages.
         port: The dashboard's port.
         oak_models: Run the face and hand models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).
+        follow: Turn the head and waist toward the target; without, they move only for motor tests.
     """
 
     # Example 1: Default pose tracking (nose), OAK camera + Hailo-8
@@ -86,18 +87,20 @@ def launch_config(
     config.runtime_server.depth_previews = depth_previews
     config.tracking = not zed_only
     config.runtime_server.port = port
+    config.orientation.follow = follow
     return config
 
 
 async def main(
     *, simulate_motors: bool = False, show_window: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
-    port: int = 8080, oak_models: bool = True,
+    port: int = 8080, oak_models: bool = True, follow: bool = True,
 ) -> None:
     """Launch with the configuration above; the options are `launch_config`'s."""
     launcher = BotLauncher.from_config(launch_config(
         simulate_motors=simulate_motors, show_window=show_window, record=record, microphone=microphone,
         zed=zed, zed_only=zed_only, depth=depth, depth_previews=depth_previews, port=port, oak_models=oak_models,
+        follow=follow,
     ))
     await launcher.run()
 

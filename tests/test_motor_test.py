@@ -115,3 +115,15 @@ def test_disabled_tests_are_refused():
     with pytest.raises(MotorTestRefused, match="turned off"):
         asyncio.run(tester.run(MotorTestRequest(actuator="pan", angle=90)))
     bus.close()
+
+
+def test_a_test_on_simulated_motors_says_nothing_moved():
+    # 2026-11-06: with --simulate-motors the dashboard said "done" and nothing on the robot moved.
+    async def scenario():
+        tester, recorder, bus = build()
+        tester.simulated = True
+        result = await tester.run(MotorTestRequest(actuator="pan", angle=100))
+        assert result["outcome"].startswith("simulated, nothing moved") and tester.state()["simulated"]
+        assert values(recorder, "pan")[-1] == 100  # Still recorded, as before
+        bus.close()
+    asyncio.run(scenario())

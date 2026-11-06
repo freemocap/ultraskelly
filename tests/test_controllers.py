@@ -75,3 +75,16 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
         node._update_head_servos(target_x=640, target_y=0)
     assert (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle) == (180, 0, 90.0)
     bus.close()
+
+
+def test_without_follow_the_head_and_waist_hold_still_for_a_target():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        node.params.follow = False
+        for _ in range(20):
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0))
+            await node.step()
+        assert (node.pan_angle, node.tilt_angle) == (90.0, 90.0)
+        assert node.waist_motor.throttle in (None, 0.0)
+        bus.close()
+    asyncio.run(scenario())

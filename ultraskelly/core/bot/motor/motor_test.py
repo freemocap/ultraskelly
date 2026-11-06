@@ -77,8 +77,10 @@ class MotorTester:
         limits: MotorTestLimits,
         clock: Callable[[], float] = time.monotonic,
         unavailable: Callable[[str], str | None] | None = None,
+        simulated: bool = False,
     ) -> None:
         self.orientation = orientation
+        self.simulated = simulated  # Motors simulated (--simulate-motors): a test records commands and moves nothing
         self.mouth = mouth
         self.limits = limits
         self.clock = clock
@@ -94,6 +96,7 @@ class MotorTester:
         """For the dashboard: whether tests are allowed, their limits, and what is running or ran last."""
         return {
             "enabled": self.limits.enabled,
+            "simulated": self.simulated,
             "limits": self.limits.model_dump(),
             "running": self.current,
             "last": self.last,
@@ -196,6 +199,8 @@ class MotorTester:
                 outcome = "stopped"
             self.orientation.waist_drive = WaistDrive(self.orientation.params.waist)  # No stale move resumes
             self.orientation.manual = self.mouth.manual = False
+            if self.simulated and outcome == "done":
+                outcome = "simulated, nothing moved (the bot runs with --simulate-motors)"
             self.last = {**self.current, "outcome": outcome, "sent": sent, "took": round(self.clock() - started, 3)}
             self.current = None
         logger.info(f"Motor test {self.last['description']}: {outcome}")
