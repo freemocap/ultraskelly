@@ -109,8 +109,12 @@ robot the picture moved about 0.15 s after a command) and no faster than `servo_
 on 2026-11-06: the camera turns `pan_ratio` (0.36) degrees per pan servo degree and nods
 `tilt_ratio` (0.1) per tilt servo degree, once the servo has crossed `pan_backlash` (6) or
 `tilt_backlash` (2) servo degrees of slack after a reversal. So the head reaches only about
-±30° of pan and ±9° of tilt. `pan_sign`/`tilt_sign` can turn either servo the wrong way, to
-test polarity. Waist velocity is
+±30° of pan and ±9° of tilt. The roll servo turns the whole picture's content anticlockwise by
+`roll_ratio` (0.3, not measured) degrees per servo degree. `pan_sign`/`tilt_sign`/`roll_sign`
+can turn any servo the wrong way, to test polarity. Each sample also reports every visible
+face as the OAK's face detector would: eyes, nose and mouth sized for the person's distance
+(eyes 63 mm apart), tilted in the picture by the person's own tilt (`Person.roll`) less the
+head's roll, with their own jitter (`landmark_noise_px`). Waist velocity is
 `-throttle * waist_speed` (default 30°/s at full throttle; round 1 measured 18-23°/s at
 0.75), with illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
 Optional friction (`waist_breakaway`, `waist_stall`; both 0 by default, and set only
@@ -127,7 +131,9 @@ frame (so a scale or gear-ratio error cannot overshoot), smooths that goal, turn
 40°/s of view with S-curves, keeps 5 servo degrees clear of the end stops, and moves only
 once its goal is more than 1.5° away. It counter-rotates against the waist's estimated
 turn at once, and commands each servo half its linkage's slack past the view in the way it
-is moving, so a reversal takes the play up at once instead of leaving the head still. Controllers retain lock across normal gaps between samples, but expire
+is moving, so a reversal takes the play up at once instead of leaving the head still. The
+roll (`motor/roll_level.py`) levels the followed face in the picture the same calm way, and
+eases back upright a second after the face is gone. Controllers retain lock across normal gaps between samples, but expire
 missing input after 350 ms. Explicit loss or leaving the square immediately removes jaw
 power. Negative drive holds the spring-loaded jaw open for as long as lock remains valid;
 zero drive allows spring return. Opening/closing state durations are estimates, not feedback.
@@ -161,7 +167,11 @@ who leaves while another appears. A run fails on overshoot (the camera more than
 the person), oscillation (the head's actual turn or nod reversing by 0.5° more often than
 the scenario allows), runaway (a servo command at its end stop, or losing a person who
 stays put), aim (more than 2.5° off at the end) or waist hunting (more moves than allowed,
-or turning back on a person who stands still).
+or turning back on a person who stands still). Five more put a person's tilted face in front
+of it (7° either way, tilting then straightening, leaving, and noisy and flickering), and fail
+if the roll turns the face more than 1.5° past level, leaves it more than 3° off, or does not
+stand the head upright once the person has gone; in every scenario the roll must not turn back
+and forth.
 
 ```sh
 uv run --locked python -m pytest -q tests/test_scenarios.py
@@ -170,8 +180,8 @@ uv run --locked python -m pytest -q tests/test_scenarios.py
 The tests run every scenario on the plant above and at the edges of what was measured or
 assumed: camera delay 40-100 ms with servo lag 40-100 ms and field of view 64-74° (their
 corners), servo lag up to 120 ms, pan ratio 0.28-0.42, tilt ratio 0.07-0.14, pan slack 3-8
-and tilt slack 0-4 servo degrees, and waist 17-37°/s. A reversed pan servo must be caught as
-a runaway. `scenarios.run(scenario, prepare)` returns
+and tilt slack 0-4 servo degrees, waist 17-37°/s, and roll ratio 0.2-0.45. A reversed pan
+servo must be caught as a runaway, and a reversed roll by the faces it leaves tilted. `scenarios.run(scenario, prepare)` returns
 the trace and the verdict, so a tuning change can be checked the same way; `prepare`
 receives the `Simulation` before the run to change controller parameters.
 

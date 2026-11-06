@@ -21,8 +21,8 @@ Move the target sliders to switch to manual input, adjust controller tuning, or
 pause and step by 10 ms. **Reset** clears simulated state and retains your settings.
 The skeleton shows simulated positions; the table also shows controller commands.
 The suite runs the same plant in closed-loop scenarios (people stepping in, walking
-across, swapping, flickering) that fail on overshoot, swinging, runaway or waist hunting
-before any motor runs: `uv run --locked python -m pytest -q tests/test_scenarios.py`.
+across, swapping, flickering, tilting their heads) that fail on overshoot, swinging, runaway,
+waist hunting or a face left tilted before any motor runs: `uv run --locked python -m pytest -q tests/test_scenarios.py`.
 See [the simulator guide](docs/simulator.md) for the model, code entry points, and
 development workflow. Windows is verified; Linux and macOS use the same portable
 Python/browser implementation but have not been tested in this session.

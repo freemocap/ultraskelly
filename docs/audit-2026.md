@@ -628,6 +628,30 @@ dashboard's motor test limits, and prints the ratio each way, the slack, and the
 each way next to what the controller assumes. None of this has run on the robot's motors yet;
 `scripts/check_tracking_loop.py` now drives the new head aim for the next check.
 
+**Levelling faces with the roll.** At the user's request (2026-11-06) the head's roll servo
+(channel 7) now turns the camera so the face it follows looks level in the picture, instead of
+holding at 90. `motor/roll_level.py` takes the followed person's face from the OAK's own face
+detector (the face whose box holds the pose's nose), measures the line from its right eye to
+its left, and works as the head aim does: the camera's roll when the frame was captured plus
+60% of the eye line's tilt becomes the goal, smoothed (15% of each estimate, less for faces
+whose eyes are under 30 px apart, as their angle is noisier), and the roll turns toward it at
+most 15 degrees of picture a second, only once the goal is 2 degrees away, and no more than 25
+servo degrees from upright. Faces the detector doubts (score under 0.6), faces under 16 px
+between the eyes (beyond about 1.9 m), eye lines steeper than 40 degrees and faces turned more
+than 40 degrees away are not used; after a second without a usable face it eases back upright.
+Motor tests and `--no-follow` leave it alone, the servo state reports the commanded roll, and
+`ActuatorLimits` now clamps roll to 60-120. The pan and tilt errors are turned back upright by
+the roll before the head aims, as a rolled camera turns the whole picture. In the simulator a
+face's eye line tilts by the person's tilt less the roll, eyes scale with distance and have
+their own jitter, and five scenarios check that a tilted face is levelled without being turned
+past level, that the head straightens again, and that it stands upright once the person has
+gone; every other scenario checks that the roll does not move. The roll servo's direction and
+ratio are not measured: the controller assumes 0.3 degrees of picture per servo degree, the
+tests pass from 0.2 to 0.45, and a reversed roll is caught. `scripts/check_motor_directions.py`
+now turns roll 12 degrees each way and measures the picture's turn from matched features
+(`cv2.estimateAffinePartial2D`); its verdict says whether the controller's direction is right.
+Until then the roll may turn the wrong way: within 25 servo degrees, and only toward a face.
+
 ## Recovering from lost connections (2026-11-02)
 
 A lost board, camera or detector now ends the bot the same way: it stops every node,
