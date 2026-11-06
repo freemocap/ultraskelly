@@ -37,8 +37,9 @@ See [hardware.md](hardware.md) for connection tables, evidence and unresolved po
   either slider switches to this mode.
 - **Sweep + periodic loss:** hide the target for three seconds in each eight-second
   cycle. **Target enabled** can suppress it in any scenario.
-- **Apply tuning:** change gains, jaw activation zone, sensor rate, and the plant speed
-  assumptions without editing code. Values are validated before application.
+- **Apply tuning:** change the head's top speed, the waist gain, the jaw activation zone,
+  the sensor rate and the plant speed assumptions without editing code. Values are
+  validated before application.
 - **Export JSON:** download the last 30 seconds of sampled output at 20 Hz, plus
   current settings. This is a telemetry snapshot, not a complete replay file:
   it does not record previous tuning changes or the full input event history.
@@ -46,8 +47,9 @@ See [hardware.md](hardware.md) for connection tables, evidence and unresolved po
   camera. The camera orientation is independent of robot control.
 
 The camera panel shows the most recent sensor sample, not a video image. Its
-dashed square activates the jaw; head tracking continues to the crosshair with a
-one-pixel tolerance. The face-mounted green frustum shows the camera field of view,
+dashed square activates the jaw; the head turns until the person is within its
+1.5-degree deadband of the crosshair. The skull is drawn at the head's actual turn
+through its geared linkage, not at the servo angles. The face-mounted green frustum shows the camera field of view,
 and its orange rectangle corresponds to the jaw zone. Six traces show pan and tilt
 commands/positions, waist and jaw angles, and both motor drives. The jaw drive
 includes a state-color strip (gray closed, orange opening, green open, purple
@@ -82,8 +84,9 @@ scenario -> simulated camera -> TargetLocationTopic -> OrientationNode.step()
 - `ultraskelly/simulator/static/`: plain HTML/CSS/JavaScript and vendored Three.js.
   There is no build system, remote telemetry, hosted service, or runtime CDN.
 
-The sensor publishes at 10, 20, 50, or 100 Hz. Each tick runs orientation, then
-mouth, then the plant. This ordering makes tests repeatable; it does not reproduce
+The sensor samples at 10, 20, 30 (the default, as the OAK runs), 50 or 100 Hz, and
+each sample reaches the controller `camera_latency` later carrying its capture time,
+as the Hailo pose node's targets do. Each tick runs orientation, then mouth, then the plant. This ordering makes tests repeatable; it does not reproduce
 every interleaving or timing fault of concurrent Pi coroutines. Wall-clock load can
 make the live simulator slower than realtime; it never changes the fixed timestep
 to catch up. Run and step faults stop the simulator, zero fake motor outputs, and
@@ -91,38 +94,52 @@ display the error. Reset is required to resume after a fault.
 
 ## Plant assumptions
 
-The head-mounted synthetic camera has a 640×480 image, 120° horizontal and 90°
-vertical field of view. A pinhole projection uses the same world target position,
-head transforms, and face-mounted camera origin as the viewer frustum. It does not render or infer a human pose.
+The head-mounted synthetic camera sees as the OAK-1 does: a 640×480 image with a
+69° horizontal field of view (`camera_hfov`), a pinhole with square pixels (8.1 px per
+degree near the middle). The projection uses the same world target position, head
+transforms, and face-mounted camera origin as the viewer frustum. It does not render or
+infer a human pose: each sample reports the person the pose node would follow
+(`choose_person`, shared with it), optionally with pixel noise (`noise_px`) and dropped
+detections (`dropout`, from a seeded random generator). Frames reach the controller
+`camera_latency` after capture (default 55 ms, measured 50-70 ms on the Pi).
 
-Servos follow commands at a configured maximum angular speed (default 180°/s).
-Waist velocity is `-throttle * waist_speed` (default 45°/s at full throttle), with
-illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
+Servos close on their commands with a first-order lag (`servo_lag`, default 40 ms, not
+measured) and no faster than `servo_speed` (default 180°/s). The head's linkage gears
+them down: the camera turns `pan_ratio` (0.24) degrees per pan servo degree and nods
+`tilt_ratio` (0.1) per tilt servo degree, as measured on the robot on 2026-11-06, so the
+head reaches only about ±20° of pan and ±9° of tilt. `head_backlash` adds servo degrees of
+slack before the linkage follows a reversal (0 by default), and `pan_sign`/`tilt_sign`
+can turn either servo the wrong way, to test polarity. Waist velocity is
+`-throttle * waist_speed` (default 30°/s at full throttle; round 1 measured 18-23°/s at
+0.75), with illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
 Optional friction (`waist_breakaway`, `waist_stall`; both 0 by default, and set only
 through the configure request, not the tuning form) makes a still waist wait for the
 breakaway drive and a turning one stop below the stall drive, with speed scaled
 between the stall drive and full drive. Negative mouth throttle opens the jaw toward 28° and
 zero allows spring return, limited to 90°/s. Geometry is a schematic armature with
-fixed arms and legs. These assumptions are intentionally simple and uncalibrated:
-no inertia, torque, backlash, stalls, collisions, power limits, or I2C delays.
+fixed arms and legs. These assumptions are intentionally simple: no inertia, torque,
+collisions, power limits, or I2C delays, and the head's tilt offset at rest is not modelled.
 
-Head commands update once per sensor sample, continuing to a one-pixel centering
-tolerance even inside the jaw activation square. Controllers retain lock across
-normal gaps between samples, but expire missing input after 350 ms. Explicit
-loss or leaving the square immediately removes jaw power. Negative drive holds
-the spring-loaded jaw open for as long as lock remains valid; zero drive allows
-spring return. Opening/closing state durations are estimates, not feedback.
+The head turns through `HeadAim` (`motor/head_aim.py`). It works out where the person
+is from where the camera pointed when the frame was captured, aims 65% of the way per
+frame (so a scale or gear-ratio error cannot overshoot), smooths that goal, turns at most
+40°/s of view with S-curves, keeps 5 servo degrees clear of the end stops, and moves only
+once its goal is more than 1.5° away. It counter-rotates against the waist's estimated
+turn at once. Controllers retain lock across normal gaps between samples, but expire
+missing input after 350 ms. Explicit loss or leaving the square immediately removes jaw
+power. Negative drive holds the spring-loaded jaw open for as long as lock remains valid;
+zero drive allows spring return. Opening/closing state durations are estimates, not feedback.
 The waist has one yaw axis and participates in the shared tracking controller
-through `WaistDrive` (`motor/waist_drive.py`). When the head's pan is more than
-15 degrees from neutral, the waist turns toward its gaze in one continuous move;
-camera feedback brings the head back toward neutral, and the move continues until
-the head is within 5 degrees; a stopping move never resumes, so the waist rests
-between the two angles instead of hunting. A move starts at 0.15 drive and follows
+through `WaistDrive` (`motor/waist_drive.py`). When the person's bearing from the body is
+more than 15 degrees, and the head has held still for 0.3 s (or the person is beyond
+40 degrees), the waist turns toward them in one continuous move while the head
+counter-rotates; the move continues until the bearing is within 5 degrees; a stopping
+move never resumes, so the waist rests between the two angles instead of hunting. A move starts at 0.15 drive and follows
 S-curves (rate up to 1.5 per second rising and 2 falling, its change limited to 10
 per second squared) toward a running drive of 0.5 at 15 degrees, up to 0.7. While
-the head shows no progress (2 degrees within 0.5 s at the running drive), the drive
+the bearing shows no progress (2 degrees within 0.5 s at the running drive), the drive
 rises 0.3 per second toward 0.8 to break the waist loose, and eases off as soon as
-the head comes back. A stopping move ramps down, releases the motor to coast at 0.2,
+the bearing shrinks again. A stopping move ramps down, releases the motor to coast at 0.2,
 and brakes it 0.3 s later. Reversing passes through that stop. A move lasting 6 s
 ramps down and rests 2 s. Target loss ramps the waist to a stop. On the robot the
 waist motor brakes between PWM pulses (slow decay). These levels follow published
@@ -131,11 +148,36 @@ The state display shows idle, turning, stopping or resting.
 The Pi launcher's 120-second restart workaround was removed on 2026-11-02;
 the simulator does not run that launcher.
 
+## Closed-loop scenarios
+
+`ultraskelly/simulator/scenarios.py` runs the production controllers through this plant
+with people placed in front of the robot, and judges each run before any motor turns:
+someone stepping in 20° left or right, 6° up or down, 27° off (beyond the head's reach, so
+the waist must turn), walking across, walking off out of reach, two people whose detector
+scores keep swapping, a noisy detector that drops a third of its detections, and a person
+who leaves while another appears. A run fails on overshoot (the camera more than 2° past
+the person), oscillation (the head's actual turn or nod reversing by 0.5° more often than
+the scenario allows), runaway (a servo command at its end stop, or losing a person who
+stays put), aim (more than 2.5° off at the end) or waist hunting (more moves than allowed,
+or turning back on a person who stands still).
+
+```sh
+uv run --locked python -m pytest -q tests/test_scenarios.py
+```
+
+The tests run every scenario on the plant above and on its variations within what was
+measured or assumed: camera delay 40-100 ms, servo lag 20-80 ms, field of view 64-74°, pan
+ratio 0.20-0.36, tilt ratio 0.07-0.14, waist 17-32°/s, and 4 servo degrees of slack. A
+reversed pan servo must be caught as a runaway. `scenarios.run(scenario, prepare)` returns
+the trace and the verdict, so a tuning change can be checked the same way; `prepare`
+receives the `Simulation` before the run to change controller parameters.
+
 ## Develop and verify
 
 1. Reproduce the behavior with a scenario and tuning values.
 2. Pause and step to inspect inputs, commands, and plant response.
-3. Add a regression test using `Simulation(Settings(...))` and fixed tick counts.
+3. Add a regression test using `Simulation(Settings(...))` and fixed tick counts, or a
+   closed-loop scenario when the behavior concerns tracking.
 4. Modify the shared controller step or the plant as appropriate.
 5. Run `uv run --locked --python 3.12 python -m pytest -q`.
 6. Restart the server after Python changes; reload the browser after HTML/JS/CSS
