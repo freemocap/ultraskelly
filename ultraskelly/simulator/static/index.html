@@ -21,12 +21,12 @@
       <label>World pitch <output id="pitch-value">10°</output><input id="pitch" type="range" min="-60" max="60" value="10"></label>
       <p class="hint">Moving either slider selects manual mode. Angles are relative to the stationary base.</p>
     </section>
-    <section title="Centers continuously on new samples. Jaw holds open inside its zone; stale targets expire after 350 ms."><h2>Controller & plant</h2><form id="tuning">
-      <div class="fields"><label>Head gain<input id="head_gain" type="number" min="0.001" max="1" step="0.001" value="0.05" required></label><label>Jaw zone · px<input id="head_deadzone" type="number" min="0" max="240" step="1" value="100" required></label></div>
-      <div class="fields"><label>Waist gain<input id="waist_gain" type="number" min="0.001" max="0.05" step="0.001" value="0.008" required></label><label>Sensor · Hz<select id="sensor_hz"><option>10</option><option>20</option><option>50</option><option>100</option></select></label></div>
-      <div class="fields"><label>Servo · °/s<input id="servo_speed" type="number" min="1" max="720" value="180" required></label><label>Waist · °/s<input id="waist_speed" type="number" min="0" max="180" value="45" required></label></div>
+    <section title="The head turns calmly toward where the person was when the frame was taken. Jaw holds open inside its zone; stale targets expire after 350 ms."><h2>Controller & plant</h2><form id="tuning">
+      <div class="fields"><label>Head · °/s<input id="head_speed" type="number" min="1" max="600" step="1" value="40" required></label><label>Jaw zone · px<input id="head_deadzone" type="number" min="0" max="240" step="1" value="100" required></label></div>
+      <div class="fields"><label>Waist gain<input id="waist_gain" type="number" min="0.001" max="0.05" step="0.001" value="0.008" required></label><label>Sensor · Hz<select id="sensor_hz"><option>10</option><option>20</option><option>30</option><option>50</option><option>100</option></select></label></div>
+      <div class="fields"><label>Servo · °/s<input id="servo_speed" type="number" min="1" max="720" value="180" required></label><label>Waist · °/s<input id="waist_speed" type="number" min="0" max="180" value="30" required></label></div>
       <button type="submit" class="wide">Apply tuning</button>
-    </form><p class="hint">Centers continuously on new samples. Jaw holds open inside its zone; stale targets expire after 350 ms.</p></section>
+    </form><p class="hint">The head turns calmly toward where the person was when the frame was taken. Jaw holds open inside its zone; stale targets expire after 350 ms.</p></section>
   </aside>
   <div class="center">
     <section class="stage" id="stage"><div class="stage-head"><span class="eyebrow">01 / KINEMATIC VIEW</span><button id="view-reset">Reset view</button></div>

@@ -42,7 +42,7 @@ def test_loss_stops_drive_and_memory_stays_bounded():
 def test_invalid_tuning_is_atomic():
     sim = Simulation()
     before = sim.settings.model_dump()
-    for change in [{"head_gain": float('nan')}, {"sensor_hz": 0}, {"typo": 2}]:
+    for change in [{"head_speed": float('nan')}, {"sensor_hz": 0}, {"typo": 2}]:
         with pytest.raises(ValidationError):
             sim.configure(change)
         assert sim.settings.model_dump() == before

@@ -68,6 +68,18 @@ class WaistDriveParams(NodeParams):
         default=6.0, gt=0.0, description="Safety limit: a move this long without the head centering ramps down and rests"
     )
     rest_duration: float = Field(default=2.0, ge=0.0, description="Seconds after a move reached the limit before the next may start")
+    head_settle: float = Field(
+        default=0.3, ge=0.0,
+        description="A move starts only once the head has held still this long, so the body never adds to a head turn",
+    )
+    assist_angle: float = Field(
+        default=40.0, ge=0.0, le=90.0,
+        description="Beyond this head pan a move starts even while the head turns, so someone walking off stays within reach",
+    )
+    degrees_per_second: float = Field(
+        default=27.0, ge=0.0,
+        description="Estimated torso speed at full drive (round 1: 18-23 deg/s at 0.75); the head counter-rotates by it. 0: off",
+    )
     slow_decay: bool = Field(
         default=True, description="Brake between PWM pulses: less ripple and whine, and speed that follows the drive",
     )
@@ -158,10 +170,11 @@ class WaistDrive:
             self.extra = max(0.0, self.extra - p.breakaway_rate * dt)
         return running + self.extra
 
-    def update(self, *, now: float, pan_offset: float | None) -> float | None:
+    def update(self, *, now: float, pan_offset: float | None, head_still_for: float = math.inf) -> float | None:
         """This tick's command: a signed throttle, 0.0 to brake, or None to let the motor coast.
 
         `pan_offset` is the head's pan angle minus neutral in degrees, or None without a valid target.
+        `head_still_for` is how long the head has held still; a new move waits for `head_settle`.
         """
         p = self.params
         if self.last_update is not None and now - self.last_update > RESTART_AFTER and self.phase is not WaistState.IDLE:
@@ -197,7 +210,8 @@ class WaistDrive:
 
         if self.phase is WaistState.IDLE:
             resting = self.rest_until is not None and now < self.rest_until
-            if resting or magnitude is None or magnitude <= p.start_angle:
+            waiting = head_still_for < p.head_settle and (magnitude is None or magnitude <= p.assist_angle)
+            if resting or magnitude is None or magnitude <= p.start_angle or waiting:
                 return 0.0
             self._start(now, pan_offset)
             return self.direction * self.level

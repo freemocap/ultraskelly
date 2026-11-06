@@ -39,7 +39,7 @@ def test_http_controls_pause_step_reset_and_tuning(local_server):
     assert call(base)['tick'] == 0
     state = call(base, {'action': 'step'})
     assert state['tick'] == 1 and not state['running']
-    assert call(base, {'action': 'configure', 'settings': {'head_gain': 0.08}})['settings']['head_gain'] == 0.08
+    assert call(base, {'action': 'configure', 'settings': {'head_speed': 45}})['settings']['head_speed'] == 45
     call(base, {'action': 'run'})
     deadline = time.monotonic() + 3
     while call(base)['tick'] < 5 and time.monotonic() < deadline:
@@ -49,7 +49,7 @@ def test_http_controls_pause_step_reset_and_tuning(local_server):
     time.sleep(.05)
     assert call(base)['tick'] == paused['tick']
     reset = call(base, {'action': 'reset'})
-    assert reset['tick'] == 0 and reset['settings']['head_gain'] == .08
+    assert reset['tick'] == 0 and reset['settings']['head_speed'] == 45
 
 
 def test_http_rejects_invalid_and_cross_origin_commands(local_server):

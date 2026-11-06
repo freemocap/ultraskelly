@@ -11,18 +11,17 @@ def test_shared_steps_hold_lock_between_sensor_samples():
         await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0))
         await head.step()
         await mouth.step()
-        assert head.pan_angle == 106
-        assert head.tilt_angle == 78
+        assert (head.pan_angle, head.tilt_angle) == (90, 90)  # One frame far off is not believed yet
         assert mouth.current_throttle == 0
         await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320, y=240))
         await head.step()
         await mouth.step()
         assert mouth.mouth_state.value == 'opening'
         assert mouth.current_throttle == -1
-        # Empty tick holds the last fresh lock without applying head gain again.
+        # Empty tick holds the last fresh lock without counting the same frame again.
         await head.step()
         await mouth.step()
-        assert head.waist_motor.throttle == -head.params.waist.start_throttle  # Head 16 degrees off: a move began
+        assert head.head_aim.candidate_count == 1
         assert mouth.mouth_state.value == 'opening'
         bus.close()
     asyncio.run(scenario())

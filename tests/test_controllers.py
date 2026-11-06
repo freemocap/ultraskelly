@@ -2,25 +2,48 @@ import asyncio
 
 import pytest
 
-from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
+from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationMessage, TargetLocationTopic
 from ultraskelly.replay import create_controllers, replay
 
 
-def test_head_deadzone_and_saturation():
-    bus, node, _ = create_controllers()
-    assert node._update_head_servos(target_x=320, target_y=240) == (True, True)
-    assert node.pan_angle == node.tilt_angle == 90
-    for _ in range(100):
-        node._update_head_servos(target_x=640, target_y=0)
-    assert node.pan_angle == 180
-    assert node.tilt_angle == 0
-    assert node.servo_kit.servo[node.params.pan_channel].angle == 180
-    bus.close()
+async def follow(bus, node, x, y, seconds):
+    """Step the head on a fake clock for `seconds`, the target at pixel (x, y) in a fresh frame every 30 ms."""
+    now = [0.0]
+    node.clock = lambda: now[0]
+    for tick in range(round(seconds * 100)):
+        if tick % 3 == 0:
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=x, y=y, captured=now[0]))
+        await node.step()
+        now[0] += 0.01
+
+
+def test_a_centred_target_locks_without_moving_the_head():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        states = bus.get_subscription(ServoStateTopic)
+        await follow(bus, node, 320, 240, 1.0)
+        state = await states.get()
+        assert state.is_locked_x and state.is_locked_y
+        assert node.pan_angle == node.tilt_angle == 90
+        bus.close()
+    asyncio.run(scenario())
+
+
+def test_a_target_held_at_the_frame_corner_turns_the_head_to_its_end_stops_and_no_further():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        await follow(bus, node, 640, 0, 6.0)
+        assert node.pan_angle == 180
+        assert node.tilt_angle == pytest.approx(0, abs=1e-3)  # The smoothed goal halves its way down to the stop
+        assert node.servo_kit.servo[node.params.pan_channel].angle == 180
+        bus.close()
+    asyncio.run(scenario())
 
 
 def test_waist_drives_continuously_while_the_head_is_turned():
     async def scenario():
         bus, node, _ = create_controllers()
+        node.params.waist.degrees_per_second = 0.0  # The head holds still instead of counter-rotating
         now = [100.0]
         node.clock = lambda: now[0]
         node.pan_angle = 160
@@ -71,7 +94,7 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
     bus, node, _ = create_controllers()
     assert node.params.servo_names == {3: "pan", 11: "tilt", 7: "roll"}
     assert node.servo_kit.servo[7].angle == 90.0
-    for _ in range(100):
-        node._update_head_servos(target_x=640, target_y=0)
-    assert (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle) == (180, 0, 90.0)
+    asyncio.run(follow(bus, node, 640, 0, 6.0))
+    angles = (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle)
+    assert angles == pytest.approx((180, 0, 90.0), abs=1e-3)
     bus.close()

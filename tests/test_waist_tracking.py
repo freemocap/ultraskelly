@@ -5,6 +5,12 @@ import pytest
 from ultraskelly.simulator.engine import Simulation, Settings
 
 
+def settled_pixels(sim):
+    """How far off centre a person may stay: a still head turns only once its goal is past its deadband."""
+    aim = sim.head.params.aim
+    return aim.deadband / aim.reach * aim.px_per_degree + 1
+
+
 @pytest.mark.parametrize("yaw", [-30, 30])  # Inside the OAK's 69-degree view
 def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
     async def scenario():
@@ -14,8 +20,8 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
         assert abs(sim.waist) > 20
         assert abs(sim.pan - 90) <= sim.head.params.waist.start_angle
         assert sim.head.waist_motor.throttle == 0
-        assert abs(sim.camera()["x"] - 320) <= 1
-        assert abs(sim.camera()["y"] - 240) <= 1
+        assert abs(sim.camera()["x"] - 320) <= settled_pixels(sim)
+        assert abs(sim.camera()["y"] - 240) <= settled_pixels(sim)
         before = sim.waist
         await sim.step(500)
         assert sim.waist == before
@@ -23,7 +29,6 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
     asyncio.run(scenario())
 
 
-@pytest.mark.xfail(strict=True, reason="The swinging head keeps crossing the waist's start angle (fixed next)")
 def test_waist_turns_in_one_ramped_move_without_braking():
     async def scenario():
         sim = Simulation(Settings(scenario="manual", yaw=30, pitch=10))

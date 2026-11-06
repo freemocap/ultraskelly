@@ -5,14 +5,20 @@ from ultraskelly.replay import create_controllers
 from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
 
 
+def settled_pixels(sim):
+    """How far off centre a person may stay: a still head turns only once its goal is past its deadband."""
+    aim = sim.head.params.aim
+    return aim.deadband / aim.reach * aim.px_per_degree + 1
+
+
 def test_target_centers_inside_jaw_square():
     async def scenario():
         sim = Simulation(Settings(scenario='manual', yaw=20, pitch=10))
         await sim.step(2000)
         image = sim.camera()
         assert image['visible']
-        assert abs(image['x'] - 320) <= 1
-        assert abs(image['y'] - 240) <= 1
+        assert abs(image['x'] - 320) <= settled_pixels(sim)
+        assert abs(image['y'] - 240) <= settled_pixels(sim)
         sim.close()
     asyncio.run(scenario())
 

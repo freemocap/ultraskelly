@@ -3,13 +3,13 @@ import logging
 import time
 from typing import Callable
 
-import numpy as np
 from pydantic import Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
+from ultraskelly.core.bot.motor.head_aim import HeadAim, HeadAimParams
 from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
-from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistState
+from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, WaistDrive, WaistDriveParams, WaistState
 from ultraskelly.core.pubsub.bot_topics import (
     ServoStateMessage,
     ServoStateTopic,
@@ -43,9 +43,8 @@ class OrientationNodeParams(NodeParams):
     offset_y_ratio: float = Field(default=0., ge=-1.0, le=1.0)
     
     # Head servo control
-    head_gain: float = Field(default=0.05, gt=0.0, le=1.0)
+    aim: HeadAimParams = Field(default_factory=HeadAimParams, description="How the head turns toward its target")
     head_deadzone: int = Field(default=100, ge=0, description="Jaw activation half-width in pixels")
-    centering_tolerance: int = Field(default=1, ge=0)
     target_timeout: float = Field(default=0.35, gt=0)
     
     # Waist motor control
@@ -82,9 +81,13 @@ class OrientationNode(Node):
     # Subscriptions
     target_subscription: SkipValidation[TopicSubscriptionQueue] = Field(default=None, exclude=True)
     
-    # Head servo state
+    # Head servo state: the angles last commanded
     pan_angle: float = Field(default=90.0)
     tilt_angle: float = Field(default=90.0)
+    head_aim: SkipValidation[HeadAim] = Field(default=None, exclude=True)
+    head_still_since: float | None = Field(default=None, exclude=True)
+    body_turn: float = Field(default=0.0, exclude=True, description="How far the waist has turned, estimated from its drive")
+    last_step: float | None = Field(default=None, exclude=True)
     
     # Waist motor state
     waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
@@ -103,6 +106,8 @@ class OrientationNode(Node):
     def model_post_init(self, context: object) -> None:
         if self.waist_drive is None:
             self.waist_drive = WaistDrive(self.params.waist)
+        if self.head_aim is None:
+            self.head_aim = HeadAim(self.params.aim, self.pan_angle, self.tilt_angle)
     
     @classmethod
     def create(
@@ -145,40 +150,20 @@ class OrientationNode(Node):
         self.servo_kit.servo[self.params.tilt_channel].angle = self.tilt_angle
         self.servo_kit.servo[self.params.roll_channel].angle = ROLL_LEVEL
 
-    def _update_head_servos(
-        self,
-        *,
-        target_x: int,
-        target_y: int
-    ) -> tuple[bool, bool]:
-        """
-        Update head servo positions to track target.
-        
-        Returns:
-            Tuple of (is_locked_x, is_locked_y)
-        """
-        # Calculate errors
-        error_x = target_x - self.params.target_x - self.params.x_offset
-        error_y = target_y - self.params.target_y - self.params.y_offset
-        
-        # Check lock status
-        is_locked_x = abs(error_x) <= self.params.head_deadzone
-        is_locked_y = abs(error_y) <= self.params.head_deadzone
-        
-        # Update pan servo
-        if abs(error_x) > self.params.centering_tolerance:
-            self.pan_angle += error_x * self.params.head_gain
-            self.pan_angle = float(np.clip(self.pan_angle, 0.0, 180.0))
-            self.servo_kit.servo[self.params.pan_channel].angle = self.pan_angle
-        
-        # Update tilt servo
-        if abs(error_y) > self.params.centering_tolerance:
-            self.tilt_angle += error_y * self.params.head_gain
-            self.tilt_angle = float(np.clip(self.tilt_angle, 0.0, 180.0))
-            self.servo_kit.servo[self.params.tilt_channel].angle = self.tilt_angle
-        
-        return is_locked_x, is_locked_y
-    
+    def _target_errors(self, msg: TargetLocationMessage) -> tuple[int, int]:
+        """The target's offset in pixels from where the head steers it."""
+        return (msg.x - self.params.target_x - self.params.x_offset,
+                msg.y - self.params.target_y - self.params.y_offset)
+
+    def _command_head(self, pan: float, tilt: float) -> None:
+        """Send the servos the head's new angles, when they changed."""
+        if pan != self.pan_angle:
+            self.pan_angle = pan
+            self.servo_kit.servo[self.params.pan_channel].angle = pan
+        if tilt != self.tilt_angle:
+            self.tilt_angle = tilt
+            self.servo_kit.servo[self.params.tilt_channel].angle = tilt
+
     async def step(self) -> None:
         """Center on new samples; hold lock between samples until a freshness timeout."""
         fresh = False
@@ -192,22 +177,35 @@ class OrientationNode(Node):
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,
             ))
             return
+        now = self.clock()
+        if (self.head_aim.pan, self.head_aim.tilt) != (self.pan_angle, self.tilt_angle):
+            self.head_aim.place(self.pan_angle, self.tilt_angle)  # A motor test moved the head: carry on from there
         msg = self.latest_target
         valid = (msg is not None and msg.x is not None and msg.y is not None
                  and self.target_received_at is not None
-                 and self.clock() - self.target_received_at <= self.params.target_timeout)
+                 and now - self.target_received_at <= self.params.target_timeout)
         locked_x = locked_y = False
         if valid:
+            error_x, error_y = self._target_errors(msg)
             if fresh:
-                locked_x, locked_y = self._update_head_servos(target_x=msg.x, target_y=msg.y)
-            else:
-                locked_x = abs(msg.x - self.params.target_x - self.params.x_offset) <= self.params.head_deadzone
-                locked_y = abs(msg.y - self.params.target_y - self.params.y_offset) <= self.params.head_deadzone
+                self.head_aim.observe(now=now, error_x=error_x, error_y=error_y, captured=msg.captured)
+            locked_x, locked_y = abs(error_x) <= self.params.head_deadzone, abs(error_y) <= self.params.head_deadzone
             self.last_target_x, self.last_target_y = msg.x, msg.y
-        # Turn the torso toward the head's gaze. The camera loop then counter-rotates the
-        # head toward neutral as the waist turns; without a target the waist ramps to a stop.
+        # Estimate the body's turn from the drive sent since the last step (no sensor measures it), so the
+        # head can counter-rotate at once. Negative drive turns the torso toward positive pan.
+        dt = 0.0 if self.last_step is None else min(max(now - self.last_step, 0.0), MAX_STEP)
+        self.last_step = now
+        self.body_turn -= (self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second * dt
+        self._command_head(*self.head_aim.update(now=now, body=self.body_turn))
+        if any(self.head_aim.turning):
+            self.head_still_since = None
+        elif self.head_still_since is None:
+            self.head_still_since = now
+        # Turn the torso toward the head's gaze, once the head has finished turning. The camera
+        # loop then counter-rotates the head toward neutral; without a target the waist ramps to a stop.
         self.waist_motor.throttle = self.waist_drive.update(
-            now=self.clock(), pan_offset=self.pan_angle - 90.0 if valid else None,
+            now=now, pan_offset=self.pan_angle - 90.0 if valid else None,
+            head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
         )
         self.waist_mode = self.waist_drive.state
         # Publish explicit loss as well as valid lock state so the jaw can release.
@@ -220,7 +218,7 @@ class OrientationNode(Node):
         """Main control loop."""
         waist = self.params.waist
         logger.info(
-            f"Starting OrientationNode [head_gain={self.params.head_gain}, "
+            f"Starting OrientationNode [head up to {self.params.aim.max_speed:.0f} deg/s, "
             f"waist {waist.min_throttle:.2f}-{waist.max_throttle:.2f} from {waist.start_throttle:.2f}, "
             f"ramps +{waist.ramp_up:.1f}/-{waist.ramp_down:.1f} per s]"
         )

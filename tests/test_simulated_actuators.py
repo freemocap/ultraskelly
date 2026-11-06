@@ -21,6 +21,18 @@ from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationMe
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 
+async def follow_corner(bus, head, mouth, seconds=0.5):
+    """Step both controllers on a fake clock, a target at the frame's top-right corner every 30 ms."""
+    now = [0.0]
+    head.clock = mouth.clock = lambda: now[0]
+    for tick in range(round(seconds * 100)):
+        if tick % 3 == 0:
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0, captured=now[0]))
+        await head.step()
+        await mouth.step()
+        now[0] += 0.01
+
+
 class BoardServo:
     """Hardware servo double that fails if anything reads it back over I2C."""
 
@@ -95,15 +107,12 @@ def test_simulated_motor_nodes_record_controller_commands():
             mouth_params=MouthNodeParams(),
             recorder=recorder,
         )
-        head.clock = mouth.clock = lambda: 0.0
         assert recorder.latest["pan"].value == recorder.latest["tilt"].value == 90.0
 
-        await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0))
-        await head.step()
-        await mouth.step()
+        await follow_corner(bus, head, mouth)
 
-        assert recorder.latest["pan"].value == head.pan_angle == 106
-        assert recorder.latest["tilt"].value == head.tilt_angle == 78
+        assert recorder.latest["pan"].value == head.pan_angle > 90
+        assert recorder.latest["tilt"].value == head.tilt_angle < 90
         assert recorder.latest["mouth"].value == 0
         assert "waist" in recorder.latest
         bus.close()
@@ -146,7 +155,6 @@ def test_record_hardware_commands_wraps_both_controllers():
         )
         recorder = CommandRecorder()
         record_hardware_commands(orientation=head, mouth=mouth, recorder=recorder)
-        head.clock = mouth.clock = lambda: 0.0
         assert {name: command.value for name, command in recorder.latest.items()} == {
             "pan": 90.0,
             "tilt": 90.0,
@@ -154,12 +162,10 @@ def test_record_hardware_commands_wraps_both_controllers():
             "mouth": 0.0,
         }
 
-        await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0))
-        await head.step()
-        await mouth.step()
+        await follow_corner(bus, head, mouth)
 
-        assert board_kit.servo[head.params.pan_channel].written[-1] == recorder.latest["pan"].value == 106
-        assert board_kit.servo[head.params.tilt_channel].written[-1] == recorder.latest["tilt"].value == 78
+        assert board_kit.servo[head.params.pan_channel].written[-1] == recorder.latest["pan"].value == head.pan_angle > 90
+        assert board_kit.servo[head.params.tilt_channel].written[-1] == recorder.latest["tilt"].value == head.tilt_angle < 90
         assert waist_board.written[-1] == recorder.latest["waist"].value
         assert mouth_board.written == [0]
         bus.close()

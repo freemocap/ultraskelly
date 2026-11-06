@@ -29,11 +29,11 @@ class Settings(BaseModel):
     pitch: float = Field(default=10, ge=-60, le=60)
     visible: bool = True
     sensor_hz: Literal[10, 20, 30, 50, 100] = 30
-    head_gain: float = Field(default=0.05, gt=0, le=1)
+    head_speed: float = Field(default=40, gt=0, le=600)  # The head's top turning speed, degrees per second
     head_deadzone: int = Field(default=100, ge=0, le=240)
     waist_gain: float = Field(default=0.008, gt=0, le=0.05)
     servo_speed: float = Field(default=180, ge=1, le=720)
-    waist_speed: float = Field(default=45, ge=0, le=180)
+    waist_speed: float = Field(default=30, ge=0, le=180)  # At full drive: round 1 measured 18-23 deg/s at 0.75
     # Optional friction: a still waist needs this much drive to break loose, and a turning
     # waist stops below waist_stall. Both 0 keep the plain linear model.
     waist_breakaway: float = Field(default=0.0, ge=0, le=1)
@@ -98,7 +98,7 @@ class Simulation:
         # Validate the complete proposed change before mutating anything.
         settings = Settings.model_validate(self.settings.model_dump() | values)
         self.settings = settings
-        self.head.params.head_gain = settings.head_gain
+        self.head.params.aim.max_speed = settings.head_speed
         self.head.params.head_deadzone = settings.head_deadzone
         self.head.params.waist.gain = settings.waist_gain
 

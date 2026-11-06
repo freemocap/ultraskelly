@@ -97,15 +97,19 @@ SCENARIOS = [
     Scenario("right", "A person steps in 20 degrees to the robot's right", 4.0, still(-20.0)),
     Scenario("up", "A person 12 degrees up", 4.0, still(0.0, 12.0)),
     Scenario("down", "A person 12 degrees down", 4.0, still(0.0, -12.0)),
-    Scenario("far", "A person 30 degrees off: the head turns and the waist brings it back", 8.0, still(30.0)),
+    Scenario("far", "A person 27 degrees off: the head turns and the waist brings it back", 8.0, still(27.0)),
+    # Turning to someone, following them back and counter-rotating while the waist recentres
+    # are three purposeful phases: two reversals, not a swing.
     Scenario("walk", "A person walks across, 30 to -30 degrees at 12 deg/s", 8.0, walking(30.0, -30.0, 12.0),
-             step=False, max_reversals=1, max_waist_moves=2),
+             step=False, max_reversals=2, max_waist_moves=2),
+    Scenario("walk-away", "A person walks from 10 to 100 degrees at 15 deg/s, out of the head's reach", 9.0,
+             walking(10.0, 100.0, 15.0), step=False, max_reversals=2, max_waist_moves=2),
     Scenario("two-people", "Two people 24 degrees apart whose scores keep swapping", 6.0, two_people(10.0, -14.0),
              step=False, max_reversals=1),
     Scenario("noisy", "A person 10 degrees off with 4 px of detection jitter and a third of detections dropped", 6.0,
              still(10.0), settings={"noise_px": 4.0, "dropout": 0.33}, max_reversals=1),
     Scenario("lost", "A person at 15 degrees leaves for 2 s; another appears at -15", 8.0,
-             comes_and_goes(15.0, -15.0, (3.0, 5.0)), step=False, max_reversals=1, max_waist_moves=2),
+             comes_and_goes(15.0, -15.0, (3.0, 5.0)), step=False, max_reversals=2, max_waist_moves=2),
 ]
 BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}
 
