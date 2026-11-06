@@ -1,10 +1,11 @@
 """Close the tracking loop on the robot without a person: the real head controller centres a patch of the scene.
 
 Picks a detailed patch of the OAK's view off the middle, follows it with template matching on
-every frame, and gives where it is to OrientationNode's head update as the target, which drives
-the real pan and tilt servos (the waist stays still). If the picture-to-servo mapping is right,
-the patch comes to the middle (320, 240); an axis mapped wrong (sign or channel) runs away
-instead. `--delay-frames` hands the controller old positions, as a slow detector would.
+every frame, and gives where it is, with when its frame was captured, to the bot's head aim
+(OrientationNode's HeadAim), which drives the real pan and tilt servos (the waist stays still).
+If the picture-to-servo mapping is right, the patch comes to the middle (320, 240); an axis
+mapped wrong (sign or channel) runs away instead. `--delay-frames` hands the controller old
+positions, as a slow detector would.
 
 Prints each run's track and a verdict per axis; --save writes the first and last picture of each
 run with the patch marked.
@@ -34,11 +35,12 @@ def grey(cv2, rgb: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2GRAY)
 
 
-def newest(frames) -> np.ndarray:
+def newest(frames) -> tuple[np.ndarray, float]:
+    """The newest RGB frame, and when it was captured on time.monotonic()'s clock (as the bot stamps it)."""
     group = frames.get()
     while frames.has():
         group = frames.get()
-    return group["rgb"].getFrame().copy()
+    return group["rgb"].getFrame().copy(), group["rgb"].getTimestamp().total_seconds()
 
 
 def detailed_patch(image: np.ndarray, centre: tuple[int, int]) -> tuple[int, int]:
@@ -79,7 +81,7 @@ def judge(track: list[dict], axis: str, middle: float) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Close the head's tracking loop on a patch of the scene.")
-    parser.add_argument("--gain", type=float, default=None, help="Head gain (degrees per pixel per frame); the bot's by default")
+    parser.add_argument("--speed", type=float, default=None, help="The head's top turning speed (degrees per second); the bot's by default")
     parser.add_argument("--delay-frames", type=int, default=0, help="Hand the controller positions this many frames old")
     parser.add_argument("--save", type=Path, default=None, help="Write the first and last picture of each run to this JPEG")
     args = parser.parse_args()
@@ -91,7 +93,9 @@ def main() -> None:
     from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
     from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
-    params = OrientationNodeParams() if args.gain is None else OrientationNodeParams(head_gain=args.gain)
+    params = OrientationNodeParams()
+    if args.speed is not None:
+        params.aim.max_speed = args.speed
     servos = open_servo_board()
     bus = PubSubTopicManager.create()
     camera = OakCameraNode.create(pubsub=bus, params=OakCameraNodeParams(flip_camera=True))
@@ -109,7 +113,7 @@ def main() -> None:
             head = OrientationNode(pubsub=bus, params=params, servo_kit=servos)
             head.command_start_angles()
             time.sleep(1.0)
-            first = newest(frames)
+            first, _ = newest(frames)
             image = grey(cv2, first)
             centre = detailed_patch(image, (middle_x + offset[0], middle_y + offset[1]))
             half = PATCH // 2
@@ -117,15 +121,18 @@ def main() -> None:
             position, delayed, track = (float(centre[0]), float(centre[1])), deque(), []
             start, last = time.monotonic(), first
             while time.monotonic() - start < RUN_SECONDS:
-                last = newest(frames)
+                last, captured = newest(frames)
                 position, score = find(cv2, grey(cv2, last), template, position)
                 if score < LEAST_MATCH:
                     track.append({"t": round(time.monotonic() - start, 2), "lost": True})
                     break
-                delayed.append(position)
+                delayed.append((position, captured))
+                now = time.monotonic()
                 if len(delayed) > args.delay_frames:
-                    seen_x, seen_y = delayed.popleft()
-                    head._update_head_servos(target_x=int(round(seen_x)), target_y=int(round(seen_y)))
+                    (seen_x, seen_y), seen_at = delayed.popleft()
+                    head.head_aim.observe(now=now, error_x=round(seen_x) - middle_x, error_y=round(seen_y) - middle_y,
+                                          captured=seen_at)
+                head._command_head(*head.head_aim.update(now=now))
                 track.append({"t": round(time.monotonic() - start, 2), "x": round(position[0]), "y": round(position[1]),
                               "pan": round(head.pan_angle, 1), "tilt": round(head.tilt_angle, 1), "match": round(score, 2)})
             kept = [row for row in track if "x" in row]
@@ -141,7 +148,7 @@ def main() -> None:
             servos.servo[channel].angle = 90.0
         camera.pipeline.stop()
         camera.pipeline.getDefaultDevice().close()
-    print(json.dumps({"gain": params.head_gain, "delay_frames": args.delay_frames, "runs": runs}, indent=1))
+    print(json.dumps({"speed": params.aim.max_speed, "delay_frames": args.delay_frames, "runs": runs}, indent=1))
     if args.save:
         rows = []
         for offset, first, centre, last, end_row in pictures:
