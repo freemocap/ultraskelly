@@ -4,7 +4,8 @@ Each scenario puts people in front of the simulated robot and runs the productio
 controllers through the simulator's camera and servos (see engine.py). Its verdict fails on:
 
 - overshoot: the camera swinging past a person it turned to by more than OVERSHOOT_DEGREES;
-- oscillation: the commanded pan or tilt reversing more often than the scenario allows;
+- oscillation: the head's turn or nod (what the linkage does, in degrees of view) reversing
+  more often than the scenario allows;
 - runaway: a servo command reaching its end stop, or losing a person who stays in view;
 - aim: still off a standing person by more than AIM_DEGREES at the end;
 - waist hunting: the waist turning one way and then back while the person stands still.
@@ -39,8 +40,10 @@ class Scenario:
 @dataclass
 class Trace:
     time: list[float] = field(default_factory=list)
-    pan_command: list[float] = field(default_factory=list)
+    pan_command: list[float] = field(default_factory=list)  # Servo degrees
     tilt_command: list[float] = field(default_factory=list)
+    head_yaw: list[float] = field(default_factory=list)  # How far the head has actually turned from the body
+    head_pitch: list[float] = field(default_factory=list)  # And nodded up, both in degrees of view
     camera_yaw: list[float] = field(default_factory=list)
     camera_pitch: list[float] = field(default_factory=list)
     person_yaw: list[float | None] = field(default_factory=list)  # The person the camera follows, if any
@@ -95,8 +98,9 @@ def comes_and_goes(first: float, second: float, gone: tuple[float, float]) -> Ca
 SCENARIOS = [
     Scenario("left", "A person steps in 20 degrees to the robot's left", 4.0, still(20.0)),
     Scenario("right", "A person steps in 20 degrees to the robot's right", 4.0, still(-20.0)),
-    Scenario("up", "A person 12 degrees up", 4.0, still(0.0, 12.0)),
-    Scenario("down", "A person 12 degrees down", 4.0, still(0.0, -12.0)),
+    # The geared tilt reaches about 9 degrees either way (engine.py's tilt_ratio): 6 is within it.
+    Scenario("up", "A person 6 degrees up", 4.0, still(0.0, 6.0)),
+    Scenario("down", "A person 6 degrees down", 4.0, still(0.0, -6.0)),
     Scenario("far", "A person 27 degrees off: the head turns and the waist brings it back", 8.0, still(27.0)),
     # Turning to someone, following them back and counter-rotating while the waist recentres
     # are three purposeful phases: two reversals, not a swing.
@@ -149,10 +153,13 @@ async def record(scenario: Scenario, prepare: Callable[[Simulation], None] | Non
         for _ in range(int(round(scenario.seconds / sim.dt))):
             await sim.step()
             yaw, pitch = sim.camera_pose()
+            head_yaw, head_pitch = sim.head_turn()
             person = followed(sim)
             trace.time.append(sim.now())
             trace.pan_command.append(sim.head.pan_angle)
             trace.tilt_command.append(sim.head.tilt_angle)
+            trace.head_yaw.append(head_yaw)
+            trace.head_pitch.append(head_pitch)
             trace.camera_yaw.append(yaw)
             trace.camera_pitch.append(pitch)
             trace.person_yaw.append(None if person is None else person.yaw)
@@ -166,8 +173,8 @@ async def record(scenario: Scenario, prepare: Callable[[Simulation], None] | Non
 
 def judge(scenario: Scenario, trace: Trace) -> Verdict:
     verdict = Verdict()
-    verdict.pan_reversals = reversals(trace.pan_command)
-    verdict.tilt_reversals = reversals(trace.tilt_command)
+    verdict.pan_reversals = reversals(trace.head_yaw)
+    verdict.tilt_reversals = reversals(trace.head_pitch)
     for name, count in (("pan", verdict.pan_reversals), ("tilt", verdict.tilt_reversals)):
         if count > scenario.max_reversals:
             verdict.failures.append(f"oscillation: {name} reversed {count} times (allowed {scenario.max_reversals})")

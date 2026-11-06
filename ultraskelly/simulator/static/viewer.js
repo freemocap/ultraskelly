@@ -59,7 +59,8 @@ function drawPlot(s) {
 }
 function update(s) {
   snapshot=s;const q=s.state;
-  waist.rotation.y=deg(q.waist);pan.rotation.y=deg(q.pan-90);tilt.rotation.x=deg(q.tilt-90);jaw.rotation.x=deg(q.jaw);
+  // The head turns as far as its geared linkage takes it, not one degree per servo degree.
+  waist.rotation.y=deg(q.waist);pan.rotation.y=deg(q.head_yaw);tilt.rotation.x=deg(-q.head_pitch);jaw.rotation.x=deg(q.jaw);
   target.position.fromArray(s.target.position);target.visible=s.target.enabled;
   jawZone.scale.set(s.settings.head_deadzone/320,s.settings.head_deadzone/240,1);
   targetLine.visible=target.visible;targetLine.geometry.dispose();targetLine.geometry=new THREE.BufferGeometry().setFromPoints([target.position,new THREE.Vector3(target.position.x,0,target.position.z)]);

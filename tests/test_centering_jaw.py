@@ -13,7 +13,7 @@ def settled_pixels(sim):
 
 def test_target_centers_inside_jaw_square():
     async def scenario():
-        sim = Simulation(Settings(scenario='manual', yaw=20, pitch=10))
+        sim = Simulation(Settings(scenario='manual', yaw=20, pitch=5))  # Within the geared tilt's reach
         await sim.step(2000)
         image = sim.camera()
         assert image['visible']

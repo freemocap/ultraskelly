@@ -13,12 +13,19 @@ def test_the_head_and_waist_follow_people_without_swinging(scenario):
 
 # The robot may differ from what the controller assumes. The camera's delay was measured at
 # 50-70 ms; the servos' lag and the OAK's field of view (69 degrees on its datasheet, so
-# 8.1 px per degree) are unmeasured; the waist was timed at 18-23 deg/s at 0.75 drive, and
-# the head assumes 27 deg/s at full drive. Every scenario must pass at the corners of that range.
+# 8.1 px per degree) are unmeasured. On 2026-11-06 12 servo degrees moved the picture 11-35 px
+# in pan (0.11-0.36 degrees of view per servo degree; the head assumes 0.24) and 9-10 px in tilt
+# (0.1); the waist was timed at 18-23 deg/s at 0.75 drive (the head assumes 27 at full drive).
+# Every scenario must pass across that range; a pan ratio under 0.20, a waist much faster than
+# assumed or more than about 6 servo degrees of slack in the linkage are not covered yet.
 PLANTS = [
     {"camera_latency": latency, "servo_lag": lag, "camera_hfov": hfov}
     for latency in (0.04, 0.10) for lag in (0.02, 0.08) for hfov in (64.0, 74.0)
-] + [{"waist_speed": 24.0}, {"waist_speed": 33.0}]
+] + [
+    {"pan_ratio": 0.20}, {"pan_ratio": 0.36}, {"tilt_ratio": 0.07}, {"tilt_ratio": 0.14},
+    {"waist_speed": 17.0}, {"waist_speed": 32.0}, {"head_backlash": 4.0},
+    {"pan_ratio": 0.20, "waist_speed": 17.0}, {"pan_ratio": 0.30, "waist_speed": 32.0},
+]
 
 
 @pytest.mark.parametrize("plant", PLANTS, ids=lambda plant: ",".join(f"{key}={value}" for key, value in plant.items()))

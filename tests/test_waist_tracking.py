@@ -14,11 +14,11 @@ def settled_pixels(sim):
 @pytest.mark.parametrize("yaw", [-30, 30])  # Inside the OAK's 69-degree view
 def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
     async def scenario():
-        sim = Simulation(Settings(scenario="manual", yaw=yaw, pitch=10))
+        sim = Simulation(Settings(scenario="manual", yaw=yaw, pitch=5))
         await sim.step(2000)
         assert sim.waist * yaw > 0
         assert abs(sim.waist) > 20
-        assert abs(sim.pan - 90) <= sim.head.params.waist.start_angle
+        assert abs(sim.head_turn()[0]) <= sim.head.params.waist.start_angle  # The head, not its geared servo
         assert sim.head.waist_motor.throttle == 0
         assert abs(sim.camera()["x"] - 320) <= settled_pixels(sim)
         assert abs(sim.camera()["y"] - 240) <= settled_pixels(sim)
@@ -31,7 +31,7 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
 
 def test_waist_turns_in_one_ramped_move_without_braking():
     async def scenario():
-        sim = Simulation(Settings(scenario="manual", yaw=30, pitch=10))
+        sim = Simulation(Settings(scenario="manual", yaw=30, pitch=5))
         drive = sim.head.params.waist
         commands = []
         for _ in range(2000):
@@ -52,7 +52,7 @@ def test_waist_turns_in_one_ramped_move_without_braking():
 def test_a_sticky_waist_still_breaks_loose_and_recenters_in_one_move():
     async def scenario():
         # Breaking loose takes more drive than the running drive at 25 degrees (0.58); turning needs 0.35.
-        sim = Simulation(Settings(scenario="manual", yaw=25, pitch=10, waist_breakaway=0.6, waist_stall=0.35))
+        sim = Simulation(Settings(scenario="manual", yaw=25, pitch=5, waist_breakaway=0.6, waist_stall=0.35))
         drive = sim.head.params.waist
         commands = []
         for _ in range(1500):
@@ -63,7 +63,7 @@ def test_a_sticky_waist_still_breaks_loose_and_recenters_in_one_move():
         assert all(command not in (None, 0.0) for command in move)  # One continuous move
         assert max(abs(command) for command in move) >= 0.6  # The breakaway extra got it going
         assert max(abs(command) for command in move) <= drive.breakaway_throttle
-        assert sim.waist > 10 and abs(sim.pan - 90) <= drive.start_angle
+        assert sim.waist > 10 and abs(sim.head_turn()[0]) <= drive.start_angle
         assert commands[-1] == 0.0
         sim.close()
     asyncio.run(scenario())

@@ -46,6 +46,13 @@ class Settings(BaseModel):
     servo_lag: float = Field(default=0.04, ge=0, le=0.5)
     pan_sign: Literal[1, -1] = 1  # -1: a larger pan command turns the camera the other way
     tilt_sign: Literal[1, -1] = 1
+    # The head's linkage gears the servos down: the camera turns pan_ratio degrees per degree of
+    # pan servo and tilt_ratio per degree of tilt, measured on the robot on 2026-11-06 (12 servo
+    # degrees moved the picture 11-35 px in pan and 9-10 px in tilt, at 8.1 px per degree near the
+    # middle), with head_backlash servo degrees of slack before the linkage follows a reversal.
+    pan_ratio: float = Field(default=0.24, gt=0, le=1)
+    tilt_ratio: float = Field(default=0.1, gt=0, le=1)
+    head_backlash: float = Field(default=0.0, ge=0, le=30)
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
     dropout: float = Field(default=0.0, ge=0, lt=1)  # Share of samples in which the detector finds nobody
     seed: int = 0
@@ -63,6 +70,11 @@ def approach(value, target, amount):
     return value + max(-amount, min(amount, target - value))
 
 
+def play(output: float, driver: float, slack: float) -> float:
+    """Where a linkage with `slack` degrees of play sits: it moves only when the driver pushes it from one side."""
+    return min(max(output, driver - slack / 2), driver + slack / 2)
+
+
 class Simulation:
     dt = 0.01
 
@@ -78,7 +90,8 @@ class Simulation:
             self.close()
         self.bus, self.head, self.mouth = create_controllers()
         self.tick = 0
-        self.pan = self.tilt = 90.0
+        self.pan = self.tilt = 90.0  # The servos' angles
+        self.linkage = [90.0, 90.0]  # Where the head's linkage sits, in servo degrees: pan, tilt
         self.waist = self.jaw = 0.0
         self.waist_moving = False
         self.last_camera = {"x": None, "y": None, "visible": False, "time": None}
@@ -132,10 +145,16 @@ class Simulation:
             return self.position(Person(yaw, pitch))
         return self.position(people[0])
 
+    def head_turn(self) -> tuple[float, float]:
+        """How far the head has turned from the body (yaw) and nodded up (pitch), degrees, through its linkage."""
+        s = self.settings
+        return (s.pan_sign * s.pan_ratio * (self.linkage[0] - 90),
+                s.tilt_sign * s.tilt_ratio * (90 - self.linkage[1]))
+
     def camera_pose(self) -> tuple[float, float]:
         """The camera's bearing from the base (yaw, pitch in degrees), from the servos' actual angles."""
-        return (self.waist + self.settings.pan_sign * (self.pan - 90),
-                self.settings.tilt_sign * (90 - self.tilt))
+        yaw, pitch = self.head_turn()
+        return self.waist + yaw, pitch
 
     def project(self, person: Person) -> tuple[float, float] | None:
         """Where a person appears in the frame, in pixels, or None outside it.
@@ -186,6 +205,8 @@ class Simulation:
             await self.mouth.step()
             self.pan = self.servo(self.pan, self.head.pan_angle)
             self.tilt = self.servo(self.tilt, self.head.tilt_angle)
+            self.linkage = [play(self.linkage[0], self.pan, self.settings.head_backlash),
+                            play(self.linkage[1], self.tilt, self.settings.head_backlash)]
             self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
@@ -212,7 +233,9 @@ class Simulation:
         return math.copysign((abs(drive) - s.waist_stall) / (1 - s.waist_stall), drive) * s.waist_speed
 
     def sample(self):
+        head_yaw, head_pitch = self.head_turn()
         return {"time": round(self.now(), 3), "pan": self.pan,
+                "head_yaw": head_yaw, "head_pitch": head_pitch,
                 "pan_command": self.head.pan_angle, "tilt": self.tilt,
                 "tilt_command": self.head.tilt_angle, "waist": self.waist, "jaw": self.jaw,
                 "waist_throttle": self.waist_drive(),

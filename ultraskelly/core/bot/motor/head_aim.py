@@ -1,24 +1,29 @@
-"""Calm head aiming: turn toward where the person is, allowing for the camera's delay.
+"""Calm head aiming: turn toward where the person is, allowing for the camera's delay and the head's gearing.
 
-The head used to add `head_gain` times the pixel error to its servo angles on every
-camera sample. Each sample is measured on a frame captured some 50-100 ms earlier, while
-the head was still turning toward the previous ones, so those corrections piled up and
-the head swung past the person and back (see docs/audit-2026.md, "Calm head tracking").
+The head used to add `head_gain` times the pixel error to its servo angles on every camera
+sample. Each sample is measured on a frame captured some 50-100 ms earlier, while the head
+was still turning toward the previous ones, so those corrections piled up. And the head's
+linkage turns the camera only a fraction of a degree per servo degree (`pan_ratio`,
+`tilt_ratio`, measured on the robot), so the servos wound toward their end stops while the
+waist, which followed the pan servo's angle, hunted back and forth (docs/audit-2026.md,
+"Calm head tracking").
 
-HeadAim instead works out where the person is. It keeps its goal relative to the robot's
-base: the camera's direction when the frame was captured (the head's commanded angles
-then, less the servos' lag, plus how far the body had turned) plus `reach` of the person's
-offset in that frame, converted to degrees through the camera's pinhole geometry. Aiming
-85% of the way means neither a pixels-per-degree scale up to 17% off nor the parallax of
-a camera mounted ahead of the pan axis can carry the head past the person; the frames
-that follow close the rest. The goal is smoothed, and one far from the current goal
-(someone new, or a stray detection) must show up `jump_samples` times in a row before the
-head believes it.
+HeadAim works in degrees of the camera's view and converts to servo degrees only for the
+commands. It keeps its goal relative to the robot's base: where the camera pointed when the
+frame was captured (the head's commanded view then, less the servos' lag, plus how far the
+body had turned) plus `reach` of the person's offset in that frame, converted to degrees
+through the camera's pinhole geometry. Aiming short means neither a wrong scale (pixels per
+degree, or the gear ratio) nor the parallax of a camera mounted ahead of the pan axis can
+carry the head past the person; the frames that follow close the rest. The goal is smoothed,
+and one far from the current goal (someone new, or a stray detection) must show up
+`jump_samples` times in a row before the head believes it.
 
-Each tick the head turns toward the goal less the body's turn, so it counter-rotates as
-soon as the waist moves, without waiting for the camera. It turns no faster than
-`max_speed`, speeding up and slowing down at `max_acceleration`, and while the body is
-still it moves only once its goal is more than `deadband` away, so jitter never moves it.
+Each tick the head turns toward the goal less the body's turn, so it counter-rotates as soon
+as the waist moves, without waiting for the camera. It turns no faster than `max_speed` (and
+its servos no faster than `servo_speed`), speeding up and slowing down at `max_acceleration`,
+keeps `end_margin` servo degrees clear of its end stops, and while the body is still it moves
+only once its goal is more than `deadband` away, so jitter never moves it. The goal's bearing
+from the body tells the waist where the person is, even beyond the head's reach.
 """
 import math
 from collections import deque
@@ -30,26 +35,39 @@ from ultraskelly.core.bot.base_abcs import NodeParams
 from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, s_curve_step
 
 SERVO_RANGE = (0.0, 180.0)
+MIDDLE = 90.0  # Servo degrees at which the head faces the way the body does
 HISTORY_SECONDS = 1.0  # How far back the head remembers where the camera pointed
 
 
 class HeadAimParams(NodeParams):
-    """How the head turns toward its target. Angles in degrees, times in seconds."""
+    """How the head turns toward its target. Angles are degrees of the camera's view unless they say servo degrees."""
 
     px_per_degree: float = Field(
         default=8.1, gt=0.0,
         description="Image pixels per degree at the frame's centre: the OAK-1's 640 px over 69 degrees, a pinhole",
     )
+    pan_ratio: float = Field(
+        default=0.24, gt=0.0, le=1.0,
+        description="Degrees the view turns per pan servo degree: 12 servo degrees moved the picture 11-35 px on 2026-11-06",
+    )
+    tilt_ratio: float = Field(
+        default=0.1, gt=0.0, le=1.0,
+        description="Degrees the view nods per tilt servo degree: 12 servo degrees moved the picture 9-10 px on 2026-11-06",
+    )
     pan_direction: Literal[1, -1] = Field(default=1, description="+1: a target right of the aim point needs a larger pan angle")
     tilt_direction: Literal[1, -1] = Field(default=1, description="+1: a target below the aim point needs a larger tilt angle")
+    end_margin: float = Field(default=5.0, ge=0.0, le=45.0, description="Servo degrees the head keeps clear of each end stop")
     smoothing: float = Field(default=0.5, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
     deadband: float = Field(default=1.5, ge=0.0, le=10.0, description="A still head turns only when its goal is further than this")
-    max_speed: float = Field(default=40.0, gt=0.0, le=600.0, description="Top turning speed, degrees per second")
+    max_speed: float = Field(default=40.0, gt=0.0, le=600.0, description="Top turning speed of the view, degrees per second")
+    servo_speed: float = Field(
+        default=150.0, gt=0.0, description="Top servo speed, servo degrees per second, slow enough that the servos keep up",
+    )
     max_acceleration: float = Field(default=300.0, gt=0.0, description="Degrees per second squared, speeding up and slowing down")
     jump_degrees: float = Field(default=8.0, gt=0.0, description="A goal further than this from the current one is a jump")
     jump_samples: int = Field(default=4, ge=1, description="Samples in a row a jump must show up in before the head turns to it")
     reach: float = Field(
-        default=0.85, gt=0.0, le=1.0,
+        default=0.65, gt=0.0, le=1.0,
         description="Share of a target's offset each frame aims for: a scale error under 1/reach - 1 cannot overshoot, "
                     "and later frames close the rest",
     )
@@ -59,10 +77,6 @@ class HeadAimParams(NodeParams):
     )
 
 
-def _clip(angle: float) -> float:
-    return min(max(angle, SERVO_RANGE[0]), SERVO_RANGE[1])
-
-
 class HeadAim:
     """Feed `observe` each fresh target and call `update` every control tick for the servo commands.
 
@@ -70,10 +84,11 @@ class HeadAim:
     it; only its changes over the last second matter.
     """
 
-    def __init__(self, params: HeadAimParams, pan: float = 90.0, tilt: float = 90.0) -> None:
+    def __init__(self, params: HeadAimParams, pan: float = MIDDLE, tilt: float = MIDDLE) -> None:
         self.params = params
-        self.angles = [pan, tilt]  # Commanded pan and tilt
-        self.rates = [0.0, 0.0]  # Their rates of change, degrees per second
+        self.servos = [pan, tilt]  # The servo angles last commanded
+        self.view = [self._view(0, pan), self._view(1, tilt)]  # The view they turn the camera to, from straight ahead
+        self.rates = [0.0, 0.0]  # How fast the view turns, degrees per second
         self.turning = [False, False]
         self.body = 0.0  # The body's turn at the last update
         self.goal: tuple[float, float] | None = None  # Pan relative to the base (body + pan), and tilt
@@ -84,17 +99,33 @@ class HeadAim:
 
     @property
     def pan(self) -> float:
-        return self.angles[0]
+        return self.servos[0]
 
     @property
     def tilt(self) -> float:
-        return self.angles[1]
+        return self.servos[1]
+
+    def _ratio(self, axis: int) -> float:
+        return (self.params.pan_ratio, self.params.tilt_ratio)[axis]
+
+    def _view(self, axis: int, servo: float) -> float:
+        return self._ratio(axis) * (servo - MIDDLE)
+
+    def span(self, axis: int) -> tuple[float, float]:
+        """The views an axis can be commanded to (0 pan, 1 tilt), keeping clear of its end stops."""
+        ratio, margin = self._ratio(axis), self.params.end_margin
+        return ratio * (SERVO_RANGE[0] + margin - MIDDLE), ratio * (SERVO_RANGE[1] - margin - MIDDLE)
 
     def place(self, pan: float, tilt: float) -> None:
         """Something else moved the head here (a motor test): hold it here and forget the old goal."""
-        self.angles, self.rates, self.turning = [pan, tilt], [0.0, 0.0], [False, False]
+        self.servos, self.view = [pan, tilt], [self._view(0, pan), self._view(1, tilt)]
+        self.rates, self.turning = [0.0, 0.0], [False, False]
         self.goal, self.candidate, self.candidate_count = None, None, 0
         self.history.clear()
+
+    def bearing(self) -> float | None:
+        """How far the target is from the body's forward direction, in pan's sense, or None without a goal."""
+        return None if self.goal is None else self.goal[0] - self.body
 
     def pointing_at(self, when: float) -> tuple[float, float]:
         """Where the camera pointed at time `when` (body + pan, and tilt), from the recent commands."""
@@ -104,7 +135,7 @@ class HeadAim:
                 break
             chosen = (pan, tilt)
         if chosen is None:
-            chosen = (self.history[0][1], self.history[0][2]) if self.history else (self.body + self.pan, self.tilt)
+            chosen = (self.history[0][1], self.history[0][2]) if self.history else (self.body + self.view[0], self.view[1])
         return chosen
 
     def observe(self, *, now: float, error_x: float, error_y: float, captured: float | None = None) -> None:
@@ -115,9 +146,10 @@ class HeadAim:
         # Aim short of the target: an offset measured from afar carries the scale's error and the
         # parallax of a camera mounted ahead of the pan axis, both in proportion to the offset.
         focal = p.px_per_degree * 180.0 / math.pi  # The pinhole's focal length in pixels
+        low, high = self.span(1)
         estimate = (
             pan_then + p.reach * p.pan_direction * math.degrees(math.atan(error_x / focal)),
-            _clip(tilt_then + p.reach * p.tilt_direction * math.degrees(math.atan(error_y / focal))),
+            min(max(tilt_then + p.reach * p.tilt_direction * math.degrees(math.atan(error_y / focal)), low), high),
         )
         if self.goal is not None and math.dist(estimate, self.goal) <= p.jump_degrees:
             self.candidate, self.candidate_count = None, 0
@@ -133,26 +165,27 @@ class HeadAim:
             self.goal, self.candidate, self.candidate_count = self.candidate, None, 0
 
     def update(self, *, now: float, body: float = 0.0) -> tuple[float, float]:
-        """This tick's pan and tilt commands, for a body turned `body` degrees."""
+        """This tick's pan and tilt servo commands, for a body turned `body` degrees."""
         p = self.params
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
         body_turning = body != self.body
         self.body = body
         if self.goal is not None:
-            wanted = (_clip(self.goal[0] - body), self.goal[1])
-            for axis in (0, 1):
-                if not self.turning[axis] and (abs(wanted[axis] - self.angles[axis]) > p.deadband
-                                               or (axis == 0 and body_turning)):
+            for axis, aim in enumerate((self.goal[0] - body, self.goal[1])):
+                low, high = self.span(axis)
+                wanted = min(max(aim, low), high)
+                if not self.turning[axis] and (abs(wanted - self.view[axis]) > p.deadband or (axis == 0 and body_turning)):
                     self.turning[axis] = True  # Counter-rotate against the body at once
                 if self.turning[axis]:
-                    self.angles[axis], self.rates[axis] = s_curve_step(
-                        self.angles[axis], self.rates[axis], wanted[axis],
-                        up=p.max_speed, down=p.max_speed, jerk=p.max_acceleration, dt=dt,
+                    speed = min(p.max_speed, p.servo_speed * self._ratio(axis))
+                    self.view[axis], self.rates[axis] = s_curve_step(
+                        self.view[axis], self.rates[axis], wanted, up=speed, down=speed, jerk=p.max_acceleration, dt=dt,
                     )
-                    if self.angles[axis] == wanted[axis] and self.rates[axis] == 0.0:
+                    self.servos[axis] = MIDDLE + self.view[axis] / self._ratio(axis)
+                    if self.view[axis] == wanted and self.rates[axis] == 0.0:
                         self.turning[axis] = False
-        self.history.append((now, body + self.pan, self.tilt))
+        self.history.append((now, body + self.view[0], self.view[1]))
         while self.history and self.history[0][0] < now - HISTORY_SECONDS:
             self.history.popleft()
         return self.pan, self.tilt

@@ -29,13 +29,14 @@ def test_a_centred_target_locks_without_moving_the_head():
     asyncio.run(scenario())
 
 
-def test_a_target_held_at_the_frame_corner_turns_the_head_to_its_end_stops_and_no_further():
+def test_a_target_held_at_the_frame_corner_turns_the_head_to_the_edge_of_its_range_and_no_further():
     async def scenario():
         bus, node, _ = create_controllers()
+        margin = node.params.aim.end_margin  # Kept clear of the servos' end stops
         await follow(bus, node, 640, 0, 6.0)
-        assert node.pan_angle == 180
-        assert node.tilt_angle == pytest.approx(0, abs=1e-3)  # The smoothed goal halves its way down to the stop
-        assert node.servo_kit.servo[node.params.pan_channel].angle == 180
+        assert node.pan_angle == pytest.approx(180 - margin)
+        assert node.tilt_angle == pytest.approx(margin, abs=1e-3)  # The smoothed goal halves its way down to the edge
+        assert node.servo_kit.servo[node.params.pan_channel].angle == pytest.approx(180 - margin)
         bus.close()
     asyncio.run(scenario())
 
@@ -46,18 +47,21 @@ def test_waist_drives_continuously_while_the_head_is_turned():
         node.params.waist.degrees_per_second = 0.0  # The head holds still instead of counter-rotating
         now = [100.0]
         node.clock = lambda: now[0]
-        node.pan_angle = 160
+        node.pan_angle = 165  # 18 degrees of view: the target ahead of the camera is past where the waist starts
         commands = []
-        for tick in range(200):  # Two seconds; the old controller braked after half of one
+        for tick in range(300):  # Three seconds; the old controller braked after half of one
             if tick % 10 == 0:
                 await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320, y=240))
             await node.step()
             commands.append(node.waist_motor.throttle)
             now[0] += 0.01
-        assert all(-0.8 <= command < 0 for command in commands)
-        assert commands[0] == -node.params.waist.start_throttle
+        moving = [index for index, command in enumerate(commands) if command]
+        assert moving[0] <= 40  # Once the target has shown up four times in a row
+        move = commands[moving[0]:]
+        assert all(-0.8 <= command < 0 for command in move)  # One continuous move
+        assert move[0] == -node.params.waist.start_throttle
         # The head never comes back here, so the drive rises to its breakaway ceiling.
-        assert commands[-1] == pytest.approx(-node.params.waist.breakaway_throttle)
+        assert move[-1] == pytest.approx(-node.params.waist.breakaway_throttle)
         bus.close()
     asyncio.run(scenario())
 
@@ -95,6 +99,7 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
     assert node.params.servo_names == {3: "pan", 11: "tilt", 7: "roll"}
     assert node.servo_kit.servo[7].angle == 90.0
     asyncio.run(follow(bus, node, 640, 0, 6.0))
+    margin = node.params.aim.end_margin
     angles = (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle)
-    assert angles == pytest.approx((180, 0, 90.0), abs=1e-3)
+    assert angles == pytest.approx((180 - margin, margin, 90.0), abs=1e-3)
     bus.close()

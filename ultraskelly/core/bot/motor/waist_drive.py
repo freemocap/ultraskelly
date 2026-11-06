@@ -1,4 +1,4 @@
-"""Smooth, continuous waist drive that turns the torso toward where the head is looking.
+"""Smooth, continuous waist drive that turns the torso toward the person the head follows.
 
 The waist used to run in bursts: 0.7-0.8 drive for half a second, an electrical brake for
 0.4 s, repeated while the head was turned, so every burst started and stopped hard. This
@@ -11,18 +11,19 @@ DC motors (sources in docs/audit-2026.md):
 - A move starts at `start_throttle`, below where the waist breaks loose, and follows
   S-curves: the drive's rate of change is limited, and so is the change of that rate, so
   the torque never jumps.
-- It runs at a drive that grows with how far the head is turned. While the head shows no
-  progress the waist has not broken loose, so the drive rises slowly toward
-  `breakaway_throttle`; once the head comes back that extra decays again, so the waist
+- It runs at a drive that grows with how far the person is from the body's forward
+  direction (their bearing). While the bearing shows no progress the waist has not broken
+  loose, so the drive rises slowly toward `breakaway_throttle`; once the bearing shrinks
+  that extra decays again, so the waist
   does not lurch.
-- It turns until the head is nearly centered, ramps down (with slow decay the motor slows
+- It turns until the person is nearly ahead, ramps down (with slow decay the motor slows
   with its drive), releases the motor to coast, and brakes it only once it has stopped.
 - It starts past `start_angle` and stops within `stop_angle`; a stopping move never
   resumes, so the waist rests between the two angles instead of hunting.
 - A move that lasts `max_move_duration` ramps down and rests before the next.
 
 The drive only decides commands. It does not know the waist's angle: no sensor measures
-it, and the camera loop closes the loop by bringing the head back toward neutral.
+it, and the camera closes the loop: the person's bearing shrinks as the torso turns.
 """
 import logging
 import math
@@ -39,15 +40,15 @@ RESTART_AFTER = 0.5  # Seconds without an update: the motor watchdog has braked 
 
 
 class WaistDriveParams(NodeParams):
-    """How the waist follows the head. Throttles are magnitudes; angles are head pan from neutral."""
+    """How the waist turns toward the target. Throttles are magnitudes; angles are its bearing from the body."""
 
-    start_angle: float = Field(default=15.0, ge=0.0, le=90.0, description="Head pan from neutral (degrees) that starts a move")
-    stop_angle: float = Field(default=5.0, ge=0.0, le=90.0, description="A move stops once the head pan is this close to neutral")
-    min_throttle: float = Field(default=0.5, ge=0.0, le=1.0, description="Running drive with the head at start_angle")
+    start_angle: float = Field(default=15.0, ge=0.0, le=90.0, description="Target bearing from the body (degrees) that starts a move")
+    stop_angle: float = Field(default=5.0, ge=0.0, le=90.0, description="A move stops once the target bearing is this small")
+    min_throttle: float = Field(default=0.5, ge=0.0, le=1.0, description="Running drive with the target at start_angle")
     max_throttle: float = Field(default=0.7, ge=0.0, le=1.0, description="Largest running drive")
-    gain: float = Field(default=0.008, gt=0.0, le=0.05, description="Extra running drive per degree of head pan beyond start_angle")
+    gain: float = Field(default=0.008, gt=0.0, le=0.05, description="Extra running drive per degree of bearing beyond start_angle")
     breakaway_throttle: float = Field(
-        default=0.8, ge=0.0, le=1.0, description="Most the drive rises to while the head shows the waist is not moving",
+        default=0.8, ge=0.0, le=1.0, description="Most the drive rises to while the bearing shows the waist is not moving",
     )
     start_throttle: float = Field(default=0.15, gt=0.0, le=1.0, description="A move begins here, well below where the waist breaks loose")
     release_throttle: float = Field(default=0.2, ge=0.0, le=1.0, description="A stopping move releases the motor at this drive")
@@ -60,12 +61,12 @@ class WaistDriveParams(NodeParams):
     stuck_seconds: float = Field(
         default=0.5, gt=0.0, description="At its running drive with no progress for this long, the waist is taken to be stuck",
     )
-    progress_degrees: float = Field(default=2.0, gt=0.0, description="How far the head must come back to count as progress")
+    progress_degrees: float = Field(default=2.0, gt=0.0, description="How far the bearing must shrink to count as progress")
     breakaway_rate: float = Field(
         default=0.3, gt=0.0, description="Drive added per second while stuck, and taken away per second once moving again",
     )
     max_move_duration: float = Field(
-        default=6.0, gt=0.0, description="Safety limit: a move this long without the head centering ramps down and rests"
+        default=6.0, gt=0.0, description="Safety limit: a move this long without the target coming ahead ramps down and rests"
     )
     rest_duration: float = Field(default=2.0, ge=0.0, description="Seconds after a move reached the limit before the next may start")
     head_settle: float = Field(
@@ -74,7 +75,7 @@ class WaistDriveParams(NodeParams):
     )
     assist_angle: float = Field(
         default=40.0, ge=0.0, le=90.0,
-        description="Beyond this head pan a move starts even while the head turns, so someone walking off stays within reach",
+        description="Beyond this bearing a move starts even while the head turns, so someone walking off stays within reach",
     )
     degrees_per_second: float = Field(
         default=27.0, ge=0.0,
@@ -97,7 +98,7 @@ class WaistDriveParams(NodeParams):
 
 class WaistState(Enum):
     IDLE = "idle"  # Braked at rest
-    TURNING = "turning"  # Driving the torso toward the head's gaze
+    TURNING = "turning"  # Driving the torso toward the target
     STOPPING = "stopping"  # Ramping down, then coasting
     RESTING = "resting"  # Braked; a move reached the time limit and the next must wait
 
@@ -136,7 +137,7 @@ class WaistDrive:
         self.released_at: float | None = None
         self.rest_until: float | None = None
         self.last_update: float | None = None
-        self.closest = math.inf  # Smallest head offset seen in this move
+        self.closest = math.inf  # Smallest bearing seen in this move
         self.stuck_for = 0.0  # Seconds at the running drive without progress
 
     @property
@@ -145,7 +146,7 @@ class WaistDrive:
         return WaistState.RESTING if resting and self.phase is WaistState.IDLE else self.phase
 
     def running_throttle(self, magnitude: float) -> float:
-        """Drive for a head this many degrees from neutral, before any breakaway extra."""
+        """Drive for a target this many degrees off, before any breakaway extra."""
         p = self.params
         return min(p.max_throttle, p.min_throttle + p.gain * max(0.0, magnitude - p.start_angle))
 
@@ -161,7 +162,7 @@ class WaistDrive:
         p = self.params
         running = self.running_throttle(magnitude)
         if magnitude <= self.closest - p.progress_degrees:
-            self.closest, self.stuck_for = magnitude, 0.0  # The head is coming back: the waist is moving
+            self.closest, self.stuck_for = magnitude, 0.0  # The bearing shrinks: the waist is moving
         elif self.level >= running + self.extra - 0.01:
             self.stuck_for += dt
         if self.stuck_for >= p.stuck_seconds:
@@ -173,7 +174,8 @@ class WaistDrive:
     def update(self, *, now: float, pan_offset: float | None, head_still_for: float = math.inf) -> float | None:
         """This tick's command: a signed throttle, 0.0 to brake, or None to let the motor coast.
 
-        `pan_offset` is the head's pan angle minus neutral in degrees, or None without a valid target.
+        `pan_offset` is the target's bearing from the body's forward direction in degrees, in pan's
+        sense (the pan the head would need), or None without a valid target.
         `head_still_for` is how long the head has held still; a new move waits for `head_settle`.
         """
         p = self.params
@@ -183,7 +185,7 @@ class WaistDrive:
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
         if self.phase is WaistState.TURNING and now - self.move_started >= p.max_move_duration:
-            logger.warning(f"Waist drove {p.max_move_duration:.1f} s without the head centering; resting {p.rest_duration:.1f} s")
+            logger.warning(f"Waist drove {p.max_move_duration:.1f} s without the target coming ahead; resting {p.rest_duration:.1f} s")
             self.rest_until = now + p.rest_duration
             self.phase = WaistState.STOPPING
         magnitude = None if pan_offset is None else abs(pan_offset)

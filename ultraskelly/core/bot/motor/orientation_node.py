@@ -201,10 +201,11 @@ class OrientationNode(Node):
             self.head_still_since = None
         elif self.head_still_since is None:
             self.head_still_since = now
-        # Turn the torso toward the head's gaze, once the head has finished turning. The camera
-        # loop then counter-rotates the head toward neutral; without a target the waist ramps to a stop.
+        # Turn the torso toward the target, once the head has finished turning: by its bearing from
+        # the body, which reaches past the geared head's few degrees of pan. The head counter-rotates
+        # back toward the middle meanwhile; without a target the waist ramps to a stop.
         self.waist_motor.throttle = self.waist_drive.update(
-            now=now, pan_offset=self.pan_angle - 90.0 if valid else None,
+            now=now, pan_offset=self.head_aim.bearing() if valid else None,
             head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
         )
         self.waist_mode = self.waist_drive.state
