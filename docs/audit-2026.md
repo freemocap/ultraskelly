@@ -610,9 +610,11 @@ seeing it (the robot took about 0.15 s). Outside that it degrades: a pan ratio o
 assumed overshoots by 2-4 degrees while the waist turns, and 8 degrees of slack by 2.4. The
 11-06 picture also shows the waist moving the picture 105 px at -0.7 drive for 0.5 s but 47 px
 at +0.7, and pan 11 px one way and 35 px the other: either slack in the linkage or a
-direction-dependent ratio, which `back_to_middle` in the check's output tells apart. None of
-this has run on the robot's motors yet; `scripts/check_tracking_loop.py` now drives the new
-head aim for the next check.
+direction-dependent ratio. `scripts/check_head_gearing.py` tells them apart: it steps each
+servo up, down past the middle and back, and the waist each way for two durations, within the
+dashboard's motor test limits, and prints the ratio each way, the slack, and the waist's speed
+each way next to what the controller assumes. None of this has run on the robot's motors yet;
+`scripts/check_tracking_loop.py` now drives the new head aim for the next check.
 
 ## Recovering from lost connections (2026-11-02)
 
