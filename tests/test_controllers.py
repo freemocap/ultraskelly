@@ -88,3 +88,12 @@ def test_without_follow_the_head_and_waist_hold_still_for_a_target():
         assert node.waist_motor.throttle in (None, 0.0)
         bus.close()
     asyncio.run(scenario())
+
+
+def test_the_robot_launches_with_the_calmer_tuning():
+    # 2026-11-06, the user: "turn down the aggressiveness". Gain 0.05 overshot 84 px on the robot.
+    from ultraskelly.__main__bot import launch_config
+
+    head = launch_config().orientation
+    assert head.head_gain <= 0.012 and head.centering_tolerance >= 20 and head.follow
+    assert head.waist.start_angle >= 45 and head.waist.max_throttle <= 0.6

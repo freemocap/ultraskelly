@@ -8,6 +8,8 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -87,7 +89,19 @@ def launch_config(
     config.runtime_server.depth_previews = depth_previews
     config.tracking = not zed_only
     config.runtime_server.port = port
-    config.orientation.follow = follow
+    # Calmer interim tuning, 2026-11-06 (the user: "turn down the aggressiveness"), until the head and waist
+    # are retuned for the measured gearing: about 0.24 degrees of view per pan servo degree and 0.1 per tilt
+    # degree, with ~0.15 s before the camera sees a move. Closing the loop on the robot
+    # (scripts/check_tracking_loop.py) overshot 84 px at gain 0.05 and settled without overshoot at 0.012.
+    config.orientation = OrientationNodeParams(
+        head_gain=0.01,
+        centering_tolerance=20,  # Pixels: closer than this the head holds, so tilt does not creep to its end
+        follow=follow,
+        waist=WaistDriveParams(  # Turn the body only once the head has turned far, and more gently
+            start_angle=45.0, stop_angle=15.0, max_throttle=0.6, breakaway_throttle=0.7, ramp_up=1.0,
+            max_move_duration=3.0,
+        ),
+    )
     return config
 
 
