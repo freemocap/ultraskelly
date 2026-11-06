@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import time
 from typing import Callable
 
@@ -9,8 +10,11 @@ from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
 from ultraskelly.core.bot.motor.head_aim import HeadAim, HeadAimParams
 from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
+from ultraskelly.core.bot.motor.roll_level import LEVEL, RollLevel, RollLevelParams, choose_face
 from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, WaistDrive, WaistDriveParams, WaistState
 from ultraskelly.core.pubsub.bot_topics import (
+    OakResultsMessage,
+    OakResultsTopic,
     ServoStateMessage,
     ServoStateTopic,
     TargetLocationMessage,
@@ -21,7 +25,7 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
 
-ROLL_LEVEL = 90.0  # Degrees; the roll servo holds here, as no controller turns it yet
+ROLL_LEVEL = LEVEL  # Roll servo degrees at which the head stands upright
 
 
 class OrientationNodeParams(NodeParams):
@@ -31,7 +35,7 @@ class OrientationNodeParams(NodeParams):
     # watching: channel 3 turns the head left-right, 11 nods it, 7 tilts it ear to shoulder.
     pan_channel: int = Field(default=3, ge=0, le=15)
     tilt_channel: int = Field(default=11, ge=0, le=15)
-    roll_channel: int = Field(default=7, ge=0, le=15, description="Held level at ROLL_LEVEL while the bot runs")
+    roll_channel: int = Field(default=7, ge=0, le=15, description="Levels the followed face; upright at ROLL_LEVEL")
     follow: bool = Field(
         default=True, description="Turn the head and waist toward the target; off, they move only for motor tests",
     )
@@ -47,6 +51,7 @@ class OrientationNodeParams(NodeParams):
     
     # Head servo control
     aim: HeadAimParams = Field(default_factory=HeadAimParams, description="How the head turns toward its target")
+    roll: RollLevelParams = Field(default_factory=RollLevelParams, description="How the head's roll levels the face it follows")
     head_deadzone: int = Field(default=100, ge=0, description="Jaw activation half-width in pixels")
     target_timeout: float = Field(default=0.35, gt=0)
     
@@ -83,10 +88,16 @@ class OrientationNode(Node):
     
     # Subscriptions
     target_subscription: SkipValidation[TopicSubscriptionQueue] = Field(default=None, exclude=True)
+    faces_subscription: SkipValidation[TopicSubscriptionQueue | None] = Field(
+        default=None, exclude=True, description="The OAK's face results; without them the roll holds upright",
+    )
     
     # Head servo state: the angles last commanded
     pan_angle: float = Field(default=90.0)
     tilt_angle: float = Field(default=90.0)
+    roll_angle: float = Field(default=ROLL_LEVEL)
+    roll_level: SkipValidation[RollLevel] = Field(default=None, exclude=True)
+    latest_faces: OakResultsMessage | None = Field(default=None, exclude=True)
     head_aim: SkipValidation[HeadAim] = Field(default=None, exclude=True)
     head_still_since: float | None = Field(default=None, exclude=True)
     body_turn: float = Field(default=0.0, exclude=True, description="How far the waist has turned, estimated from its drive")
@@ -111,6 +122,8 @@ class OrientationNode(Node):
             self.waist_drive = WaistDrive(self.params.waist)
         if self.head_aim is None:
             self.head_aim = HeadAim(self.params.aim, self.pan_angle, self.tilt_angle)
+        if self.roll_level is None:
+            self.roll_level = RollLevel(self.params.roll, self.roll_angle)
     
     @classmethod
     def create(
@@ -144,19 +157,34 @@ class OrientationNode(Node):
         
         # Get subscription
         node.target_subscription = pubsub.get_subscription(TargetLocationTopic)
+        node.faces_subscription = pubsub.get_subscription(OakResultsTopic)
         
         return node
 
     def command_start_angles(self) -> None:
-        """Send the head's servos their starting angles: pan and tilt as tracking holds them, roll level."""
+        """Send the head's servos their starting angles: as tracking holds them, roll upright."""
         self.servo_kit.servo[self.params.pan_channel].angle = self.pan_angle
         self.servo_kit.servo[self.params.tilt_channel].angle = self.tilt_angle
-        self.servo_kit.servo[self.params.roll_channel].angle = ROLL_LEVEL
+        self.servo_kit.servo[self.params.roll_channel].angle = self.roll_angle
 
     def _target_errors(self, msg: TargetLocationMessage) -> tuple[int, int]:
         """The target's offset in pixels from where the head steers it."""
         return (msg.x - self.params.target_x - self.params.x_offset,
                 msg.y - self.params.target_y - self.params.y_offset)
+
+    def _upright(self, error_x: float, error_y: float, captured: float | None, now: float) -> tuple[float, float]:
+        """A target's offset as an upright camera would have seen it: the head's roll turned the picture's
+        content anticlockwise by the rotation commanded a servo lag before the frame was captured."""
+        p = self.params.roll
+        turn = math.radians(self.roll_level.rolled_at((captured if captured is not None else now - p.assumed_latency) - p.servo_lag))
+        return (error_x * math.cos(turn) - error_y * math.sin(turn),
+                error_x * math.sin(turn) + error_y * math.cos(turn))
+
+    def _command_roll(self, roll: float) -> None:
+        """Send the roll servo its new angle, when it changed."""
+        if roll != self.roll_angle:
+            self.roll_angle = roll
+            self.servo_kit.servo[self.params.roll_channel].angle = roll
 
     def _command_head(self, pan: float, tilt: float) -> None:
         """Send the servos the head's new angles, when they changed."""
@@ -174,9 +202,13 @@ class OrientationNode(Node):
             self.latest_target = await self.target_subscription.get()
             self.target_received_at = self.clock()
             fresh = True
+        fresh_faces = False
+        while self.faces_subscription is not None and not self.faces_subscription.empty():
+            self.latest_faces = await self.faces_subscription.get()
+            fresh_faces = True
         if self.manual or not self.params.follow:  # A motor test drives, or nothing follows the target
-            await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
-                pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=ROLL_LEVEL,
+            await self.pubsub.publish(ServoStateTopic, ServoStateMessage(  # Angles as commanded, not measured
+                pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=self.roll_angle,
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,
             ))
             return
@@ -191,7 +223,12 @@ class OrientationNode(Node):
         if valid:
             error_x, error_y = self._target_errors(msg)
             if fresh:
-                self.head_aim.observe(now=now, error_x=error_x, error_y=error_y, captured=msg.captured)
+                upright_x, upright_y = self._upright(error_x, error_y, msg.captured, now)
+                self.head_aim.observe(now=now, error_x=upright_x, error_y=upright_y, captured=msg.captured)
+            if fresh_faces and self.latest_faces is not None:
+                face = choose_face(self.latest_faces.faces, (msg.x, msg.y))  # The face of the person followed
+                if face is not None:
+                    self.roll_level.observe(now=now, face=face, captured=self.latest_faces.timestamp)
             locked_x, locked_y = abs(error_x) <= self.params.head_deadzone, abs(error_y) <= self.params.head_deadzone
             self.last_target_x, self.last_target_y = msg.x, msg.y
         # Estimate the body's turn from the drive sent since the last step (no sensor measures it), so the
@@ -200,6 +237,7 @@ class OrientationNode(Node):
         self.last_step = now
         self.body_turn -= (self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second * dt
         self._command_head(*self.head_aim.update(now=now, body=self.body_turn))
+        self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
         if any(self.head_aim.turning):
             self.head_still_since = None
         elif self.head_still_since is None:
@@ -212,10 +250,10 @@ class OrientationNode(Node):
             head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
         )
         self.waist_mode = self.waist_drive.state
-        # Publish explicit loss as well as valid lock state so the jaw can release.
+        # Publish explicit loss as well as valid lock state so the jaw can release. Angles as commanded.
         await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
-            pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=ROLL_LEVEL,
-            is_locked_x=locked_x, is_locked_y=locked_y, is_locked_roll=False,
+            pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=self.roll_angle,
+            is_locked_x=locked_x, is_locked_y=locked_y, is_locked_roll=self.roll_level.level(),
         ))
 
     async def run(self) -> None:

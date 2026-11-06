@@ -4,7 +4,9 @@ The camera behaves like the robot's: the OAK's field of view as a pinhole, 30 sa
 second, each delivered after the pose pipeline's delay with the time it was captured,
 optional pixel noise and dropped detections, and any number of people, of whom it reports
 the one the pose node would follow. Servos lag their commands as well as being limited in
-speed, and either servo can be set to turn the camera the wrong way, to test polarity.
+speed, and either servo can be set to turn the camera the wrong way, to test polarity. Faces
+carry a tilt: the roll servo turns the whole picture, and each sample also reports every
+visible face's eyes, nose and mouth as the OAK's face detector would.
 """
 import math
 import random
@@ -12,10 +14,17 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from ultraskelly.core.bot.sensory.pose_common import choose_person
-from ultraskelly.core.pubsub.bot_topics import TargetLocationMessage, TargetLocationTopic
+from ultraskelly.core.pubsub.bot_topics import (
+    FaceObservation,
+    OakResultsMessage,
+    OakResultsTopic,
+    TargetLocationMessage,
+    TargetLocationTopic,
+)
 from ultraskelly.replay import create_controllers
 
 WIDTH, HEIGHT = 640, 480  # The OAK frame the pose detector sees
@@ -56,7 +65,12 @@ class Settings(BaseModel):
     tilt_ratio: float = Field(default=0.1, gt=0, le=1)
     pan_backlash: float = Field(default=6.0, ge=0, le=30)  # Servo degrees
     tilt_backlash: float = Field(default=2.0, ge=0, le=30)
+    # The roll servo turns the picture's content anticlockwise by roll_ratio degrees per servo
+    # degree (roll_sign -1: the other way). Neither is measured yet: check_motor_directions.py will.
+    roll_ratio: float = Field(default=0.3, gt=0, le=1)
+    roll_sign: Literal[1, -1] = 1
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
+    landmark_noise_px: float = Field(default=0.0, ge=0, le=20)  # The face detector's own jitter on eyes, nose, mouth
     dropout: float = Field(default=0.0, ge=0, lt=1)  # Share of samples in which the detector finds nobody
     seed: int = 0
 
@@ -67,6 +81,8 @@ class Person:
     yaw: float
     pitch: float
     score: float = 0.9
+    roll: float = 0.0  # The face's tilt as an upright camera would see it: degrees clockwise on screen
+    distance: float = 2.5  # Metres from the robot's base
 
 
 def approach(value, target, amount):
@@ -93,15 +109,16 @@ class Simulation:
             self.close()
         self.bus, self.head, self.mouth = create_controllers()
         self.tick = 0
-        self.pan = self.tilt = 90.0  # The servos' angles
+        self.pan = self.tilt = self.roll = 90.0  # The servos' angles
         self.linkage = [90.0, 90.0]  # Where the head's linkage sits, in servo degrees: pan, tilt
         self.waist = self.jaw = 0.0
         self.waist_moving = False
         self.last_camera = {"x": None, "y": None, "visible": False, "time": None}
         self.history = deque(maxlen=600)
-        self.pending: deque[tuple[float, TargetLocationMessage]] = deque()  # Samples still in the pose pipeline
+        self.pending: deque[tuple[float, type, object]] = deque()  # (due, topic, message) still in the pipelines
         self.next_sample_at = 0.0
         self.rng = random.Random(self.settings.seed)
+        self.face_rng = random.Random(self.settings.seed + 1)  # The face detector's own noise and misses
         self.head.clock = self.mouth.clock = self.now
         self.running = False
         self.error = None
@@ -138,8 +155,8 @@ class Simulation:
 
     @staticmethod
     def position(person: Person) -> list[float]:
-        y, p = math.radians(person.yaw), math.radians(person.pitch)
-        return [2.5 * math.cos(p) * math.sin(y), 2.10 + 2.5 * math.sin(p), 2.5 * math.cos(p) * math.cos(y)]
+        y, p, r = math.radians(person.yaw), math.radians(person.pitch), person.distance
+        return [r * math.cos(p) * math.sin(y), 2.10 + r * math.sin(p), r * math.cos(p) * math.cos(y)]
 
     def target_position(self):
         people = self.present()
@@ -154,13 +171,22 @@ class Simulation:
         return (s.pan_sign * s.pan_ratio * (self.linkage[0] - 90),
                 s.tilt_sign * s.tilt_ratio * (90 - self.linkage[1]))
 
+    def picture_roll(self) -> float:
+        """How far the roll servo has turned the picture's content anticlockwise, degrees."""
+        return self.settings.roll_sign * self.settings.roll_ratio * (self.roll - 90)
+
     def camera_pose(self) -> tuple[float, float]:
         """The camera's bearing from the base (yaw, pitch in degrees), from the servos' actual angles."""
         yaw, pitch = self.head_turn()
         return self.waist + yaw, pitch
 
     def project(self, person: Person) -> tuple[float, float] | None:
-        """Where a person appears in the frame, in pixels, or None outside it.
+        """Where a person appears in the frame, in pixels, or None outside it."""
+        seen = self.sighting(person)
+        return None if seen is None else seen[:2]
+
+    def sighting(self, person: Person) -> tuple[float, float, float] | None:
+        """Where a person appears in the frame (pixels) and pixels per metre there, or None outside it.
         Same yaw/tilt hierarchy and face mount as the viewer's frustum."""
         camera_yaw, camera_pitch = self.camera_pose()
         yaw, pitch = math.radians(camera_yaw), math.radians(camera_pitch)
@@ -174,8 +200,11 @@ class Simulation:
         if depth <= 0:
             return None
         focal = (WIDTH / 2) / math.tan(math.radians(self.settings.camera_hfov / 2))  # Pixels; square pixels
-        x, y = AIM[0] + focal * dot(right) / depth, AIM[1] - focal * dot(up) / depth
-        return (x, y) if 0 <= x < WIDTH and 0 <= y < HEIGHT else None
+        across, down = focal * dot(right) / depth, -focal * dot(up) / depth
+        turn = math.radians(self.picture_roll())  # A rolled head turns the whole picture about its middle
+        across, down = (across * math.cos(turn) + down * math.sin(turn), -across * math.sin(turn) + down * math.cos(turn))
+        x, y = AIM[0] + across, AIM[1] + down
+        return (x, y, focal / depth) if 0 <= x < WIDTH and 0 <= y < HEIGHT else None
 
     def camera(self):
         """One detector result for the current view: the person the pose node would follow, with noise and dropouts."""
@@ -192,22 +221,53 @@ class Simulation:
             x, y = round(min(max(x, 0), WIDTH - 1)), round(min(max(y, 0), HEIGHT - 1))
         return {"x": x, "y": y, "visible": chosen is not None, "time": self.now()}
 
+    def faces(self) -> list[FaceObservation]:
+        """The faces the OAK's face detector would find now: each visible person's eyes, nose and mouth around
+        where the pose detector puts them, tilted in the picture by the person's own tilt less the head's roll."""
+        s = self.settings
+        if s.dropout and self.face_rng.random() < s.dropout:
+            return []
+        found = []
+        for person in self.present():
+            seen = self.sighting(person)
+            if seen is None:
+                continue
+            x, y, scale = seen  # Pixels per metre at the person: an adult's eyes are about 63 mm apart
+            tilt = math.radians(person.roll - self.picture_roll())
+            along, down = np.array([math.cos(tilt), math.sin(tilt)]), np.array([-math.sin(tilt), math.cos(tilt)])
+            nose = np.array([x, y])
+            eyes = nose - 0.025 * scale * down
+            landmarks = np.array([eyes - 0.0315 * scale * along, eyes + 0.0315 * scale * along,  # Right eye on the left
+                                  nose, nose + 0.03 * scale * (down - along), nose + 0.03 * scale * (down + along)])
+            if s.landmark_noise_px:
+                landmarks = landmarks + np.array([[self.face_rng.gauss(0, s.landmark_noise_px) for _ in range(2)] for _ in range(5)])
+            half_width, height = 0.08 * scale, 0.11 * scale
+            found.append(FaceObservation(box=(x - half_width, y - height, x + half_width, y + height),
+                                         score=person.score, landmarks=landmarks))
+        return found
+
     async def step(self, count=1):
         for _ in range(count):
             now = self.now()
             if now + 1e-9 >= self.next_sample_at:  # Capture a frame; its result arrives after the pipeline's delay
                 self.next_sample_at += 1 / self.settings.sensor_hz
                 self.last_camera = self.camera()
-                self.pending.append((now + self.settings.camera_latency, TargetLocationMessage(
+                due = now + self.settings.camera_latency
+                self.pending.append((due, TargetLocationTopic, TargetLocationMessage(
                     x=self.last_camera["x"], y=self.last_camera["y"], captured=now,
                 )))
+                self.pending.append((due, OakResultsTopic, OakResultsMessage(
+                    faces=self.faces(), image_size=(WIDTH, HEIGHT), timestamp=now,
+                )))
             while self.pending and self.pending[0][0] <= now + 1e-9:
-                await self.bus.publish(TargetLocationTopic, self.pending.popleft()[1])
+                _, topic, message = self.pending.popleft()
+                await self.bus.publish(topic, message)
             # Shared controllers hold fresh lock state between sensor samples.
             await self.head.step()
             await self.mouth.step()
             self.pan = self.servo(self.pan, self.head.pan_angle)
             self.tilt = self.servo(self.tilt, self.head.tilt_angle)
+            self.roll = self.servo(self.roll, self.head.roll_angle)
             self.linkage = [play(self.linkage[0], self.pan, self.settings.pan_backlash),
                             play(self.linkage[1], self.tilt, self.settings.tilt_backlash)]
             self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
@@ -240,6 +300,7 @@ class Simulation:
         return {"time": round(self.now(), 3), "pan": self.pan,
                 "head_yaw": head_yaw, "head_pitch": head_pitch,
                 "pan_command": self.head.pan_angle, "tilt": self.tilt,
+                "roll": self.roll, "roll_command": self.head.roll_angle, "picture_roll": self.picture_roll(),
                 "tilt_command": self.head.tilt_angle, "waist": self.waist, "jaw": self.jaw,
                 "waist_throttle": self.waist_drive(),
                 "mouth_throttle": self.mouth.mouth_motor.throttle,

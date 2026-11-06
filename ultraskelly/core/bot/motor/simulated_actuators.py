@@ -16,7 +16,7 @@ from typing import Callable
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits, clamp
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import ROLL_LEVEL, OrientationNode, OrientationNodeParams
-from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationTopic
+from ultraskelly.core.pubsub.bot_topics import OakResultsTopic, ServoStateTopic, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 logger = logging.getLogger(__name__)
@@ -345,6 +345,7 @@ def create_simulated_motor_nodes(
         servo_kit=servo_kit,
         waist_motor=SimulatedMotor(name="waist", recorder=recorder, max_throttle=limits.waist_max_throttle),
         target_subscription=pubsub.get_subscription(TargetLocationTopic),
+        faces_subscription=pubsub.get_subscription(OakResultsTopic),
     )
     orientation.command_start_angles()
 

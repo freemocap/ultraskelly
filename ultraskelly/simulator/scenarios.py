@@ -8,7 +8,10 @@ controllers through the simulator's camera and servos (see engine.py). Its verdi
   more often than the scenario allows;
 - runaway: a servo command reaching its end stop, or losing a person who stays in view;
 - aim: still off a standing person by more than AIM_DEGREES at the end;
-- waist hunting: the waist turning one way and then back while the person stands still.
+- waist hunting: the waist turning one way and then back while the person stands still;
+- roll: the head's roll turning back and forth (in every scenario), and in those about a
+  tilted face, turning the face more than ROLL_OVERSHOOT past level, leaving it more than
+  ROLL_AIM off level at the end, or not standing upright again once the face has gone.
 
 Bearings are degrees from the robot's base: positive yaw to the robot's left as the
 simulator draws it, positive pitch up.
@@ -23,6 +26,9 @@ OVERSHOOT_DEGREES = 2.0
 AIM_DEGREES = 2.5
 REVERSAL_DEGREES = 0.5  # A turn back counts once the command has come back this far
 LIMIT_MARGIN = 2.0  # Degrees from a servo's 0 or 180 that count as reaching its end stop
+ROLL_OVERSHOOT = 1.5  # Degrees the followed face may be turned past level in the picture
+ROLL_AIM = 3.0  # Degrees off level the face may stay at the end: within the roll's deadband
+ROLL_LIMITS = (60.0, 120.0)  # The roll servo's hard limits (ActuatorLimits)
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,9 @@ class Scenario:
     step: bool = True  # People stand still after appearing: overshoot and final aim apply
     max_reversals: int = 1  # Per servo
     max_waist_moves: int = 1
+    roll: bool = False  # About a tilted face: the roll's overshoot and final level apply
+    max_roll_reversals: int = 1
+    upright_at_end: bool = False  # Nobody is left: the roll must stand the head upright again
 
 
 @dataclass
@@ -50,6 +59,10 @@ class Trace:
     person_pitch: list[float | None] = field(default_factory=list)
     waist: list[float] = field(default_factory=list)
     waist_drive: list[float | None] = field(default_factory=list)
+    roll_command: list[float] = field(default_factory=list)  # Servo degrees
+    picture_roll: list[float] = field(default_factory=list)  # How far the roll actually turned the picture, degrees
+    person_roll: list[float | None] = field(default_factory=list)  # The followed face's own tilt
+    face_tilt: list[float | None] = field(default_factory=list)  # And its tilt in the picture
     half_fov: float = 34.5  # Degrees from the image centre to its side edge
 
 
@@ -62,6 +75,9 @@ class Verdict:
     final_error: float | None = None
     waist_moves: int = 0
     waist_reversals: int = 0
+    roll_reversals: int = 0
+    roll_overshoot: float = 0.0
+    final_tilt: float | None = None
     failures: list[str] = field(default_factory=list)
 
     @property
@@ -90,6 +106,17 @@ def two_people(a: float, b: float, swap_period: float = 0.1) -> Callable[[float]
     return people
 
 
+def tilted(roll: float, until: float | None = None, then: float | None = 0.0,
+           distance: float = 1.2) -> Callable[[float], list[Person]]:
+    """Someone straight ahead, `distance` metres away, whose face is tilted `roll` degrees clockwise; from
+    `until` it is tilted `then`, or gone if `then` is None."""
+    def people(t: float) -> list[Person]:
+        if until is None or t < until:
+            return [Person(0.0, 0.0, roll=roll, distance=distance)]
+        return [] if then is None else [Person(0.0, 0.0, roll=then, distance=distance)]
+    return people
+
+
 def comes_and_goes(first: float, second: float, gone: tuple[float, float]) -> Callable[[float], list[Person]]:
     """Someone at `first`, gone during `gone`, then someone else at `second`."""
     return lambda t: [] if gone[0] <= t < gone[1] else [Person(first if t < gone[0] else second, 0.0)]
@@ -111,9 +138,18 @@ SCENARIOS = [
     Scenario("two-people", "Two people 24 degrees apart whose scores keep swapping", 6.0, two_people(10.0, -14.0),
              step=False, max_reversals=1),
     Scenario("noisy", "A person 10 degrees off with 4 px of detection jitter and a third of detections dropped", 6.0,
-             still(10.0), settings={"noise_px": 4.0, "dropout": 0.33}, max_reversals=1),
+             still(10.0), settings={"noise_px": 4.0, "landmark_noise_px": 1.5, "dropout": 0.33}, max_reversals=1),
     Scenario("lost", "A person at 15 degrees leaves for 2 s; another appears at -15", 8.0,
              comes_and_goes(15.0, -15.0, (3.0, 5.0)), step=False, max_reversals=2, max_waist_moves=2),
+    Scenario("tilt", "A person ahead tilts their head 7 degrees clockwise", 5.0, tilted(7.0), roll=True),
+    Scenario("tilt-other-way", "A person ahead tilts their head 7 degrees anticlockwise", 5.0, tilted(-7.0), roll=True),
+    Scenario("tilt-and-back", "A person tilts their head 7 degrees for 3 s, then straightens it", 7.0,
+             tilted(7.0, until=3.0), roll=True),
+    Scenario("tilt-gone", "A person with their head tilted 7 degrees leaves after 3 s", 6.0,
+             tilted(7.0, until=3.0, then=None), step=False, upright_at_end=True),
+    Scenario("tilt-noisy", "A tilted face (6 degrees) with 1.5 px of landmark jitter and a third of detections dropped",
+             6.0, tilted(6.0), settings={"landmark_noise_px": 1.5, "dropout": 0.33}, roll=True),
+    Scenario("tilt-near", "A face 0.7 m away tilted 7 degrees: big, sharp eyes", 5.0, tilted(7.0, distance=0.7), roll=True),
 ]
 BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}
 
@@ -132,6 +168,31 @@ def reversals(values: list[float], threshold: float = REVERSAL_DEGREES) -> int:
         elif abs(value - extreme) >= threshold:
             count, direction, extreme = count + 1, -direction, value
     return count
+
+
+def roll_judgement(scenario: Scenario, trace: Trace, verdict: Verdict) -> None:
+    """The roll's part of a verdict: it must not turn back and forth, and about a tilted face it must level
+    the face without turning it past level; with nobody left it must stand the head upright."""
+    verdict.roll_reversals = reversals(trace.picture_roll)
+    if verdict.roll_reversals > scenario.max_roll_reversals:
+        verdict.failures.append(f"roll oscillation: reversed {verdict.roll_reversals} times (allowed {scenario.max_roll_reversals})")
+    if min(trace.roll_command) <= ROLL_LIMITS[0] + LIMIT_MARGIN or max(trace.roll_command) >= ROLL_LIMITS[1] - LIMIT_MARGIN:
+        verdict.failures.append("roll runaway: the roll reached its limit")
+    if scenario.roll:
+        # Overshoot while the face keeps its first tilt: past level on the other side from where it started.
+        first = next((roll for roll in trace.person_roll if roll is not None), None)
+        if first is not None and abs(first) >= ROLL_OVERSHOOT:
+            side = 1 if first > 0 else -1
+            held = [tilt for tilt, roll in zip(trace.face_tilt, trace.person_roll) if roll == first]
+            verdict.roll_overshoot = max(0.0, max(-tilt * side for tilt in held))
+            if verdict.roll_overshoot > ROLL_OVERSHOOT:
+                verdict.failures.append(f"roll overshoot: the face turned {verdict.roll_overshoot:.1f} degrees past level")
+        final = [abs(tilt) for tilt in trace.face_tilt[-10:] if tilt is not None]
+        verdict.final_tilt = max(final) if final else None
+        if verdict.final_tilt is None or verdict.final_tilt > ROLL_AIM:
+            verdict.failures.append(f"roll aim: the face {verdict.final_tilt} degrees off level at the end")
+    if scenario.upright_at_end and abs(trace.roll_command[-1] - 90.0) > 0.1:
+        verdict.failures.append(f"roll: the head not upright again ({trace.roll_command[-1]:.1f})")
 
 
 def followed(sim: Simulation) -> Person | None:
@@ -166,6 +227,10 @@ async def record(scenario: Scenario, prepare: Callable[[Simulation], None] | Non
             trace.person_pitch.append(None if person is None else person.pitch)
             trace.waist.append(sim.waist)
             trace.waist_drive.append(sim.waist_drive())
+            trace.roll_command.append(sim.head.roll_angle)
+            trace.picture_roll.append(sim.picture_roll())
+            trace.person_roll.append(None if person is None else person.roll)
+            trace.face_tilt.append(None if person is None else person.roll - sim.picture_roll())
     finally:
         sim.close()
     return trace
@@ -223,6 +288,7 @@ def judge(scenario: Scenario, trace: Trace) -> Verdict:
         verdict.failures.append(f"waist hunting: {moves} moves (allowed {scenario.max_waist_moves})")
     elif scenario.step and verdict.waist_reversals:
         verdict.failures.append(f"waist hunting: turned back {verdict.waist_reversals} times")
+    roll_judgement(scenario, trace, verdict)
     return verdict
 
 

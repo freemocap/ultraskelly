@@ -21,20 +21,26 @@ class ActuatorLimits(NodeParams):
     pan_max_degrees: float = Field(default=180.0, ge=0.0, le=180.0)
     tilt_min_degrees: float = Field(default=0.0, ge=0.0, le=180.0)
     tilt_max_degrees: float = Field(default=180.0, ge=0.0, le=180.0)
+    # Roll is turned only by its own controller (roll_level.py, at most 25 degrees from upright):
+    # 30 either side of 90, as far as the dashboard's servo tests go.
+    roll_min_degrees: float = Field(default=60.0, ge=0.0, le=180.0)
+    roll_max_degrees: float = Field(default=120.0, ge=0.0, le=180.0)
     waist_max_throttle: float = Field(default=0.8, ge=0.0, le=1.0)
     mouth_max_throttle: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _ranges_are_ordered(self) -> "ActuatorLimits":
-        if self.pan_min_degrees > self.pan_max_degrees or self.tilt_min_degrees > self.tilt_max_degrees:
+        if (self.pan_min_degrees > self.pan_max_degrees or self.tilt_min_degrees > self.tilt_max_degrees
+                or self.roll_min_degrees > self.roll_max_degrees):
             raise ValueError("Each servo's minimum angle must not exceed its maximum")
         return self
 
     def servo_range(self, name: str) -> tuple[float, float] | None:
-        """Allowed angles for the pan or tilt servo; None for other channels."""
+        """Allowed angles for the pan, tilt or roll servo; None for other channels."""
         return {
             "pan": (self.pan_min_degrees, self.pan_max_degrees),
             "tilt": (self.tilt_min_degrees, self.tilt_max_degrees),
+            "roll": (self.roll_min_degrees, self.roll_max_degrees),
         }.get(name)
 
     def max_throttle(self, name: str) -> float | None:

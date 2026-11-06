@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from ultraskelly.simulator.scenarios import SCENARIOS, Scenario, reversals, run, still
+from ultraskelly.simulator.scenarios import BY_NAME, SCENARIOS, Scenario, reversals, run, still
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.name)
@@ -27,6 +27,8 @@ PLANTS = [
     {"pan_backlash": 3.0}, {"pan_backlash": 8.0}, {"tilt_backlash": 0.0}, {"tilt_backlash": 4.0},
     {"waist_speed": 17.0}, {"waist_speed": 37.0}, {"servo_lag": 0.12},
     {"pan_ratio": 0.42, "waist_speed": 17.0},
+    # The roll servo's ratio is not measured yet: the roll is assumed to turn the picture 0.3 degrees per servo degree.
+    {"roll_ratio": 0.2}, {"roll_ratio": 0.45},
 ]
 
 
@@ -45,6 +47,11 @@ def test_a_reversed_pan_servo_is_caught_before_any_motor_runs():
                             settings={"pan_sign": -1})
     trace, verdict = run(reversed_pan)
     assert verdict.runaway and not verdict.passed
+
+
+def test_a_reversed_roll_servo_is_caught_before_any_motor_runs():
+    trace, verdict = run(replace(BY_NAME["tilt"], settings={"roll_sign": -1}))
+    assert not verdict.passed and verdict.final_tilt > 7.0  # Rolled the face further off level
 
 
 def test_reversals_count_turns_back_but_not_wobble():

@@ -21,7 +21,7 @@ from ultraskelly.core.bot.motor.simulated_actuators import (
     SimulatedMotor,
     SimulatedServoKit,
 )
-from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationTopic
+from ultraskelly.core.pubsub.bot_topics import OakResultsTopic, ServoStateTopic, TargetLocationTopic
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 SERVO_BOARD_ADDRESS = 0x40
@@ -79,6 +79,7 @@ def build_motor_nodes(
         motor_kit=motor_kit,
         waist_motor=waist,
         target_subscription=pubsub.get_subscription(TargetLocationTopic),
+        faces_subscription=pubsub.get_subscription(OakResultsTopic),
     )
     orientation.command_start_angles()
     mouth = MouthNode(
