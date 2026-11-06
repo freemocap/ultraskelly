@@ -563,29 +563,40 @@ turning toward the samples before it, so the increments piled up: an integrator 
 measurement d samples late rings once its gain per sample passes about
 2 sin(π / (2(2d + 1))), 0.29 at three samples late. And the head is geared down: on
 2026-11-06 `scripts/check_motor_directions.py` found 12 servo degrees moving the upright
-OAK picture 11-35 px in pan and 9-10 px in tilt, about 0.24 and 0.1 degrees of view per
-servo degree at the pinhole's 8.1 px per degree near the middle (640 px over 69 degrees,
-9.3, is the average across the frame). Every sign was as the controller assumes. So the
-waist's 15 servo degrees were under 4 degrees of head turn, its 5-degree stop about 1, the
+OAK picture 35 px in pan and 9-10 px in tilt, about 0.36 and 0.1 degrees of view per servo
+degree at the pinhole's 8.1 px per degree near the middle (640 px over 69 degrees, 9.3, is
+the average across the frame). Returning pan to 90 undid only 17.7 of the 34.7 px, about 6
+servo degrees of slack, which also explains why the first 12 degrees the other way moved it
+only 11 px; tilt came back within 2 px. Every sign was as the controller assumes. So the
+waist's 15 servo degrees were about 5 degrees of head turn, its 5-degree stop under 2, the
 pan servo wound toward its end stops, and the waist and the slow head chased each other.
+Closing the loop on the robot with the waist off (`scripts/check_tracking_loop.py`), the old
+gain overshot a patch of the scene by 84 px and lost it; 0.012 settled without overshoot.
 
 **A synthetic closed-loop layer.** The simulator's plant now has the OAK's 69-degree view,
-the measured delay with each target's capture time, lagging servos, the measured gearing
-with optional slack, a sign flip per servo, detection noise and dropouts, and any number of
-people. `simulator/scenarios.py` runs the production `OrientationNode.step()` through it on
+the measured delay with each target's capture time, servos that trail their commands by
+80 ms (the robot's picture moved about 0.15 s after a command), the measured gearing and
+slack, a sign flip per servo, detection noise and dropouts, and any number of people. `simulator/scenarios.py` runs the production `OrientationNode.step()` through it on
 ten scenarios and fails a run on overshoot, oscillation of the head's actual turn, runaway,
 final aim or waist hunting (docs/simulator.md, "Closed-loop scenarios"). Main at 0d1e919
-fails 8 of the 10 on the geared plant, every one with waist hunting (3-6 moves where one or
-two are allowed), with 3-6 reversals of the head, overshoot up to 7.2 degrees and the pan
-command at its end stop in three. On a head without gearing it had failed all nine
-scenarios then defined, with 7-28 degrees of overshoot and 6-20 reversals.
+fails 8 of the 10 on the measured plant: overshoot of 9.8-11.3 degrees when someone steps in
+to the side, 2-4 reversals of the head, the waist hunting in three (3-4 moves where one or
+two are allowed) and the pan command at its end stop in three. On a head without gearing it
+had failed all nine scenarios then defined, with 7-28 degrees of overshoot and 6-20
+reversals. The plant is milder than the robot, though: with the waist off, the old gain
+overshoots a still target there by 18-35 px, not the robot's 84, even with 0.2 s of servo
+lag, so the real linkage has more delay or play than the plant models.
 
 **Calm head aim.** `motor/head_aim.py` replaces the per-sample gain. It works in degrees of
-view through the measured gear ratios and converts to servo degrees only for the commands.
+view through the measured gear ratios (assuming 0.33 for pan, a little under 0.36, so it
+errs toward turning short) and converts to servo degrees only for the commands. It commands
+each servo half its linkage's slack past the view in the way it moves (5 servo degrees for
+pan, a little under the 6 measured, as too much makes the head jump; 2 for tilt), so a
+reversal takes the play up at once instead of leaving the head still while the body turns.
 Each target becomes an estimate of where the person is relative to the base: where the
-camera pointed when the frame was captured (the commanded view then, less 40 ms of servo
-lag, plus the body's estimated turn) plus 65% of the person's offset, converted through the
-pinhole. Aiming short means a scale or gear-ratio error of up to half cannot overshoot; the
+camera pointed when the frame was captured (the body's estimated turn and the head's
+commanded view 80 ms earlier, as the servos trail their commands) plus 65% of the person's
+offset, converted through the pinhole. Aiming short means a scale or gear-ratio error of up to half cannot overshoot; the
 next frames close the rest. Estimates are smoothed (half of each), and one more than
 8 degrees from the goal must repeat four times in a row before the head turns to it. The
 head turns at most 40 degrees of view per second (its servos at most 150 per second) with
@@ -601,16 +612,17 @@ when someone walked off, so the 6 s limit stays.
 The pose node follows the credible person (half the best score or more) nearest the image
 centre, so two people with swapping scores no longer pull the head between them.
 
-**Results and limits.** The new controller passes all ten scenarios on the geared plant
-(overshoot at most 0.8 degrees, one waist move where one is needed), and the suite checks
-every scenario at the edges of camera delay 40-100 ms, servo lag 20-80 ms, field of view
-64-74 degrees (their eight corners), pan ratio 0.20-0.36, tilt ratio 0.07-0.14, waist speed
-17-32 deg/s, 4 servo degrees of slack, and 0.18-0.2 s from a servo command to the camera
-seeing it (the robot took about 0.15 s). Outside that it degrades: a pan ratio of 0.18 or a waist much faster than
-assumed overshoots by 2-4 degrees while the waist turns, and 8 degrees of slack by 2.4. The
-11-06 picture also shows the waist moving the picture 105 px at -0.7 drive for 0.5 s but 47 px
-at +0.7, and pan 11 px one way and 35 px the other: either slack in the linkage or a
-direction-dependent ratio. `scripts/check_head_gearing.py` tells them apart: it steps each
+**Results and limits.** The new controller passes all ten scenarios on the measured plant
+(overshoot at most 1.1 degrees, one waist move where one is needed), and the suite checks
+every scenario at the edges of camera delay 40-100 ms with servo lag 40-100 ms and field of
+view 64-74 degrees (their eight corners), servo lag up to 120 ms, pan ratio 0.28-0.42, tilt
+ratio 0.07-0.14, pan slack 3-8 and tilt slack 0-4 servo degrees, and waist speed 17-37 deg/s.
+Outside that it degrades without swinging: two errors that both shorten the counter-rotation
+(a pan ratio under 0.3 or 8 degrees of slack with a waist much faster than assumed) overshoot
+by 2-3 degrees while the waist turns, and servos lagging 0.16-0.2 s by 3-4. The 11-06
+picture also shows the waist moving the picture 105 px at -0.7 drive for 0.5 s but 47 px at
++0.7, and the slack may vary: the first pan move implies 8 degrees, the return 6.
+`scripts/check_head_gearing.py` measures them: it steps each
 servo up, down past the middle and back, and the waist each way for two durations, within the
 dashboard's motor test limits, and prints the ratio each way, the slack, and the waist's speed
 each way next to what the controller assumes. None of this has run on the robot's motors yet;

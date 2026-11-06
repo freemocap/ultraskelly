@@ -103,13 +103,14 @@ infer a human pose: each sample reports the person the pose node would follow
 detections (`dropout`, from a seeded random generator). Frames reach the controller
 `camera_latency` after capture (default 55 ms, measured 50-70 ms on the Pi).
 
-Servos close on their commands with a first-order lag (`servo_lag`, default 40 ms, not
-measured) and no faster than `servo_speed` (default 180°/s). The head's linkage gears
-them down: the camera turns `pan_ratio` (0.24) degrees per pan servo degree and nods
-`tilt_ratio` (0.1) per tilt servo degree, as measured on the robot on 2026-11-06, so the
-head reaches only about ±20° of pan and ±9° of tilt. `head_backlash` adds servo degrees of
-slack before the linkage follows a reversal (0 by default), and `pan_sign`/`tilt_sign`
-can turn either servo the wrong way, to test polarity. Waist velocity is
+Servos close on their commands with a first-order lag (`servo_lag`, default 80 ms: on the
+robot the picture moved about 0.15 s after a command) and no faster than `servo_speed`
+(default 180°/s). The head's linkage gears them down and has play, as measured on the robot
+on 2026-11-06: the camera turns `pan_ratio` (0.36) degrees per pan servo degree and nods
+`tilt_ratio` (0.1) per tilt servo degree, once the servo has crossed `pan_backlash` (6) or
+`tilt_backlash` (2) servo degrees of slack after a reversal. So the head reaches only about
+±30° of pan and ±9° of tilt. `pan_sign`/`tilt_sign` can turn either servo the wrong way, to
+test polarity. Waist velocity is
 `-throttle * waist_speed` (default 30°/s at full throttle; round 1 measured 18-23°/s at
 0.75), with illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
 Optional friction (`waist_breakaway`, `waist_stall`; both 0 by default, and set only
@@ -125,7 +126,8 @@ is from where the camera pointed when the frame was captured, aims 65% of the wa
 frame (so a scale or gear-ratio error cannot overshoot), smooths that goal, turns at most
 40°/s of view with S-curves, keeps 5 servo degrees clear of the end stops, and moves only
 once its goal is more than 1.5° away. It counter-rotates against the waist's estimated
-turn at once. Controllers retain lock across normal gaps between samples, but expire
+turn at once, and commands each servo half its linkage's slack past the view in the way it
+is moving, so a reversal takes the play up at once instead of leaving the head still. Controllers retain lock across normal gaps between samples, but expire
 missing input after 350 ms. Explicit loss or leaving the square immediately removes jaw
 power. Negative drive holds the spring-loaded jaw open for as long as lock remains valid;
 zero drive allows spring return. Opening/closing state durations are estimates, not feedback.
@@ -165,11 +167,11 @@ or turning back on a person who stands still).
 uv run --locked python -m pytest -q tests/test_scenarios.py
 ```
 
-The tests run every scenario on the plant above and on its variations within what was
-measured or assumed: camera delay 40-100 ms, servo lag 20-80 ms, field of view 64-74°, pan
-ratio 0.20-0.36, tilt ratio 0.07-0.14, waist 17-32°/s, 4 servo degrees of slack, and up
-to 0.2 s from a servo command to the camera seeing it (the robot took about 0.15 s). A
-reversed pan servo must be caught as a runaway. `scenarios.run(scenario, prepare)` returns
+The tests run every scenario on the plant above and at the edges of what was measured or
+assumed: camera delay 40-100 ms with servo lag 40-100 ms and field of view 64-74° (their
+corners), servo lag up to 120 ms, pan ratio 0.28-0.42, tilt ratio 0.07-0.14, pan slack 3-8
+and tilt slack 0-4 servo degrees, and waist 17-37°/s. A reversed pan servo must be caught as
+a runaway. `scenarios.run(scenario, prepare)` returns
 the trace and the verdict, so a tuning change can be checked the same way; `prepare`
 receives the `Simulation` before the run to change controller parameters.
 

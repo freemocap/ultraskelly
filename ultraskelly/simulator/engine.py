@@ -40,19 +40,22 @@ class Settings(BaseModel):
     waist_stall: float = Field(default=0.0, ge=0, lt=1)
     # The camera and servos as on the robot. The OAK-1 sees 69 degrees across its 4:3
     # sensor; frames reach the controller 50-70 ms after capture (measured on the Pi,
-    # 2026-11-02); the servo lag is an assumption until measured.
+    # 2026-11-02); with the servos' lag the picture moved about 0.15 s after a command (2026-11-06).
     camera_hfov: float = Field(default=69.0, gt=10, lt=170)
     camera_latency: float = Field(default=0.055, ge=0, le=0.5)
-    servo_lag: float = Field(default=0.04, ge=0, le=0.5)
+    servo_lag: float = Field(default=0.08, ge=0, le=0.5)  # The robot's picture moved ~0.15 s after a command
     pan_sign: Literal[1, -1] = 1  # -1: a larger pan command turns the camera the other way
     tilt_sign: Literal[1, -1] = 1
-    # The head's linkage gears the servos down: the camera turns pan_ratio degrees per degree of
-    # pan servo and tilt_ratio per degree of tilt, measured on the robot on 2026-11-06 (12 servo
-    # degrees moved the picture 11-35 px in pan and 9-10 px in tilt, at 8.1 px per degree near the
-    # middle), with head_backlash servo degrees of slack before the linkage follows a reversal.
-    pan_ratio: float = Field(default=0.24, gt=0, le=1)
+    # The head's linkage gears the servos down and has play, as measured on the robot on 2026-11-06
+    # at 8.1 px per degree near the middle: 12 servo degrees of pan moved the picture 35 px, and
+    # returning to 90 undid only half of it, about 6 servo degrees of slack (which also explains
+    # 11 px for the first move the other way); 12 degrees of tilt moved it 9-10 px and came back
+    # within 2 px. The camera turns pan_ratio degrees per pan servo degree and tilt_ratio per tilt
+    # degree, once the servo has crossed the slack after a reversal.
+    pan_ratio: float = Field(default=0.36, gt=0, le=1)
     tilt_ratio: float = Field(default=0.1, gt=0, le=1)
-    head_backlash: float = Field(default=0.0, ge=0, le=30)
+    pan_backlash: float = Field(default=6.0, ge=0, le=30)  # Servo degrees
+    tilt_backlash: float = Field(default=2.0, ge=0, le=30)
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
     dropout: float = Field(default=0.0, ge=0, lt=1)  # Share of samples in which the detector finds nobody
     seed: int = 0
@@ -205,8 +208,8 @@ class Simulation:
             await self.mouth.step()
             self.pan = self.servo(self.pan, self.head.pan_angle)
             self.tilt = self.servo(self.tilt, self.head.tilt_angle)
-            self.linkage = [play(self.linkage[0], self.pan, self.settings.head_backlash),
-                            play(self.linkage[1], self.tilt, self.settings.head_backlash)]
+            self.linkage = [play(self.linkage[0], self.pan, self.settings.pan_backlash),
+                            play(self.linkage[1], self.tilt, self.settings.tilt_backlash)]
             self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
