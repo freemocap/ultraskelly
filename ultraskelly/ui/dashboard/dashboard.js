@@ -11,7 +11,7 @@ import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
 import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.js';
-import { limitNote } from '/headpose.js';
+import { headNote, limitNote } from '/headpose.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -145,8 +145,9 @@ function explainParts(model, state) {
   series.setNote('drive', why('motor_board') ? 'not sent' : null);
 }
 
-// A head command at the end of its range, as the scene draws it (headpose.js): a skull nodded into the floor is the
-// command, not a fault in the scene.
+// How the scene draws the head (headpose.js), and a head command at the end of its range: there the tracking
+// controller has wound up while the real head barely moves.
+$('stage-head').textContent = headNote();
 function showLimits(state) {
   const commanded = name => state.motors?.commands?.[name]?.value;
   const note = limitNote({pan: commanded('pan'), tilt: commanded('tilt')});

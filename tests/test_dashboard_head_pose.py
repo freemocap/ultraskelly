@@ -1,7 +1,7 @@
-"""The dashboard's 3D head pose (ultraskelly/ui/dashboard/headpose.js), run under node: the ZED's depth is drawn out of
-the skull's face at every commanded angle and never as height, pan and tilt follow the simulator's convention, roll
-turns the head about its nose, and commands at their limits are named. World axes are the scene's: +y up, the skull
-facing +z at rest with its left at +x."""
+"""The dashboard's 3D head pose (ultraskelly/ui/dashboard/headpose.js), run under node: the ZED's depth stays rigid in
+the head, drawn out of the skull's face at every commanded angle and never as height; the head turns the way and as
+far as measured on the robot (scripts/check_motor_directions.py, 2026-11-06); roll turns it about its nose; commands
+at their limits are named. World axes are the scene's: +y up, the skull facing +z at rest with its left at +x."""
 import json
 import math
 import shutil
@@ -17,15 +17,25 @@ NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="needs node to run the dashboard's JavaScript")
 
 
-def drawn(*commands: dict) -> list[dict]:
-    """Where the scene draws the ZED's axes and the face for each command."""
+def run(*commands: dict) -> dict:
     done = subprocess.run([NODE, str(SCRIPT), str(HEADPOSE), json.dumps(list(commands))],
                           capture_output=True, encoding="utf-8", check=True, timeout=60)  # node writes UTF-8
     return json.loads(done.stdout)
 
 
+def drawn(*commands: dict) -> list[dict]:
+    """Where the scene draws the ZED's axes and the face for each command."""
+    return run(*commands)["cases"]
+
+
 def close(vector, expected):
     assert vector == pytest.approx(expected, abs=1e-9)
+
+
+def facing(left_degrees: float, up_degrees: float) -> list[float]:
+    """The face's direction turned this far to the skull's left and up."""
+    yaw, pitch = math.radians(left_degrees), math.radians(up_degrees)
+    return [math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)]
 
 
 def test_a_level_head_draws_depth_straight_out_of_the_face_not_as_height():
@@ -36,28 +46,25 @@ def test_a_level_head_draws_depth_straight_out_of_the_face_not_as_height():
     close(level["face"], [0, 0, 1])
 
 
-@pytest.mark.parametrize("pan", [30, 90, 150])
-@pytest.mark.parametrize("tilt", [60, 90, 120])
-def test_depth_stays_in_front_of_the_face_at_every_commanded_angle(pan, tilt):
+@pytest.mark.parametrize("pan", [0, 30, 90, 150, 180])
+@pytest.mark.parametrize("tilt", [0, 60, 90, 120, 180])
+def test_depth_stays_rigid_in_front_of_the_face_at_every_commanded_angle(pan, tilt):
     [pose] = drawn({"pan": pan, "tilt": tilt, "roll": 90})
     close(pose["lens"], pose["face"])
     close(pose["imageDown"], [-value for value in pose["top"]])
 
 
-@pytest.mark.parametrize("pan", [0, 30, 90, 150, 180])
-@pytest.mark.parametrize("tilt", [0, 60, 90, 120, 180])
-def test_the_face_points_where_the_simulator_points_its_camera(pan, tilt):
-    # ultraskelly/simulator/engine.py, Simulation.camera: yaw = pan - 90 (waist 0), pitch = 90 - tilt
-    yaw, pitch = math.radians(pan - 90), math.radians(90 - tilt)
+@pytest.mark.parametrize("pan, tilt, left, up", [
+    (150, 90, -12, 0),  # More pan turns the head to its own right, 0.2 degrees per servo degree
+    (30, 90, 12, 0),
+    (180, 90, -18, 0),  # Even the end of the servo's range turns the head only 18 degrees
+    (90, 120, 0, -3),   # More tilt nods it down, 0.1 degrees per servo degree
+    (90, 60, 0, 3),
+    (90, 180, 0, -9),   # A wound-up tilt draws a 9 degree nod, not the head pointing into the floor
+])
+def test_the_head_turns_the_way_and_as_far_as_measured_on_the_robot(pan, tilt, left, up):
     [pose] = drawn({"pan": pan, "tilt": tilt, "roll": 90})
-    close(pose["face"], [math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)])
-
-
-def test_pan_above_90_turns_the_head_to_its_left_and_tilt_above_90_nods_it_down():
-    left, right, down, up = drawn({"pan": 150, "tilt": 90}, {"pan": 30, "tilt": 90}, {"pan": 90, "tilt": 120},
-                                  {"pan": 90, "tilt": 60})
-    assert left["face"][0] > 0.8 and right["face"][0] < -0.8  # +x is the skull's left at rest
-    assert down["face"][1] == pytest.approx(-0.5) and up["face"][1] == pytest.approx(0.5)
+    close(pose["face"], facing(left, up))
 
 
 def test_roll_turns_the_head_about_its_nose():
@@ -68,9 +75,17 @@ def test_roll_turns_the_head_about_its_nose():
     close(rolled["imageDown"], [-0.5, -math.sqrt(3) / 2, 0])
 
 
-def test_commands_at_their_limits_are_named():
-    ahead, nodded, both = drawn({"pan": 90, "tilt": 90}, {"pan": 90, "tilt": 180}, {"pan": 0, "tilt": 0})
+def test_negative_waist_drive_turns_the_body_to_its_right():
+    right, left, still = drawn({"waist": -0.7}, {"waist": 0.7}, {"waist": 0.0})
+    assert (right["waist"], left["waist"], still["waist"]) == (-1, 1, 0)
+
+
+def test_head_commands_at_their_limits_are_named():
+    ahead, wound, both = drawn({"pan": 90, "tilt": 90}, {"pan": 90, "tilt": 180}, {"pan": 0, "tilt": 0})
     assert ahead["note"] is None
-    assert nodded["note"] == "Tilt commanded to its 180° limit: drawn nodded fully down"
-    assert both["note"] == ("Pan commanded to its 0° limit: drawn turned fully to its right · "
-                            "Tilt commanded to its 0° limit: drawn tipped fully up")
+    assert wound["note"] == "Tilt commanded to its 180° limit"
+    assert both["note"] == "Pan commanded to its 0° limit · Tilt commanded to its 0° limit"
+
+
+def test_the_scene_says_its_head_is_approximate():
+    assert run()["headNote"] == "Head approximate: 0.2° of turn and 0.1° of nod per servo degree, as measured"
