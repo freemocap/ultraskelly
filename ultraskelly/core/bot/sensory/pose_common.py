@@ -1,4 +1,5 @@
 """COCO keypoints and target selection shared by every pose detector. No hardware imports."""
+import math
 from enum import IntEnum
 
 import numpy as np
@@ -76,20 +77,48 @@ def body_angle_from_shoulders(*, keypoints: np.ndarray, keypoint_threshold: floa
     return float(angle)
 
 
+FOLLOW_SCORE_SHARE = 0.5  # People scoring at least this share of the best score are credible to follow
+
+
+def choose_person(
+    points: list[tuple[float, float] | None], scores: list[float], aim: tuple[float, float],
+) -> int | None:
+    """Index of the person to follow: of those with a target point and a score of at least
+    FOLLOW_SCORE_SHARE of the best, the one whose target point is nearest `aim`.
+
+    The head steers whoever it follows toward the aim point, so the person already being
+    followed sits nearest it, and the choice stays with them instead of flipping to whoever
+    scores a little higher on a given frame. None when nobody has a target point.
+    """
+    credible = [score for point, score in zip(points, scores) if point is not None]
+    if not credible:
+        return None
+    floor = FOLLOW_SCORE_SHARE * max(credible)
+    candidates = [
+        (math.dist(point, aim), index)
+        for index, (point, score) in enumerate(zip(points, scores))
+        if point is not None and score >= floor
+    ]
+    return min(candidates)[1]
+
+
 def locate_target(
     *,
     keypoints: np.ndarray | None,
     scores: np.ndarray | None,
     target_keypoint: CocoKeypoint,
     keypoint_threshold: float,
+    aim: tuple[float, float] | None = None,
 ) -> tuple[int | None, tuple[int | None, int | None, float | None]]:
-    """The person the head follows, the highest-scoring one, and their target.
+    """The person the head follows and their target.
 
     Args:
         keypoints: All people's keypoints, shape (num_people, 17, 3), or None.
         scores: Person confidences, shape (num_people,), or None.
         target_keypoint: Body part to track.
         keypoint_threshold: Minimum confidence for the target keypoint.
+        aim: Where in the frame the head steers its target. With it, the person is chosen by
+            `choose_person`; without it, the highest-scoring person is.
 
     Returns:
         (row, (x, y, angle)): the person's row in `keypoints`, their target keypoint in frame
@@ -99,7 +128,17 @@ def locate_target(
     if keypoints is None or scores is None or len(scores) == 0:
         return None, (None, None, None)
 
-    row = int(np.argmax(scores))
+    if aim is None:
+        row = int(np.argmax(scores))
+    else:
+        points = [
+            (float(person[target_keypoint][0]), float(person[target_keypoint][1]))
+            if person[target_keypoint][2] >= keypoint_threshold else None
+            for person in keypoints
+        ]
+        row = choose_person(points, [float(score) for score in scores], aim)
+        if row is None:
+            return None, (None, None, None)
     person = keypoints[row]
     target = person[target_keypoint]
     if target[2] < keypoint_threshold:

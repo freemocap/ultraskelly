@@ -177,14 +177,23 @@ class HailoPoseDetectorNode(DetectorNode):
     async def _publish(self, detections: PoseDetections | None, frame: FrameMessage | None = None) -> None:
         """Publish the target and full pose data detected in `frame`; None or no people means no target.
         The pose data carries the same target and the row of the person it belongs to."""
+        captured = frame.timestamp if frame is not None else None  # Lets the head allow for this pipeline's delay
         if detections is None or detections.count == 0:
-            target = TargetLocationMessage()
+            target = TargetLocationMessage(captured=captured)
             await self.pubsub.topics[TargetLocationTopic].publish(target)
             await self.pubsub.topics[PoseDataTopic].publish(PoseDataMessage(frame=frame, target=target))
             return
 
-        row, (x, y, angle) = self._locate_target(detections)
-        target = TargetLocationMessage(x=x, y=y, angle=angle)
+        # Follow whoever the head already aims at, not whoever scores highest this frame.
+        aim = (frame.frame.shape[1] / 2, frame.frame.shape[0] / 2) if frame is not None else None
+        row, (x, y, angle) = locate_target(
+            keypoints=detections.keypoints,
+            scores=detections.scores,
+            target_keypoint=self.params.target_keypoint,
+            keypoint_threshold=self.params.keypoint_threshold,
+            aim=aim,
+        )
+        target = TargetLocationMessage(x=x, y=y, angle=angle, captured=captured)
         await self.pubsub.topics[TargetLocationTopic].publish(target)
         await self.pubsub.topics[PoseDataTopic].publish(
             PoseDataMessage(

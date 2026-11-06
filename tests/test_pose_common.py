@@ -4,6 +4,7 @@ import pytest
 from ultraskelly.core.bot.sensory.pose_common import (
     CocoKeypoint,
     body_angle_from_shoulders,
+    choose_person,
     locate_target,
     select_target,
 )
@@ -92,3 +93,21 @@ def test_locate_target_follows_nobody_when_the_best_persons_target_keypoint_is_u
     assert locate_target(
         keypoints=keypoints, scores=np.array([0.6, 0.8]), target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4
     ) == (None, (None, None, None))
+
+
+def test_with_an_aim_point_the_head_keeps_following_whoever_it_is_centered_on():
+    centered, other = person(nose=(322.0, 238.0, 0.9)), person(nose=(500.0, 240.0, 0.9))
+    keypoints, scores = np.stack([other, centered]), np.array([0.92, 0.85])  # The other one scores a bit higher
+    row, (x, y, _) = locate_target(
+        keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4, aim=(320, 240),
+    )
+    assert (row, x, y) == (1, 322, 238)
+    without_aim, _ = locate_target(keypoints=keypoints, scores=scores, target_keypoint=CocoKeypoint.NOSE, keypoint_threshold=0.4)
+    assert without_aim == 0  # Highest score, as before
+
+
+def test_choose_person_ignores_weak_detections_and_missing_points():
+    aim = (320.0, 240.0)
+    assert choose_person([(330.0, 240.0), (600.0, 240.0)], [0.3, 0.9], aim) == 1  # Under half the best score: not credible
+    assert choose_person([None, (600.0, 240.0)], [0.9, 0.5], aim) == 1
+    assert choose_person([None, None], [0.9, 0.5], aim) is None

@@ -115,6 +115,7 @@ class TargetLocationMessage(TopicMessageABC):
     x: int | None = None
     y: int | None = None
     angle: float | None = None  # Rotation angle in degrees
+    captured: float | None = None  # When the camera captured the frame it came from, on time.monotonic()'s clock
 
     model_config = ConfigDict(frozen=True)
 
