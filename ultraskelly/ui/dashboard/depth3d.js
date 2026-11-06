@@ -1,8 +1,10 @@
 // The ZED's depth in the 3D scene (docs/depth-stream.md): a point cloud and a mesh unprojected on the
 // GPU from the 16-bit depth texture, coloured by the rectified left image, and placed on the skeleton's
 // head through each message's camera_to_head. They ride on the head, so they turn with the commanded
-// pan and tilt; the waist angle is not measured, so where the head points in the room is an estimate.
+// pan, tilt and roll (headpose.js); the head's angles and the waist's are not measured, so where the head
+// points in the room is the commands' picture of it, not a measurement.
 import * as THREE from 'three';
+import { H_AXES, OPTICAL_TO_HEAD } from '/headpose.js';
 
 const MESH_STEP = 2;       // The mesh joins every second depth pixel; the cloud shows them all
 const JUMP = 0.06;         // A relative depth change above 6% between neighbours is an occlusion edge
@@ -102,11 +104,11 @@ function gridGeometry(columns, rows, triangles) {
 // origin: the head frame's origin in that group (midway between the eye sockets); scale: metres per
 // skeleton unit; invalidate: asks the scene to draw again.
 export function createDepthLayer({head, origin, scale, invalidate}) {
-  // The head frame H (+x forward, +y the skull's left, +z up), in metres. The skeleton's head group has
-  // +x to the skull's left, +y up and +z out of the face, so its axes are (H.y, H.z, H.x).
+  // The head frame H (+x forward, +y the skull's left, +z up), in metres, on the skeleton's head group
+  // (+x the skull's left, +y up, +z out of the face): H_AXES gives H's axes in the group's.
   const group = new THREE.Group();
   group.matrixAutoUpdate = false;
-  group.matrix.makeBasis(new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0))
+  group.matrix.makeBasis(...H_AXES.map(axis => new THREE.Vector3(...axis)))
     .scale(new THREE.Vector3(1 / scale, 1 / scale, 1 / scale)).setPosition(origin);
   head.add(group);
 
@@ -180,7 +182,7 @@ export function createDepthLayer({head, origin, scale, invalidate}) {
     uniforms.pixelStep.value = meta.step;
     uniforms.colorSize.value.set(camera.width, camera.height);
     // Without a pose, assume the nominal one: the left lens at the left eye socket, looking forward.
-    const rows = pose?.rotation ?? [[0, 0, 1], [-1, 0, 0], [0, -1, 0]];
+    const rows = pose?.rotation ?? OPTICAL_TO_HEAD;
     const rotation = uniforms.cameraRotation.value.set(...rows[0], ...rows[1], ...rows[2]);
     const translation = uniforms.cameraTranslation.value.fromArray(pose?.translation_m ?? [0, 0.0315, 0]);
     const placement = JSON.stringify([camera.fx, camera.fy, camera.cx, camera.cy, camera.width, camera.height, rows, pose?.translation_m]);

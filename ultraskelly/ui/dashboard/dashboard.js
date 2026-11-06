@@ -11,6 +11,7 @@ import { TimeSeries } from '/timeseries.js';
 import { FrameClock } from '/frameclock.js';
 import { OakFinds, measuresOf } from '/faces.js';
 import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.js';
+import { headNote, limitNote } from '/headpose.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 
 const $ = id => document.getElementById(id);
@@ -142,6 +143,15 @@ function explainParts(model, state) {
   // While a board is down the controllers still run and record their commands, but nothing reaches it.
   series.setNote('head', why('servo_board') ? 'not sent' : null);
   series.setNote('drive', why('motor_board') ? 'not sent' : null);
+}
+
+// How the scene draws the head (headpose.js), and a head command at the end of its range: there the tracking
+// controller has wound up while the real head barely moves.
+$('stage-head').textContent = headNote();
+function showLimits(state) {
+  const commanded = name => state.motors?.commands?.[name]?.value;
+  const note = limitNote({pan: commanded('pan'), tilt: commanded('tilt')});
+  setText($('stage-limits'), note ?? ''); setProperty($('stage-limits'), 'hidden', !note);
 }
 
 function showFace(state) {
@@ -287,7 +297,7 @@ clock.add(() => {
   tiles.showTargetWithoutVideo(state);
   health.update(healthOf(state, latestHealth));
   explainParts(health.model, state);
-  showMode(state); showTarget(state); showFace(state); showTests(state, health.model);
+  showMode(state); showTarget(state); showFace(state); showTests(state, health.model); showLimits(state);
   motorTest.update(state, health.model);
   return false;
 });

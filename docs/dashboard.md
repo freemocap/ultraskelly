@@ -142,11 +142,28 @@ is busy, only the newest frame waits.
 - **In 3D:** the scene is in metres, with the schematic skeleton drawn at the robot's estimated
   eye height of 1.88 m (skellycad's UltraSkelly mock-up). The vertex shaders unproject the
   16-bit depth with the message's intrinsics and place it on the head through
-  `camera_to_head`, whose head frame starts midway between the eye sockets. The depth turns
-  with the commanded pan and tilt; the waist angle is not measured, so where it points in the
-  room is an estimate. **Cloud** shows every depth pixel and **Mesh** joins every second one,
-  dropping triangles at unknown pixels and at depth jumps over 6%. The ZED's view cone reaches
-  1.5 m. Depth that stops arriving disappears after 3 s.
+  `camera_to_head`, whose head frame starts midway between the eye sockets. Depth runs out of
+  the face, never up: the ZED's lens axis is the head frame's forward axis, and its image down
+  is the head's down. The depth turns with the commanded pan, tilt and roll; the waist angle is
+  not measured, so where it points in the room is an estimate. **Cloud** shows every depth
+  pixel and **Mesh** joins every second one, dropping triangles at unknown pixels and at depth
+  jumps over 6%. The ZED's view cone reaches 1.5 m. Depth that stops arriving disappears after 3 s.
+- **Head angles** (`headpose.js`, tested in `tests/test_dashboard_head_pose.py`): the head is
+  drawn from its commands at the ratios measured on the robot, so the scene says "Head
+  approximate". On 2026-11-06 `scripts/check_motor_directions.py` found the real head turning
+  about 0.2° per servo degree of pan and 0.1° per servo degree of tilt (12 servo degrees moved
+  the upright OAK picture 11-35 px and 9-10 px, at about 9.3 px per degree). More pan turns the
+  head to its own right, more tilt nods it down, and negative waist drive turns the body to its
+  right, which the waist arrow shows. That pan and waist turn is the mirror of the simulator's,
+  whose camera image is mirrored too. Roll is held at 90; its direction and ratio are not
+  measured. Drawn one servo degree per head degree, as before, a tracking controller that wound
+  up to 0 or 180 pitched the skull 90° into the floor with the depth lying flat in front of it,
+  while the real head moved a few degrees. A head command at the end of its range still says so
+  under the scene's title ("Tilt commanded to its 180° limit"). At 90/90 the real head looks up
+  at the ceiling; how far is not measured, so `HEAD_AT_LEVEL` draws it level until it is. The
+  ZED's IMU could give the head's measured pitch and roll, but its axes have no place in the
+  head yet (docs/stream.md, "imu"): two still readings would place them, the ZED level and
+  upright, then pointing straight down.
 
 ## Gaze
 
