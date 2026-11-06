@@ -54,7 +54,7 @@ def depth_along(depth: np.ndarray, columns: np.ndarray, rows: np.ndarray, radius
     offsets = np.arange(-radius, radius + 1)
     near_columns = np.clip(columns[:, None, None] + offsets[None, None, :], 0, depth.shape[1] - 1)
     near_rows = np.clip(rows[:, None, None] + offsets[None, :, None], 0, depth.shape[0] - 1)
-    values = depth[near_rows, near_columns].reshape(len(columns), -1).astype(float)
+    values = depth[near_rows, near_columns].reshape(len(columns), offsets.size ** 2).astype(float)  # Also for no pixels
     values[values == 0] = np.nan
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # A window with no depth gives NaN, as wanted

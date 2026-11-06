@@ -8,8 +8,9 @@ from unittest.mock import MagicMock, call
 import numpy as np
 import pytest
 
-from ultraskelly.core.bot.sensory.mediapipe_hands import palm_anchors
-from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams, OakModelParams
+from ultraskelly.core.bot.sensory.mediapipe_hands import HandCrop, palm_anchors
+from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams, OakModelParams, crop_request
+from ultraskelly.core.bot.sensory.oak_faces import Crop, CropKind
 from ultraskelly.core.bot.sensory.oak_results import ResultsAssembler
 from ultraskelly.core.bot.sensory.yunet import yunet_priors
 from ultraskelly.core.pubsub.bot_topics import OakResultsMessage, OakResultsTopic, FrameMessage, FrameTopic
@@ -62,7 +63,18 @@ class Detection(SimpleNamespace):
         self.rect = rect
 
 
+class Pair(tuple):
+    """depthai's Point2f or Size2f as an (x, y) pair. Unmarked, depthai guesses `normalized` from the values."""
+
+    def __new__(cls, first, second, normalized=None):
+        pair = super().__new__(cls, (first, second))
+        pair.normalized = 0 <= first <= 1 and 0 <= second <= 1 if normalized is None else normalized
+        return pair
+
+
 def rotated_rect(center, size, angle):
+    if center.normalized != size.normalized:
+        raise RuntimeError("Cannot create RotatedRect with mixed normalization")  # As depthai 3.11 does
     return SimpleNamespace(center=center, size=size, angle=angle)
 
 
@@ -72,7 +84,7 @@ class Detections:
 
 
 dai = SimpleNamespace(MessageGroup=Group, ImgDetection=Detection, ImgDetections=Detections, RotatedRect=rotated_rect,
-                      Point2f=lambda x, y: (x, y), Size2f=lambda w, h: (w, h))
+                      Point2f=Pair, Size2f=Pair)
 
 
 class Loop:
@@ -229,3 +241,12 @@ def test_a_missing_model_leaves_the_oak_without_models_instead_of_stopping_the_b
 
     assert node.assembler is None and "face_detection" not in node.queues
     assert "is not in" in node.status()["models_error"]
+
+
+def test_a_hand_bigger_than_the_frame_or_centred_past_its_edge_still_becomes_a_crop_request():
+    # 2026-11-06: a hand against the lens stopped the OAK ("Cannot create RotatedRect with mixed normalization").
+    for hand in (HandCrop(center=(320.0, 240.0), side=900.0, angle=10.0), HandCrop(center=(-40.0, 240.0), side=200.0, angle=0.0)):
+        request = crop_request(dai, [Crop(kind=CropKind.HAND, row=0, hand=hand)], sequence=3, width=640, height=480)
+        [detection] = request.detections
+        assert detection.rect.center.normalized and detection.rect.size.normalized
+        assert detection.rect.size[0] * 640 == pytest.approx(hand.side)

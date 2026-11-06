@@ -74,6 +74,8 @@ def test_the_ray_stops_at_the_first_surface_it_passes_behind():
     ball_hit = locate_along_ray(origin, forward, scene(3.0, (np.array([0.0315, 0.035, 1.0]), 0.09)), HALF_VGA)
     assert ball_hit[2] == pytest.approx(0.91, abs=0.02)
     assert locate_along_ray(origin, forward, np.zeros((188, 336), np.uint16), HALF_VGA) is None  # No depth anywhere
+    # A ray that never crosses the depth image (2026-11-06 it stopped the bot): no point, no error.
+    assert locate_along_ray(origin, np.array([1.0, 0.0, 0.0]), scene(1.5), HALF_VGA) is None
 
 
 def test_the_oak_pose_is_recovered_from_points_and_their_oak_pixels():

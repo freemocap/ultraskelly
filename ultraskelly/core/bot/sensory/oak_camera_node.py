@@ -422,9 +422,11 @@ def crop_request(dai, crops: list[Crop], sequence: int, width: int, height: int)
         detection = dai.ImgDetection()
         if crop.kind == CropKind.HAND:
             hand = crop.hand
+            # Marked normalized: unmarked, DepthAI guesses it from the values, so a hand bigger than
+            # the frame or centred past its edge reads as mixed and the rectangle is refused.
             detection.setBoundingBox(dai.RotatedRect(
-                dai.Point2f(hand.center[0] / width, hand.center[1] / height),
-                dai.Size2f(hand.side / width, hand.side / height), hand.angle))
+                dai.Point2f(hand.center[0] / width, hand.center[1] / height, True),
+                dai.Size2f(hand.side / width, hand.side / height, True), hand.angle))
         else:
             detection.xmin, detection.ymin, detection.xmax, detection.ymax = crop.box
         detection.label = int(crop.kind)
