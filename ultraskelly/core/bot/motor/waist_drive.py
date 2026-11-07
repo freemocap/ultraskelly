@@ -42,6 +42,7 @@ RESTART_AFTER = 0.5  # Seconds without an update: the motor watchdog has braked 
 class WaistDriveParams(NodeParams):
     """How the waist turns toward the target. Throttles are magnitudes; angles are its bearing from the body."""
 
+    enabled: bool = Field(default=True, description="Turn the torso toward the target; off, the waist stays braked except in motor tests")
     start_angle: float = Field(default=15.0, ge=0.0, le=90.0, description="Target bearing from the body (degrees) that starts a move")
     stop_angle: float = Field(default=5.0, ge=0.0, le=90.0, description="A move stops once the target bearing is this small")
     min_throttle: float = Field(default=0.5, ge=0.0, le=1.0, description="Running drive with the target at start_angle")

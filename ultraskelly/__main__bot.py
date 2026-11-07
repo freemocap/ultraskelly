@@ -9,6 +9,8 @@ import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.roll_level import RollLevelParams
+from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -91,7 +93,11 @@ def launch_config(
     # The head, roll and waist run their defaults: fitted to the gearing, slack and direction measured on the
     # robot on 2026-11-06 and checked by the closed-loop scenarios (tests/test_scenarios.py), which run the
     # defaults, so nothing is overridden here.
-    config.orientation = OrientationNodeParams(follow=follow)
+    # Head-only tuning, 2026-11-06 (the user: disable the waist and tune the head's face centering first, then
+    # work the waist back in): the waist stays braked and the roll upright, so only pan and tilt follow.
+    config.orientation = OrientationNodeParams(
+        follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
+    )
     return config
 
 

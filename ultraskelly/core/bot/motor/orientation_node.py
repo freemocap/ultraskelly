@@ -245,10 +245,13 @@ class OrientationNode(Node):
         # Turn the torso toward the target, once the head has finished turning: by its bearing from
         # the body, which reaches past the geared head's few degrees of pan. The head counter-rotates
         # back toward the middle meanwhile; without a target the waist ramps to a stop.
-        self.waist_motor.throttle = self.waist_drive.update(
-            now=now, pan_offset=self.head_aim.bearing() if valid else None,
-            head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
-        )
+        if self.params.waist.enabled:
+            self.waist_motor.throttle = self.waist_drive.update(
+                now=now, pan_offset=self.head_aim.bearing() if valid else None,
+                head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
+            )
+        else:
+            self.waist_motor.throttle = 0.0  # Off: braked, so only motor tests turn the waist
         self.waist_mode = self.waist_drive.state
         # Publish explicit loss as well as valid lock state so the jaw can release. Angles as commanded.
         await self.pubsub.publish(ServoStateTopic, ServoStateMessage(

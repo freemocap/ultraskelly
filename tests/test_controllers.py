@@ -124,7 +124,25 @@ def test_the_robot_launches_with_the_calmer_tuning():
     from ultraskelly.__main__bot import launch_config
 
     head = launch_config().orientation
-    assert head.follow and head.roll.enabled
-    assert head.model_dump() == OrientationNodeParams().model_dump()  # The defaults the closed-loop scenarios check
+    assert head.follow
+    launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
+    # While the head is tuned alone (2026-11-06), roll and waist may be off; nothing else may differ
+    for part in ("roll", "waist"):
+        launched[part]["enabled"] = defaults[part]["enabled"]
+    assert launched == defaults  # The defaults the closed-loop scenarios check
     assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
     assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7
+
+
+def test_with_the_waist_off_following_never_drives_it():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        node.params.waist.enabled = False
+        node.pan_angle = 160  # Far round: with the waist on this starts a move
+        for tick in range(100):
+            if tick % 10 == 0:
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=600, y=240))
+            await node.step()
+            assert node.waist_motor.throttle == 0.0
+        bus.close()
+    asyncio.run(scenario())
