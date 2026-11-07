@@ -50,6 +50,9 @@ class Settings(BaseModel):
     waist_speed_positive: float = Field(default=plant.WAIST.speed_positive, ge=0, le=180)
     waist_breakaway: float = Field(default=plant.WAIST.breakaway, ge=0, le=1)
     waist_stall: float = Field(default=plant.WAIST.stall, ge=0, lt=1)
+    waist_time_constant: float = Field(default=plant.WAIST.time_constant, gt=0, le=2)  # Seconds to reach its speed
+    waist_brake_time: float = Field(default=plant.WAIST.brake_time, gt=0, le=2)  # Seconds to stop, braked
+    waist_coast_time: float = Field(default=plant.WAIST.coast_time, gt=0, le=5)  # And released to coast
     # The camera as on the robot: the OAK-1 sees 69 degrees across its 4:3 sensor, and pose results
     # reach the controller about 0.06 s after capture (2026-11-06).
     camera_hfov: float = Field(default=69.0, gt=10, lt=170)
@@ -143,7 +146,8 @@ class Simulation:
     def build_waist(self) -> Waist:
         s = self.settings
         return Waist(WaistModel(breakaway=s.waist_breakaway, stall=s.waist_stall, speed_negative=s.waist_speed,
-                                speed_positive=s.waist_speed_positive, time_constant=plant.WAIST.time_constant))
+                                speed_positive=s.waist_speed_positive, time_constant=s.waist_time_constant,
+                                brake_time=s.waist_brake_time, coast_time=s.waist_coast_time))
 
     @property
     def pan(self) -> float:

@@ -9,6 +9,7 @@ controllers through the simulator's camera and servos (see engine.py). Its verdi
 - runaway: a servo command reaching its end stop, or losing a person who stays in view;
 - aim: still off a standing person by more than AIM_DEGREES at the end;
 - waist hunting: the waist turning one way and then back while the person stands still;
+- body overshoot: the waist turning more than BODY_OVERSHOOT_DEGREES past a person who stands still;
 - roll: the head's roll turning back and forth (in every scenario), and in those about a
   tilted face, turning the face more than ROLL_OVERSHOOT past level, ending neither within
   ROLL_AIM of level nor ROLL_TOWARD closer to it than the person's own tilt (the robot's roll
@@ -18,6 +19,7 @@ Bearings are degrees from the robot's base: positive yaw to the robot's left as 
 simulator draws it, positive pitch up.
 """
 import asyncio
+import math
 import threading
 from dataclasses import dataclass, field
 from typing import Callable
@@ -25,6 +27,7 @@ from typing import Callable
 from ultraskelly.simulator.engine import HEIGHT, Person, Settings, Simulation
 
 OVERSHOOT_DEGREES = 2.0
+BODY_OVERSHOOT_DEGREES = 3.0  # The waist may turn this far past a still person (the camera's overshoot is judged apart)
 AIM_DEGREES = 2.5
 REVERSAL_DEGREES = 0.5  # A turn back counts once the command has come back this far
 LIMIT_MARGIN = 2.0  # Degrees from a servo's 0 or 180 that count as reaching its end stop
@@ -83,6 +86,7 @@ class Verdict:
     final_error: float | None = None
     waist_moves: int = 0
     waist_reversals: int = 0
+    body_overshoot: float = 0.0  # Degrees the waist turned past a still person
     roll_reversals: int = 0
     roll_overshoot: float = 0.0
     final_tilt: float | None = None
@@ -147,6 +151,11 @@ def ghosts(base: Callable[[float], list[Person]], every: float = 0.7, frames: tu
 
 def nobody(t: float) -> list[Person]:
     return []
+
+
+def swaying(centre: float, amplitude: float, frequency: float) -> Callable[[float], list[Person]]:
+    """Someone swaying `amplitude` degrees either side of `centre` at `frequency` Hz."""
+    return lambda t: [Person(centre + amplitude * math.sin(2 * math.pi * frequency * t), 0.0)]
 
 
 def comes_and_goes(first: float, second: float, gone: tuple[float, float]) -> Callable[[float], list[Person]]:
@@ -229,6 +238,46 @@ HEAD_BY_NAME = {scenario.name: scenario for scenario in HEAD_BATTERY}
 LOW_FACE = Scenario("low-face", "A person 12 degrees left whose face stays low in the picture, 238 px below the "
                     "middle and still 204 once tilt has turned down as far as it can", 4.0, still(12.0, -24.5),
                     aim=False)
+
+# Frozen held-out sets (2026-11-07): new amplitudes, timings, speeds and fault patterns, never used while tuning
+# (simulator/tuning.py), only to check a tuning afterwards. Refresh them only with a new tuning campaign.
+HELD_OUT_HEAD = [  # The head alone, as HEAD_BATTERY
+    Scenario("ho-step-8", "A person steps in 8 degrees to the left", 4.0, still(8.0)),
+    Scenario("ho-step-14-right", "A person steps in 14 degrees to the right", 4.0, still(-14.0)),
+    Scenario("ho-step-18", "A person 18 degrees off, near the end of the head's reach", 4.0, still(18.0)),
+    Scenario("ho-late", "A person appears 6 degrees right a second in", 4.0, still(-6.0, appear=1.0)),
+    Scenario("ho-diagonal", "A person 10 degrees right and 3 up", 4.0, still(-10.0, 3.0)),
+    Scenario("ho-walk-slow", "A person walks from -12 to 12 degrees at 6 deg/s", 6.0, walking(-12.0, 12.0, 6.0),
+             step=False, max_reversals=2),
+    Scenario("ho-walk-fast", "A person hurries from 14 to -14 degrees at 20 deg/s", 4.0, walking(14.0, -14.0, 20.0),
+             step=False, max_reversals=2),
+    Scenario("ho-sway", "A person sways 8 degrees either side at 0.2 Hz", 6.0, swaying(0.0, 8.0, 0.2), step=False,
+             max_reversals=3),
+    Scenario("ho-noisy", "A person 12 degrees right with 3 px of jitter and a fifth of detections dropped", 5.0,
+             still(-12.0), settings={"noise_px": 3.0, "dropout": 0.2}),
+    Scenario("ho-ghosts-person", "A person 8 degrees right; false detections at the edges every 0.55 s", 5.0,
+             ghosts(still(-8.0), every=0.55), max_reversals=1),
+    Scenario("ho-ghosts-sparse", "Nobody there: false detections at 25 degrees, 1-3 frames every 1.1 s", 5.0,
+             ghosts(nobody, every=1.1, yaw=25.0), step=False, still_within=0.5),
+    Scenario("ho-swap", "Two people 18 degrees apart whose scores swap every 0.2 s", 5.0, two_people(12.0, -6.0, 0.2),
+             step=False),
+    Scenario("ho-comes-goes", "A person at -12 degrees leaves for 1 s; another appears at 6", 6.0,
+             comes_and_goes(-12.0, 6.0, (2.0, 3.0)), step=False, max_reversals=2),
+]
+HELD_OUT_FULL = [  # The whole robot, head, waist and roll, as SCENARIOS
+    Scenario("ho-far-right", "A person 27 degrees right: the waist turns its slow way", 8.0, still(-27.0)),
+    Scenario("ho-far-25", "A person 25 degrees left", 8.0, still(25.0)),
+    Scenario("ho-far-30", "A person 30 degrees left, by the picture's edge", 8.0, still(30.0)),
+    Scenario("ho-left-22", "A person 22 degrees left", 6.0, still(22.0)),
+    Scenario("ho-walk-across", "A person walks from -30 to 30 degrees at 18 deg/s", 7.0, walking(-30.0, 30.0, 18.0),
+             step=False, max_reversals=2, max_waist_moves=2),
+    Scenario("ho-walk-away-right", "A person walks from -10 to -70 degrees at 12 deg/s, out of the head's reach", 9.0,
+             walking(-10.0, -70.0, 12.0), step=False, max_reversals=2, max_waist_moves=3),
+    Scenario("ho-far-noisy", "A person 26 degrees left with 3 px of jitter and a fifth of detections dropped", 8.0,
+             still(26.0), settings={"noise_px": 3.0, "landmark_noise_px": 1.0, "dropout": 0.2}),
+    Scenario("ho-switch-sides", "A person at 24 degrees leaves after 4 s; another appears at -22", 10.0,
+             comes_and_goes(24.0, -22.0, (4.0, 5.0)), step=False, max_reversals=2, max_waist_moves=2),
+]
 
 
 def head_alone(sim: Simulation) -> None:
@@ -375,6 +424,12 @@ def judge(scenario: Scenario, trace: Trace) -> Verdict:
         verdict.failures.append(f"waist hunting: {moves} moves (allowed {scenario.max_waist_moves})")
     elif scenario.step and verdict.waist_reversals:
         verdict.failures.append(f"waist hunting: turned back {verdict.waist_reversals} times")
+    if scenario.step:
+        past = [(waist - person) * (1 if person > 0 else -1)
+                for waist, person in zip(trace.waist, trace.person_yaw) if person is not None and person != 0.0]
+        verdict.body_overshoot = max([0.0, *past])
+        if verdict.body_overshoot > BODY_OVERSHOOT_DEGREES:
+            verdict.failures.append(f"body overshoot: the waist turned {verdict.body_overshoot:.1f} degrees past the person")
     roll_judgement(scenario, trace, verdict)
     motion_judgement(scenario, trace, verdict)
     return verdict
