@@ -757,6 +757,17 @@ batch now stops the tuner with its checkpoint kept rather than waiting forever. 
 simulator's head speed setting replaced the controller's top speed in every run, so the scenarios
 had run the head at 40 deg/s whatever its default; it now does so only when set.
 
+The edge gate (a target within 40 px of the picture's edge must be confirmed like a jump) now covers
+the left and right edges only. On the robot (run 20261106-222520) tilt went to its end turning down
+and a standing person's face still sat 116-217 px below the middle, 3.1 degrees of head pitch by the
+ZED's accelerometer: the head cannot look down to them, so real faces sit by the bottom edge, where
+the gate would have held pan to a jump every five sightings. A face kept 204-238 px below the middle
+now pans as one at eye level (within 1.5 degrees after 1.77 s against 1.76, ending 0.26 off).
+Checked against the coordinator's checkpoint from the third tuner run (reach 0.40, smoothing 0.51,
+15 deg/s^2, the minimum of that search's range), on the same head: it costs 65.8 against 64.4,
+settles 12-degree steps in 2.22 s against 1.75, and overshoots at most 0.22 degrees on any plant
+against 0.51; neither fails anything.
+
 **Not done.** The waist and the roll are not tuned on the measured plant: the whole robot fails
 "left", "right" and "far" (a person beyond the head's reach and a waist that breaks loose only above
 0.65 drive) and "tilt-noisy" (the roll levels a noisy face by a little under the degree asked), as

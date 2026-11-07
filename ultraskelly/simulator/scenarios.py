@@ -22,7 +22,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
-from ultraskelly.simulator.engine import Person, Settings, Simulation
+from ultraskelly.simulator.engine import HEIGHT, Person, Settings, Simulation
 
 OVERSHOOT_DEGREES = 2.0
 AIM_DEGREES = 2.5
@@ -70,6 +70,7 @@ class Trace:
     picture_roll: list[float] = field(default_factory=list)  # How far the roll actually turned the picture, degrees
     person_roll: list[float | None] = field(default_factory=list)  # The followed face's own tilt
     face_tilt: list[float | None] = field(default_factory=list)  # And its tilt in the picture
+    target_y: list[float | None] = field(default_factory=list)  # The last sampled target's pixels below the middle
     half_fov: float = 34.5  # Degrees from the image centre to its side edge
 
 
@@ -222,6 +223,12 @@ HEAD_BATTERY = [
              ghosts(nobody, every=0.4, frames=(2, 3), yaw=31.0, score=0.6), step=False, still_within=0.5),
 ]
 HEAD_BY_NAME = {scenario.name: scenario for scenario in HEAD_BATTERY}
+# On the robot (run 20261106-222520) tilt reached its end turning down, and a standing person's face still sat
+# 116-217 px below the middle of the picture: the head cannot look down to them. Pan must follow such a face as
+# it follows one at eye level (tests/test_scenarios_tuning.py).
+LOW_FACE = Scenario("low-face", "A person 12 degrees left whose face stays low in the picture, 238 px below the "
+                    "middle and still 204 once tilt has turned down as far as it can", 4.0, still(12.0, -24.5),
+                    aim=False)
 
 
 def head_alone(sim: Simulation) -> None:
@@ -309,6 +316,8 @@ async def record(scenario: Scenario, prepare: Callable[[Simulation], None] | Non
             trace.picture_roll.append(sim.picture_roll())
             trace.person_roll.append(None if person is None else person.roll)
             trace.face_tilt.append(None if person is None else person.roll - sim.picture_roll())
+            row = sim.last_camera["y"]
+            trace.target_y.append(None if row is None else row - HEIGHT / 2)
     finally:
         sim.close()
     return trace

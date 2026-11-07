@@ -130,6 +130,8 @@ def test_the_robot_launches_with_the_calmer_tuning():
     for part in ("roll", "waist"):
         launched[part]["enabled"] = defaults[part]["enabled"]
     assert launched == defaults  # The defaults the closed-loop scenarios check
+    # Tuned on the measured plant (simulator/tuning.py, 2026-11-06) to reach 0.30 and 15 deg/s, inside these
+    # bounds: the head battery passes calm with pan geared 1.5 and 2 times the fit (worst overshoot 0.51 degrees).
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
     assert head.aim.pan_range == (20.0, 160.0) and head.aim.tilt_range == (20.0, 130.0)  # Measured 2026-11-06
     limits = launch_config().limits

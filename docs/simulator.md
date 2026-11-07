@@ -148,8 +148,10 @@ starts ringing of about a/ωₙ² = 34/11.84² = 0.24° in pan's 1.9 Hz mode, un
 the input shaper it has is left off), keeps 5 servo degrees inside its servo windows (pan
 20-160, tilt 20-130), and moves
 only once its goal is more than 0.39° away. A goal more than 8° from the last (someone new, or
-a false detection), and any within 40 px of the picture's edge, must show up five times with
-no more than 0.2 s between sightings before the head turns to it. It counter-rotates against the waist's estimated
+a false detection), and any within 40 px of the picture's left or right edge, must show up five
+times with no more than 0.2 s between sightings before the head turns to it. Not the bottom
+edge: the head cannot look down to a standing person, whose face then sits low in the picture
+(`scenarios.LOW_FACE`, 204-238 px below the middle, pans as one at eye level does). It counter-rotates against the waist's estimated
 turn at once, and commands each servo half its linkage's slack past the view in the way it
 is moving, so a reversal takes the play up at once instead of leaving the head still. The
 roll (`motor/roll_level.py`) levels the followed face in the picture the same calm way, and

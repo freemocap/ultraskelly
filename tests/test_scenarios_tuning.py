@@ -54,6 +54,22 @@ def test_the_launched_head_stays_calm_on_stressed_plants(plant):
     assert not swinging
 
 
+def yaw_settle(trace: S.Trace) -> float | None:
+    """Seconds until the camera's yaw stays within SETTLE_DEGREES of the followed person's."""
+    off = [abs(person - camera) for camera, person in zip(trace.camera_yaw, trace.person_yaw)]
+    last_out = max((n for n, error in enumerate(off) if error > S.SETTLE_DEGREES), default=-1)
+    return None if last_out == len(off) - 1 else trace.time[last_out + 1]
+
+
+def test_a_face_low_in_the_picture_pans_as_one_at_eye_level():
+    low, _ = S.run(S.LOW_FACE, launched)
+    level, _ = S.run(S.HEAD_BY_NAME["step-left"], launched)
+    assert min(row for row in low.target_y if row is not None) > 200  # Past where the edge gate once began at
+    # the bottom (240 - edge_margin) from first to last
+    assert yaw_settle(low) <= yaw_settle(level) + 0.1
+    assert abs(low.camera_yaw[-1] - low.person_yaw[-1]) <= 0.5
+
+
 def test_the_battery_catches_a_head_that_swings():
     def aggressive(sim):  # Full reach, no smoothing, no shaping, fast: it rings the head's own mode
         S.head_alone(sim)

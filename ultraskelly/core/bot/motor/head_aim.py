@@ -89,8 +89,10 @@ class HeadAimParams(NodeParams):
     )
     edge_margin: float = Field(
         default=40.0, ge=0.0, le=200.0,
-        description="Pixels from the picture's edge within which a target must show up jump_samples times in a "
-                    "row before the head turns to it: there partial bodies give brief false targets",
+        description="Pixels from the picture's left or right edge within which a target must show up jump_samples "
+                    "times in a row before the head turns to it: there partial bodies give brief false targets. Not "
+                    "the bottom, where a standing person's face sits, as the head cannot look down (116-217 px below "
+                    "the middle in run 20261106-222520), nor the top",
     )
     pan_direction: Literal[1, -1] = Field(default=1, description="+1: a target right of the aim point needs a larger pan angle")
     tilt_direction: Literal[1, -1] = Field(default=1, description="+1: a target below the aim point needs a larger tilt angle")
@@ -242,7 +244,7 @@ class HeadAim:
             pan_then + p.reach * p.pan_direction * math.degrees(math.atan(error_x / focal)),
             min(max(tilt_then + p.reach * p.tilt_direction * math.degrees(math.atan(error_y / focal)), low), high),
         )
-        at_edge = (abs(error_x) > FRAME[0] / 2 - p.edge_margin or abs(error_y) > FRAME[1] / 2 - p.edge_margin)
+        at_edge = abs(error_x) > FRAME[0] / 2 - p.edge_margin  # Left or right only: see edge_margin
         if self.goal is not None and math.dist(estimate, self.goal) <= p.jump_degrees and not at_edge:
             self.candidate, self.candidate_count = None, 0
             self.goal = tuple(goal + p.smoothing * (new - goal) for goal, new in zip(self.goal, estimate))
