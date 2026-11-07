@@ -185,3 +185,23 @@ def test_a_jump_must_hold_over_consecutive_frames_not_add_up_from_bursts():
     assert not believed(bursts)  # 12 sightings, 3 at a time: the robot's false detections (run 20261106-194104)
     assert believed([n * frame for n in range(12)])  # As many back to back: someone is there
     assert believed([n * frame for n in range(12) if n % 3 != 2])  # Someone whose every third detection drops
+
+
+def test_an_axis_held_at_its_end_while_following_is_reported_as_unable_to_reach():
+    from ultraskelly.core.bot.health import Status, head_finding
+
+    async def scenario():
+        bus, node, _ = create_controllers()
+        await follow(bus, node, 320, 470, 8.0)  # A face at the bottom of the picture: tilt runs to its end and stays
+        pinned = node.pinned(node.clock())
+        assert pinned.get("tilt", 0.0) > 5.0 and "pan" not in pinned
+        finding = head_finding(follow=True, pinned=pinned)
+        assert finding.status == Status.DEGRADED and "Tilt" in finding.message
+        await follow(bus, node, 320, 240, 1.0)  # Centred, though the head still sits at the end: it reached them
+        assert node.tilt_angle >= node.params.aim.tilt_range[1] - node.params.aim.end_margin - 0.5
+        assert node.pinned(node.clock()) == {}
+        bus.close()
+
+    asyncio.run(scenario())
+    assert head_finding(follow=False, pinned={}).status == Status.OFF
+    assert head_finding(follow=True, pinned={"pan": 2.0}).status == Status.OK  # Briefly at the end is fine

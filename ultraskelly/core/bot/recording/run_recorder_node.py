@@ -3,8 +3,10 @@
 Each run gets its own folder under `RunRecorderParams.folder`:
 
     <camera>.avi         every camera frame the bot saw (after any flip), Motion JPEG: the same
-                         JPEG bytes the stream sends, so each frame is encoded once
-    <camera>_frames.csv  per video frame: its index, the camera's frame number, capture and arrival times
+                         JPEG bytes the stream sends, so each frame is encoded once. An AVI holds
+                         4 GiB, about 80 minutes: the video goes on in <camera>-2.avi, -3.avi, ...
+    <camera>_frames.csv  per video frame: its index in the run, the camera's frame number, capture and
+                         arrival times, and the video file it is in with its index there
     poses.jsonl          per detector result: the frame it came from and each person's keypoints
     targets.csv          every target the detector published; empty x and y when nobody was seen
     servo_state.csv      the head controller's published angles and lock flags
@@ -19,12 +21,19 @@ files line up with each other and with the audio (run.json gives its first sampl
 time). Motor values are commands, not measured positions. A thread does the writing
 behind a bounded queue: a slow disk drops items, counted in run.json, instead of
 slowing the bot.
+
+The video takes about 5 GB an hour, so the recordings keep within a budget: as a run starts,
+the oldest run folders are deleted until the rest fit in `keep_gb`, and while the disk has
+less than `min_free_gb` free, video frames and IMU samples are dropped (and counted).
 """
 import asyncio
 import csv
 import json
 import logging
+import math
 import queue
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -39,7 +48,7 @@ from pydantic import Field, SkipValidation
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import ActuatorCommand, CommandRecorder
 from ultraskelly.core.bot.recording.microphone import Microphone, find_microphone
-from ultraskelly.core.bot.recording.mjpeg_avi import MjpegAviWriter
+from ultraskelly.core.bot.recording.mjpeg_avi import AviFull, MjpegAviWriter
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
     ImuTopic,
@@ -120,6 +129,38 @@ class RunRecorderParams(NodeParams):
         default=None, description="Part of a sound card's name to record audio from; None records no audio"
     )
     queue_size: int = Field(default=60, ge=1, description="Items waiting for the disk before new ones are dropped")
+    keep_gb: float = Field(
+        default=40.0, gt=0.0,
+        description="Run folders kept, in GB: as a run starts, the oldest runs are deleted until the rest fit. "
+                    "The video takes about 5 GB an hour",
+    )
+    min_free_gb: float = Field(
+        default=20.0, ge=0.0,
+        description="Below this much free disk, video frames and IMU samples stop being written (and are counted "
+                    "as dropped); the small tables go on",
+    )
+
+
+RUN_NAME = re.compile(r"run-\d{8}-\d{6}")  # The folders this node makes; nothing else in `folder` is ever deleted
+DISK_CHECK_SECONDS = 30.0
+
+
+def prune_runs(folder: Path, keep_bytes: float) -> list[tuple[str, int]]:
+    """Delete the oldest run folders until the runs left take at most `keep_bytes`. Returns each deleted run's
+    name and size."""
+    if not folder.is_dir():
+        return []
+    runs = sorted((path for path in folder.iterdir() if path.is_dir() and RUN_NAME.fullmatch(path.name)),
+                  key=lambda path: path.name)  # The names sort by start time
+    sizes = {run: sum(file.stat().st_size for file in run.rglob("*") if file.is_file()) for run in runs}
+    total, deleted = sum(sizes.values()), []
+    for run in runs:
+        if total <= keep_bytes:
+            break
+        shutil.rmtree(run, ignore_errors=True)
+        total -= sizes[run]
+        deleted.append((run.name, sizes[run]))
+    return deleted
 
 
 class RunRecorderNode(Node):
@@ -229,25 +270,56 @@ class RunRecorderNode(Node):
                 rows.writerow(header)
                 return rows
 
-            frames = table(f"{self.camera}_frames.csv", ("index", "frame_number", "captured", "received"))
+            frames = table(f"{self.camera}_frames.csv",
+                           ("index", "frame_number", "captured", "received", "video", "video_index"))
             targets = table("targets.csv", ("received", "x", "y", "angle"))
             servo = table("servo_state.csv", ("received", "pan", "tilt", "locked_x", "locked_y"))
             commands = table("commands.csv", ("time", "actuator", "value"))
             poses = files.enter_context(open(self.folder / "poses.jsonl", "w"))
             video = imu = None
+            part, part_frames = 1, 0  # The video file being written (oak.avi, then oak-2.avi, ...) and its frames
             previous_number = next_imu_sample = None
+
+            def open_part(size: tuple[int, int]) -> VideoWriter:
+                name = f"{self.camera}.avi" if part == 1 else f"{self.camera}-{part}.avi"
+                writer = self.open_writer(self.folder / name, size, self.params.nominal_fps)
+                files.callback(writer.release)
+                return writer
+            checked_at, low_disk = -math.inf, False
             while (item := self.pending.get()) is not None:
                 kind, received, message = item
+                if kind in ("frame", "imu"):  # The big ones: they stop while the disk is nearly full
+                    if (now := time.monotonic()) - checked_at >= DISK_CHECK_SECONDS:
+                        checked_at = now
+                        free = shutil.disk_usage(self.folder).free
+                        if (free < self.params.min_free_gb * 1e9) != low_disk:
+                            low_disk = not low_disk
+                            if low_disk:
+                                logger.warning(f"Only {free / 1e9:.1f} GB of disk left: the recording stops saving "
+                                               f"video and IMU samples until there is {self.params.min_free_gb:g} GB")
+                            else:
+                                logger.info("Disk space is back: the recording saves video and IMU samples again")
+                    if low_disk:
+                        self.dropped[f"{kind}_low_disk"] = self.dropped.get(f"{kind}_low_disk", 0) + 1
+                        continue
                 if kind == "frame":
                     frame: FrameMessage = message
+                    height, width = frame.frame.shape[:2]
                     if video is None:
-                        height, width = frame.frame.shape[:2]
-                        video = self.open_writer(
-                            self.folder / f"{self.camera}.avi", (width, height), self.params.nominal_fps,
-                        )
-                        files.callback(video.release)
-                    video.write(frame.jpeg_bytes(self.jpeg_quality, self.encode_jpeg))
-                    frames.writerow((self.counts.get("frame", 0), message.frame_number, message.timestamp, received))
+                        video = open_part((width, height))
+                    jpeg = frame.jpeg_bytes(self.jpeg_quality, self.encode_jpeg)
+                    try:
+                        video.write(jpeg)
+                    except AviFull:  # 4 GiB, about 80 minutes: the file is complete, and the video goes on in the next
+                        video.release()
+                        part, part_frames = part + 1, 0
+                        video = open_part((width, height))
+                        logger.info(f"The recording's video continues in {self.camera}-{part}.avi")
+                        video.write(jpeg)
+                    name = f"{self.camera}.avi" if part == 1 else f"{self.camera}-{part}.avi"
+                    frames.writerow((self.counts.get("frame", 0), message.frame_number, message.timestamp, received,
+                                     name, part_frames))
+                    part_frames += 1
                     if previous_number is not None and message.frame_number is not None:
                         self.frames_missed += max(0, message.frame_number - previous_number - 1)
                     previous_number = message.frame_number
@@ -275,6 +347,9 @@ class RunRecorderNode(Node):
                 self.counts[kind] = self.counts.get(kind, 0) + 1
 
     def _start(self) -> None:
+        for name, size in prune_runs(self.params.folder, self.params.keep_gb * 1e9):
+            logger.info(f"Deleted the oldest recording, {name} ({size / 1e9:.1f} GB), to keep recordings under "
+                        f"{self.params.keep_gb:g} GB")
         self.started, self.started_at = datetime.now(), time.monotonic()
         self.folder = self.params.folder / f"run-{self.started:%Y%m%d-%H%M%S}"
         self.folder.mkdir(parents=True)

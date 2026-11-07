@@ -51,6 +51,12 @@ def video_frame_count(path: Path) -> int | None:
     return count
 
 
+def video_frames(folder: Path, camera: str) -> int | None:
+    """Frames in the run's video: <camera>.avi, and <camera>-2.avi, -3.avi, ... after each reached 4 GiB."""
+    counts = [video_frame_count(path) for path in [folder / f"{camera}.avi", *folder.glob(f"{camera}-*.avi")]]
+    return None if any(count is None for count in counts) else sum(counts)
+
+
 def recording_summary(folder: Path, run: dict) -> dict:
     """What the recorder kept: counts, drops, frame gaps, and whether the video and audio cover the run."""
     camera = run.get("camera", "camera")
@@ -67,7 +73,7 @@ def recording_summary(folder: Path, run: dict) -> dict:
         "frame_numbers_skipped": int(sum(max(0, b - a - 1) for a, b in zip(numbers, numbers[1:]))),
         "camera_fps": round(1 / float(np.median(gaps)), 2) if len(gaps) else None,
         "longest_frame_gap_s": round(float(gaps.max()), 3) if len(gaps) else None,
-        "video_frames": video_frame_count(folder / f"{camera}.avi"),
+        "video_frames": video_frames(folder, camera),
         "audio_seconds": None,
         "audio_starts_after_run_s": None,
     }

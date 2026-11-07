@@ -108,6 +108,42 @@ def test_lost_samples_are_counted_and_a_restarted_count_restarts_the_clock():
     assert batch.timestamps[-1] == pytest.approx(13.0 + 1599 * TICKS_PER_SAMPLE * TICK, abs=0.001)
 
 
+def test_the_24_bit_count_wrapping_keeps_the_clock_and_the_times_continuous(caplog):
+    # On the Pi (2026-11-06) the count wrapped every 655.36 s, and treating that as a camera reset
+    # mapped the reads around it ~655 s late: every later timestamp stuck there and the dashboard's
+    # strip charts went blank.
+    rng = np.random.default_rng(2)
+    drift = 0.0078
+    unwrapped = (1 << 24) - 1600 * TICKS_PER_SAMPLE + TICKS_PER_SAMPLE * np.arange(4000)  # Wraps 2 s in
+    host = 7000.0 + unwrapped * TICK * (1 + drift)
+    available = np.maximum.accumulate(host + rng.exponential(0.0006, len(host)))
+    node, start = make_node(), 0
+    for read_at in np.arange(host[0], available[-1] + 0.04, 0.02):
+        end = int(np.searchsorted(available, read_at, side="right"))
+        if end > start:
+            node.gather(samples(unwrapped[start:end] % (1 << 24)), read_at)
+            start = end
+    batch = node.take()
+
+    assert "started over" not in caplog.text and node.wraps == 1 and node.lost == 0
+    assert len(batch.timestamps) == len(host) and np.all(np.diff(batch.timestamps) >= 0)
+    assert np.abs(batch.timestamps - host).max() < 0.001
+    assert batch.imu_times == pytest.approx(unwrapped * TICK)  # IMU time keeps rising past 655.36 s
+
+
+def test_a_reset_mid_read_maps_the_samples_before_it_on_the_old_clock():
+    node = make_node()
+    ticks = TICKS_PER_SAMPLE * np.arange(1600)  # Two seconds, read every 20 ms
+    for index in range(0, 1600, 16):
+        node.gather(samples(ticks[index:index + 16]), 10.0 + ticks[index + 15] * TICK + 0.0002)
+    before = 1600 * TICKS_PER_SAMPLE + TICKS_PER_SAMPLE * np.arange(8)
+    node.gather(samples(np.concatenate([before, TICKS_PER_SAMPLE * np.arange(8)])), 10.0 + before[-1] * TICK + 0.0002)
+    batch = node.take()
+
+    assert len(batch.timestamps) == 1608  # The 8 after the reset wait for the new clock's fit
+    assert batch.timestamps[-1] == pytest.approx(10.0 + before[-1] * TICK, abs=0.001)
+
+
 class FakeHid:
     """An IMU device that returns given reads, then nothing."""
 
@@ -261,3 +297,15 @@ def test_the_runtime_server_streams_each_imu_batch():
     received = asyncio.run(scenario())
 
     assert [(message["sequence"], message["first_sample"]) for message in received] == [(1, 0), (2, 3)]
+
+
+def test_an_imu_clock_far_off_the_pis_is_reported():
+    from ultraskelly.core.bot.health import Status, imu_clock_finding
+
+    node = make_node()
+    assert node.clock_error(100.0) is None  # Not fitted yet: nothing to judge
+    node.clock.fitted, node.last_time = True, 99.97
+    assert imu_clock_finding(node.clock_error(100.0)) is None  # A few hundredths behind is how it works
+    node.last_time = 760.0  # Ahead by 660 s, as on the Pi before the wrap fix
+    finding = imu_clock_finding(node.clock_error(100.0))
+    assert finding.status == Status.DEGRADED and "+660 s" in finding.message

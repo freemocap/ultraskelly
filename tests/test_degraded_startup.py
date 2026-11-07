@@ -289,7 +289,7 @@ def test_parts_that_wait_for_another_name_it(tmp_path, quick, monkeypatch):
     assert because == {
         "oak_camera": ("missing", None), "oak_models": ("degraded", "oak_camera"), "hailo": ("degraded", "oak_camera"),
         "zed_camera": ("missing", None), "zed_imu": ("missing", "zed_camera"), "depth": ("degraded", "zed_camera"),
-        "servo_board": ("ok", None), "motor_board": ("ok", None),
+        "servo_board": ("ok", None), "motor_board": ("ok", None), "head": ("ok", None),
     }
     assert found["zed_imu"]["hint"] is None and found["depth"]["hint"] is None  # The ZED's own hint applies
     assert found["hailo"]["message"] == "Waiting for the OAK camera's frames"

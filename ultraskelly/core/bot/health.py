@@ -48,8 +48,41 @@ COMPONENTS: dict[str, tuple[str, str]] = {
     "depth": ("Depth", "ai"),
     "servo_board": ("Servo board (0x40)", "motors"),
     "motor_board": ("Motor HAT (0x60)", "motors"),
+    "head": ("Head aim", "motors"),
     "power": ("Pi power", "power"),
 }
+
+PINNED_SECONDS = 5.0  # A head axis at the end of its range this long while following cannot reach the person
+IMU_CLOCK_TOLERANCE = 2.0  # Seconds the IMU's newest sample may sit from the Pi's clock before its times count as wrong
+
+
+def head_finding(*, follow: bool, pinned: dict[str, float]) -> Finding:
+    """The head's aim: off, following, or an axis held at the end of its range while following someone
+    (`pinned`: seconds per axis, from OrientationNode.pinned)."""
+    if not follow:
+        return Finding(Status.OFF, "Not following (--no-follow): the head moves only for motor tests")
+    stuck = {axis: seconds for axis, seconds in pinned.items() if seconds >= PINNED_SECONDS}
+    if "tilt" in stuck:
+        return Finding(Status.DEGRADED,
+                       f"Tilt has sat at the end of its range for {stuck['tilt']:.0f} s while following: "
+                       "the head cannot nod far enough to centre the person",
+                       "Mechanical: the head must rest level and nod further (docs/audit-2026.md, 'Tilt reach').")
+    if "pan" in stuck:
+        return Finding(Status.DEGRADED,
+                       f"Pan has sat at the end of its range for {stuck['pan']:.0f} s while following: "
+                       "the person is beyond the head's reach",
+                       "The head pans about 18° each way; the waist would turn toward them, but it is off until tuned.")
+    return Finding(Status.OK, "Following")
+
+
+def imu_clock_finding(error: float | None) -> Finding | None:
+    """None while the IMU's newest sample is within IMU_CLOCK_TOLERANCE of the Pi's clock (`error`: seconds
+    ahead, from ZedImuNode.clock_error), else what is wrong."""
+    if error is None or abs(error) <= IMU_CLOCK_TOLERANCE:
+        return None
+    return Finding(Status.DEGRADED,
+                   f"Its timestamps are {error:+.0f} s off the Pi's clock, so its plots and recordings are wrong",
+                   "Restart the bot. If it comes back, the IMU's clock map is broken (core/bot/sensory/zed_imu_node.py).")
 
 
 @dataclass(frozen=True)
