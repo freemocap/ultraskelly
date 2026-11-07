@@ -166,7 +166,7 @@ def test_the_robot_launches_with_the_calmer_tuning():
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
     # Following uses the servos' whole measured travel (scripts/check_servo_travel.py, 2026-11-06), as the owner asked
     # on 2026-11-07; the hard limits are the servos' own 0-180, so motor tests reach every angle.
-    assert head.aim.pan_range == (10.0, 170.0) and head.aim.tilt_range == (10.0, 140.0)
+    assert head.aim.pan_range == (10.0, 170.0) and head.aim.tilt_range == (10.0, 180.0)  # Tilt all the way down
     limits = launch_config().limits
     assert (limits.pan_min_degrees, limits.pan_max_degrees, limits.tilt_min_degrees, limits.tilt_max_degrees) == (
         0.0, 180.0, 0.0, 180.0)
@@ -218,6 +218,20 @@ def test_a_jump_must_hold_over_consecutive_frames_not_add_up_from_bursts():
     assert not believed(bursts)  # 12 sightings, 3 at a time: the robot's false detections (run 20261106-194104)
     assert believed([n * frame for n in range(12)])  # As many back to back: someone is there
     assert believed([n * frame for n in range(12) if n % 3 != 2])  # Someone whose every third detection drops
+
+
+def test_following_tilts_all_the_way_down_to_the_servos_own_end():
+    # 2026-11-07, the owner: "the face track doesnt go ALL the way down for tilt ... i click the 'all the way down
+    # tilt' button, it goes down a bit more, then snaps up again". Following stopped at 135: a range to 140 less a
+    # 5 degree margin. The servo's own end needs no margin.
+    async def scenario():
+        bus, node, _ = create_controllers()
+        assert node.params.aim.tilt_range[1] == 180.0
+        await follow(bus, node, 320, 470, 12.0)  # A face at the bottom of the picture, for as long as it takes
+        assert node.tilt_angle == pytest.approx(180.0, abs=0.5)
+        assert node.servo_kit.servo[node.params.tilt_channel].angle == pytest.approx(180.0, abs=0.5)
+        bus.close()
+    asyncio.run(scenario())
 
 
 def test_an_axis_held_at_its_end_while_following_is_reported_as_unable_to_reach():

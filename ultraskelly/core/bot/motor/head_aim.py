@@ -51,6 +51,9 @@ def zero_vibration(frequency: float, damping: float) -> tuple[float, float, floa
     return 1.0 / (1.0 + k), k / (1.0 + k), math.pi / ringing
 
 
+SERVO_ENDS = (0.0, 180.0)  # The servo's own ends, where its angle scale stops
+
+
 class HeadAimParams(NodeParams):
     """How the head turns toward its target. Angles are degrees of the camera's view unless they say servo degrees."""
 
@@ -104,8 +107,10 @@ class HeadAimParams(NodeParams):
     pan_range: tuple[float, float] = Field(
         default=(10.0, 170.0), description="Servo degrees the pan may use: all the travel where its linkage turns the head",
     )
+    # Tilt follows all the way down to the servo's own end (the owner, 2026-11-07: "the face track doesnt go ALL
+    # the way down for tilt"): the head was seen going lower at 180 than at 140, the end the 2026-11-06 sweep set.
     tilt_range: tuple[float, float] = Field(
-        default=(10.0, 140.0), description="Servo degrees the tilt may use: up to its linkage's over-centre point",
+        default=(10.0, 180.0), description="Servo degrees the tilt may use: down to the servo's own end",
     )
     # The aim below was tuned on the measured plant (simulator/tuning.py, 2026-11-06: cost 64.4 against 2209 for
     # the stopgap it replaces; docs/audit-2026.md, "A simulator fitted to the robot").
@@ -200,10 +205,13 @@ class HeadAim:
 
     def span(self, axis: int) -> tuple[float, float]:
         """The views an axis can be commanded to (0 pan, 1 tilt): its servo, pushing past the view by half
-        the slack, stays end_margin clear of its end stops."""
-        ratio, margin = self._ratio(axis), self.params.end_margin + self._slack(axis) / 2
+        the slack, stays end_margin clear of an end stop inside its travel. At the servo's own end (0 or 180)
+        there is no stop to keep clear of: the servo goes all the way."""
+        ratio, push = self._ratio(axis), self._slack(axis) / 2
         low, high = self._range(axis)
-        return ratio * (low + margin - MIDDLE), ratio * (high - margin - MIDDLE)
+        low_margin = push + (self.params.end_margin if low > SERVO_ENDS[0] else 0.0)
+        high_margin = push + (self.params.end_margin if high < SERVO_ENDS[1] else 0.0)
+        return ratio * (low + low_margin - MIDDLE), ratio * (high - high_margin - MIDDLE)
 
     def place(self, pan: float, tilt: float) -> None:
         """Something else moved the head here (a motor test): hold it here and forget the old goal."""
