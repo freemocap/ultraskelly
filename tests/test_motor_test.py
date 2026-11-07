@@ -40,11 +40,13 @@ def test_servo_tests_reach_every_angle_the_servo_takes():
     # and "DONT ... REFUSE SERVO ANGLES IF THE MOTOR CAN MAKE THERE THEN ... DO IT".
     async def scenario():
         tester, recorder, bus = build()
-        assert tester.state()["limits"]["servo_windows"] == {"pan": [0.0, 180.0], "tilt": [0.0, 180.0]}
+        assert tester.state()["limits"]["servo_windows"] == {"pan": [0.0, 180.0], "tilt": [0.0, 180.0], "roll": [0.0, 180.0]}
         # The card's tilt buttons go by where the head goes: a larger tilt angle turns it down (the owner,
         # 2026-11-07: "the -10 tilt moves the head UP and +10 moves it down")
-        assert tester.state()["limits"]["directions"] == {"pan": 1, "tilt": 1}
-        for actuator, angle in (("tilt", 180.0), ("tilt", 0.0), ("pan", 180.0), ("pan", 0.0), ("tilt", 90.0)):
+        assert tester.state()["limits"]["directions"] == {"pan": 1, "tilt": 1, "roll": -1}
+        tester.orientation.params.roll.servo_speed = 1000.0  # This test is about the range, not the sweep's speed
+        for actuator, angle in (("tilt", 180.0), ("tilt", 0.0), ("pan", 180.0), ("pan", 0.0), ("tilt", 90.0),
+                                ("roll", 180.0), ("roll", 0.0), ("roll", 90.0)):
             result = await tester.run(MotorTestRequest(actuator=actuator, angle=angle))
             assert result["outcome"] == "done" and values(recorder, actuator)[-1] == angle
         bus.close()
@@ -70,6 +72,22 @@ def test_a_servo_test_sweeps_at_the_heads_own_top_speed_and_a_stop_holds_it():
         stopped = await running
         assert stopped["outcome"] == "stopped" and 30 < stopped["sent"] < 120  # Held where the sweep had got to
         assert tester.orientation.pan_angle == stopped["sent"]
+        bus.close()
+    asyncio.run(scenario())
+
+
+def test_a_roll_test_sweeps_at_the_rolls_own_speed_and_levelling_carries_on_from_there():
+    # 2026-11-07, the owner: "add the roll controls to the robot control panel in the dashboard".
+    async def scenario():
+        tester, recorder, bus = build()
+        roll = tester.orientation.params.roll
+        result = await tester.run(MotorTestRequest(actuator="roll", angle=110))
+        rolls = values(recorder, "roll")
+        assert result["outcome"] == "done" and rolls[-1] == 110 and tester.orientation.roll_angle == 110
+        assert max(abs(b - a) for a, b in zip(rolls, rolls[1:])) <= roll.servo_speed * SWEEP_STEP + 1e-9  # Swept
+        assert result["took"] >= 20 / roll.servo_speed - 0.05
+        await tester.orientation.step()  # Tracking takes over from the test's angle, and with no face eases back
+        assert tester.orientation.roll_level.servo == pytest.approx(110, abs=roll.slack)
         bus.close()
     asyncio.run(scenario())
 

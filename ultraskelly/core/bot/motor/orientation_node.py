@@ -260,6 +260,8 @@ class OrientationNode(Node):
         now = self.clock()
         if (self.head_aim.pan, self.head_aim.tilt) != (self.pan_angle, self.tilt_angle):
             self.head_aim.place(self.pan_angle, self.tilt_angle)  # A motor test moved the head: carry on from there
+        if self.roll_level.servo != self.roll_angle:
+            self.roll_level.place(self.roll_angle)  # Or the roll
         msg = self.latest_target
         valid = (msg is not None and msg.x is not None and msg.y is not None
                  and self.target_received_at is not None

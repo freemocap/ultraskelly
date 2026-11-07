@@ -9,7 +9,6 @@ import logging
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
-from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -72,9 +71,11 @@ def launch_config(
     # passes with both and no new reversals (tests/test_scenarios_tuning.py).
     # The waist follows too, untuned with this head (the owner, 2026-11-07: "Turn on as is"): in the full scenarios
     # it swings 14-20 degrees past someone far to the side, and it starts a move only once the head has held still
-    # for 0.3 s, which the tighter deadband makes rarer. The roll stays upright.
+    # for 0.3 s, which the tighter deadband makes rarer. The roll levels the followed face (the owner, 2026-11-07:
+    # "start the face leveling head roll support work"): on the simulated robot it straightens a tilted face only
+    # about 1.5 degrees, all its linkage gives within `span` (tests/test_scenarios.py, the "tilt" scenarios).
     config.orientation = OrientationNodeParams(
-        follow=follow, roll=RollLevelParams(enabled=False), aim=HeadAimParams(deadband=0.12, pan_servo_speed=30.0),
+        follow=follow, aim=HeadAimParams(deadband=0.12, pan_servo_speed=30.0),
     )
     return config
 
