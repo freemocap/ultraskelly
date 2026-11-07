@@ -874,6 +874,7 @@ passes with both: no new reversals, the worst settle 2.45 s where it was 2.05, a
 tighter deadband keeps the head making small corrections, and the waist starts a move only once the
 head has held still for 0.3 s. With the waist on, the full scenarios fail at every deadband ("far"
 swings 14-20 degrees past the person): the waist was never tuned with the refitted head.
+Told this, the owner had the waist turned on as it is, the same day ("Turn on as is").
 
 ### The ZED IMU's clock wrap blanked the dashboard's charts (2026-11-06)
 

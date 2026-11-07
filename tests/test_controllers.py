@@ -153,10 +153,9 @@ def test_the_robot_launches_with_the_calmer_tuning():
 
     head = launch_config().orientation
     assert head.follow
-    assert not head.roll.enabled and not head.waist.enabled  # Head first, then the waist (the user, 2026-11-06)
+    assert head.waist.enabled and not head.roll.enabled  # The waist back on as it is (the owner, 2026-11-07); roll off
     launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
-    for part in ("roll", "waist"):
-        launched[part]["enabled"] = defaults[part]["enabled"]
+    launched["roll"]["enabled"] = defaults["roll"]["enabled"]
     # The owner, 2026-11-07: "decrease max pan servo speed" and "tighten that range" (the centring dead zone). The
     # head battery checks these launched values on the measured plant (tests/test_scenarios_tuning.py).
     assert (head.aim.pan_servo_speed, head.aim.deadband) == (30.0, 0.12)

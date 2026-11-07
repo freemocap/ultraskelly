@@ -10,7 +10,6 @@ from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
-from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -66,16 +65,16 @@ def launch_config(
     # 2026-11-06 (simulator/tuning.py), and checked by the closed-loop scenarios (tests/test_scenarios_tuning.py),
     # which run what launches here. It follows over the servos' whole measured travel (pan 10-170, tilt 10-140;
     # the owner, 2026-11-07: "head servos should move their FULL range of motion"), and the hard limits are the
-    # servos' own 0-180, so motor tests reach every angle. Head first, then the waist (the user, 2026-11-06): the waist stays braked and the roll
-    # upright, so only pan and tilt follow.
+    # servos' own 0-180, so motor tests reach every angle.
     # Two changes from the tuned head (the owner, 2026-11-07): pan's servo no faster than 30 degrees a second
     # ("decrease max pan servo speed"), and a deadband of 0.12, so a still head moves again for a face about 0.4
     # degrees off (deadband / reach), 3 px, where 0.39 waited for 1.3, 10 px ("tighten that range"). The head battery
-    # passes with both and no new reversals (tests/test_scenarios_tuning.py). With the waist off: a tighter deadband
-    # keeps the head making small corrections, and the waist starts only once the head has held still.
+    # passes with both and no new reversals (tests/test_scenarios_tuning.py).
+    # The waist follows too, untuned with this head (the owner, 2026-11-07: "Turn on as is"): in the full scenarios
+    # it swings 14-20 degrees past someone far to the side, and it starts a move only once the head has held still
+    # for 0.3 s, which the tighter deadband makes rarer. The roll stays upright.
     config.orientation = OrientationNodeParams(
-        follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
-        aim=HeadAimParams(deadband=0.12, pan_servo_speed=30.0),
+        follow=follow, roll=RollLevelParams(enabled=False), aim=HeadAimParams(deadband=0.12, pan_servo_speed=30.0),
     )
     return config
 
