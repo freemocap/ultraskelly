@@ -374,6 +374,7 @@ class Tuning:
         self.saved_at = started.saved_at
         self.problems = list(started.problems)
         self.on_change = on_change
+        self.saving = asyncio.Lock()  # One save at a time: two screens' Saves would write the same draft
 
     def params(self, group: Group) -> BaseModel:
         return _find(self.root, group.path)
@@ -446,8 +447,9 @@ class Tuning:
         as flushing to the card can take the control loop's time."""
         if self.file is None:
             raise TuningRefused("Nowhere to save: this bot was started without a tuning file", status=409)
-        groups, stamp = self.to_save(), datetime.now().isoformat(timespec="seconds")
-        text = json.dumps({"saved_at": stamp, "groups": groups}, indent=2) + "\n"
-        await asyncio.to_thread(write_whole, self.file, text)
-        self.saved, self.saved_at, self.problems = groups, stamp, []  # The skipped settings are not in the new file
+        async with self.saving:
+            groups, stamp = self.to_save(), datetime.now().isoformat(timespec="seconds")
+            text = json.dumps({"saved_at": stamp, "groups": groups}, indent=2) + "\n"
+            await asyncio.to_thread(write_whole, self.file, text)
+            self.saved, self.saved_at, self.problems = groups, stamp, []  # The skipped settings are not in the new file
         logger.info(f"Saved tuning to {self.file}: {json.dumps(groups)}")

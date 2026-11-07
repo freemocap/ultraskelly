@@ -8,6 +8,8 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -299,6 +301,32 @@ def test_a_failed_save_leaves_the_old_file_whole(tmp_path, monkeypatch):
         asyncio.run(tuning.save())
     assert path.read_text(encoding="utf-8") == old
     assert tuning.state()["groups"][0]["unsaved"] == ["deadband"]  # Still not saved
+
+
+def test_saves_from_two_screens_at_once_are_written_one_after_the_other(tmp_path, monkeypatch):
+    """The Pi's screen and a laptop may press Save together: both write the same draft beside the file, so the writes
+    must not overlap, or the file renamed into place could hold a mix of the two."""
+    config = launch_config(tuning=tmp_path / "tuning.json")
+    tuning = Tuning(config, config.tuning)
+    tuning.set({"aim": {"deadband": 0.25}})
+    busy, overlapped, guard, write = [0], [], threading.Lock(), tuning_module.write_whole
+
+    def slow_write(path, text):
+        with guard:
+            busy[0] += 1
+            overlapped.append(busy[0] > 1)
+        time.sleep(0.05)
+        write(path, text)
+        with guard:
+            busy[0] -= 1
+    monkeypatch.setattr(tuning_module, "write_whole", slow_write)
+
+    async def both():
+        await asyncio.gather(tuning.save(), tuning.save())
+    asyncio.run(both())
+    assert overlapped == [False, False]
+    assert json.loads((tmp_path / "tuning.json").read_text(encoding="utf-8"))["groups"] == {"aim": {"deadband": 0.25}}
+    assert [path.name for path in tmp_path.iterdir()] == ["tuning.json"]
 
 
 def test_without_a_file_nothing_is_saved():
