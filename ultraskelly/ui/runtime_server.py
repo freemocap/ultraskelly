@@ -17,7 +17,6 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -63,42 +62,10 @@ from ultraskelly.ui.depth_stream import encode_depth_frame, nominal_camera_to_he
 from ultraskelly.ui.imu_stream import encode_imu_batch
 from ultraskelly.ui.oak_stream import oak_trackers
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+from ultraskelly.ui.dashboard_assets import ASSETS
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
 
 logger = logging.getLogger(__name__)
-
-DASHBOARD = Path(__file__).with_name("dashboard")
-SHARED = Path(__file__).parents[1] / "simulator" / "static"  # Skeleton, style and vendored Three.js
-# Explicit content types: Windows can map .js to text/plain, which browsers refuse for modules.
-ASSETS: dict[str, tuple[Path, str]] = {
-    "/": (DASHBOARD / "index.html", "text/html"),
-    "/dashboard.js": (DASHBOARD / "dashboard.js", "text/javascript"),
-    "/dashboard.css": (DASHBOARD / "dashboard.css", "text/css"),
-    "/scene.js": (DASHBOARD / "scene.js", "text/javascript"),
-    "/tiles.js": (DASHBOARD / "tiles.js", "text/javascript"),
-    "/depth.js": (DASHBOARD / "depth.js", "text/javascript"),
-    "/depth3d.js": (DASHBOARD / "depth3d.js", "text/javascript"),
-    "/gaze.js": (DASHBOARD / "gaze.js", "text/javascript"),
-    "/timeseries.js": (DASHBOARD / "timeseries.js", "text/javascript"),
-    "/depth-worker.js": (DASHBOARD / "depth-worker.js", "text/javascript"),
-    "/colormap.js": (DASHBOARD / "colormap.js", "text/javascript"),
-    "/heatmap.js": (DASHBOARD / "heatmap.js", "text/javascript"),
-    "/dom.js": (DASHBOARD / "dom.js", "text/javascript"),
-    "/frameclock.js": (DASHBOARD / "frameclock.js", "text/javascript"),
-    "/faces.js": (DASHBOARD / "faces.js", "text/javascript"),
-    "/health.js": (DASHBOARD / "health.js", "text/javascript"),
-    "/headpose.js": (DASHBOARD / "headpose.js", "text/javascript"),
-    "/motor-test.js": (DASHBOARD / "motor-test.js", "text/javascript"),
-    "/style.css": (SHARED / "style.css", "text/css"),
-    "/skeleton.js": (SHARED / "skeleton.js", "text/javascript"),
-    **{
-        f"/vendor/{name}": (SHARED / "vendor" / name, "text/javascript")
-        for name in ("three.module.js", "three.core.js", "OrbitControls.js")
-    },
-    # @freemocap/client's browser bundle, vendored by scripts/update-freemocap-client.sh.
-    "/vendor/freemocap-client.js": (DASHBOARD / "vendor" / "freemocap-client.js", "text/javascript"),
-    "/vendor/freemocap-client.js.map": (DASHBOARD / "vendor" / "freemocap-client.js.map", "application/json"),
-}
 
 
 class RuntimeServerParams(NodeParams):

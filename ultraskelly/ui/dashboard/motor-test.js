@@ -49,7 +49,8 @@ function readbackOf(model, name) {
 }
 
 export class MotorTestPanel {
-  constructor(root) {
+  // `load`: ask the bot for its tests now; the control panel loads it later, once the bot runs.
+  constructor(root, {load = true} = {}) {
     this.root = root;
     this.limits = null;
     this.running = false;
@@ -57,10 +58,14 @@ export class MotorTestPanel {
     this.foreign = null;  // `started` of a test another screen is running, to show how it ended
     this.commands = {};
     this.lastServo = null;  // The actuator of the last servo test, whose read-back is shown
-    this.load();
+    if (load) this.load();
+    else root.hidden = true;
   }
 
+  // Asks the bot for its tests and builds the panel; again later if the bot was off (the control panel calls it once the
+  // bot runs). Built once.
   async load() {
+    if (this.buttons) { this.root.hidden = false; return; }
     let reply = null;
     try { reply = await fetch('/api/motor-test', {cache: 'no-store'}); } catch { /* No server: no panel */ }
     if (!reply?.ok) { this.root.hidden = true; return; }

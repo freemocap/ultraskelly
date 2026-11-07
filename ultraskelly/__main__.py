@@ -60,9 +60,12 @@ def main() -> None:
         "--no-oak-models", action="store_true",
         help="With --hardware: run no models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).",
     )
+    # The last of --follow and --no-follow wins, so the control panel's switch, added after the service's
+    # options from /etc/default/ultraskelly-bot, can turn following back on.
     parser.add_argument(
-        "--no-follow", action="store_true",
-        help="With --hardware: the head and waist hold still and move only for dashboard motor tests.",
+        "--follow", action=argparse.BooleanOptionalAction, default=None,
+        help="With --hardware: the head and waist follow the target (the default); --no-follow: they hold still and "
+             "move only for dashboard motor tests until the control panel switches following on.",
     )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
@@ -70,10 +73,10 @@ def main() -> None:
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    hardware_options = (args.simulate_motors, args.window, args.record, args.zed, args.no_oak_models, args.no_follow)
+    hardware_options = (args.simulate_motors, args.window, args.record, args.zed, args.no_oak_models, args.follow is not None)
     if any(hardware_options) and not args.hardware:
-        parser.error("--simulate-motors, --window, --record, --zed, --no-oak-models and --no-follow are used together "
-                     "with --hardware")
+        parser.error("--simulate-motors, --window, --record, --zed, --no-oak-models and --follow or --no-follow are used "
+                     "together with --hardware")
     if args.window and args.no_window:
         parser.error("--window and --no-window contradict each other")
     if args.microphone and not args.record:
@@ -106,7 +109,7 @@ def main() -> None:
             simulate_motors=args.simulate_motors, show_window=args.window,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
-            port=args.port, oak_models=not args.no_oak_models, follow=not args.no_follow,
+            port=args.port, oak_models=not args.no_oak_models, follow=args.follow is not False,
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

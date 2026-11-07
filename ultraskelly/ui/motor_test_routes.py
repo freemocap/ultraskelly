@@ -1,20 +1,35 @@
-"""HTTP commands for dashboard motor tests, beside the read-only /stream.
+"""HTTP commands for dashboard motor tests and the control panel's motor switches, beside the read-only /stream.
 
-    GET  /api/motor-test       {"enabled", "limits", "running", "last", "waist_travel"}
+    GET  /api/motor-test       {"enabled", "limits", "running", "last", "waist_travel", "following"}
     POST /api/motor-test       {"actuator": "pan"|"tilt", "angle": 100}
                                {"actuator": "waist"|"mouth", "throttle": 0.5, "seconds": 0.3}
     POST /api/motor-test/stop  {}
+    GET  /api/follow           {"following": true}
+    POST /api/follow           {"following": false}: the head and waist follow the target, or hold still
+    POST /api/motors/stop      {}: every motor stops now: following off, any test stopped, both DC motors braked
 
 A test's reply comes once it has finished or been stopped: 200 with the test's record,
 whose "outcome" is "done", "stopped" or "failed: ...". A test that will not run is answered
 at once, with nothing moved: 400 if it is malformed or outside the test limits, 403 if tests
 are turned off, 409 if another test is running. Requests are never queued. POSTs must send
 JSON, so a page from another site cannot send them without the browser asking first.
+
+Following switched here lasts until the bot stops; the control panel (ultraskelly/control) also
+writes it into the options the bot starts with, so a restart keeps it.
 """
 from aiohttp import web
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestRefused, MotorTestRequest
+
+
+class FollowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    following: bool
+
+
+def _reasons(error: ValidationError) -> str:
+    return "; ".join(f"{'.'.join(map(str, problem['loc'])) or 'request'}: {problem['msg']}" for problem in error.errors())
 
 
 def add_motor_test_routes(app: web.Application, tester: MotorTester) -> None:
@@ -27,8 +42,7 @@ def add_motor_test_routes(app: web.Application, tester: MotorTester) -> None:
         try:
             test = MotorTestRequest.model_validate_json(await request.read())
         except ValidationError as error:
-            reasons = "; ".join(f"{'.'.join(map(str, problem['loc'])) or 'request'}: {problem['msg']}" for problem in error.errors())
-            return web.json_response({"ok": False, "error": reasons}, status=400)
+            return web.json_response({"ok": False, "error": _reasons(error)}, status=400)
         try:
             record = await tester.run(test)
         except MotorTestRefused as refused:
@@ -41,6 +55,28 @@ def add_motor_test_routes(app: web.Application, tester: MotorTester) -> None:
             return web.json_response({"ok": False, "error": "Send the stop as JSON"}, status=415)
         return web.json_response({"ok": True, "stopped": await tester.stop()})
 
+    async def following(request: web.Request) -> web.Response:
+        return web.json_response({"following": tester.orientation.following})
+
+    async def follow(request: web.Request) -> web.Response:
+        if request.content_type != "application/json":
+            return web.json_response({"ok": False, "error": "Send the switch as JSON"}, status=415)
+        try:
+            switch = FollowRequest.model_validate_json(await request.read())
+        except ValidationError as error:
+            return web.json_response({"ok": False, "error": _reasons(error)}, status=400)
+        tester.orientation.set_following(switch.following)
+        return web.json_response({"ok": True, "following": tester.orientation.following})
+
+    async def stop_all(request: web.Request) -> web.Response:
+        if request.content_type != "application/json":
+            return web.json_response({"ok": False, "error": "Send the stop as JSON"}, status=415)
+        stopped_test = await tester.stop_all()
+        return web.json_response({"ok": True, "following": tester.orientation.following, "stopped_test": stopped_test})
+
     app.router.add_get("/api/motor-test", state)
     app.router.add_post("/api/motor-test", run)
     app.router.add_post("/api/motor-test/stop", stop)
+    app.router.add_get("/api/follow", following)
+    app.router.add_post("/api/follow", follow)
+    app.router.add_post("/api/motors/stop", stop_all)

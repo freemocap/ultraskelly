@@ -13,6 +13,7 @@ import { OakFinds, measuresOf } from '/faces.js';
 import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.js';
 import { headNote, limitNote } from '/headpose.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
+import { ControlPanel, panelSettings, streamUrl } from '/panel.js';
 
 const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
@@ -22,6 +23,9 @@ const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
 
 const clock = new FrameClock();
+// Served by the control panel's service (ultraskelly/control), the page also turns the bot on and off, and reads the
+// bot's stream from the bot's own port; served by the bot, it is the dashboard alone.
+const settings = await panelSettings();
 
 // 3D scene. Without WebGL the readouts and video still work.
 let scene = null;
@@ -52,7 +56,7 @@ $('enlarged').querySelector('canvas').onclick = () => enlarge(null);
 $('enlarged-close').onclick = () => enlarge(null);
 
 // Motor tests: W1's panel opens in a drawer beside the skeleton; the card's Stop works while it is closed.
-const motorTest = new MotorTestPanel($('motor-test'));
+const motorTest = new MotorTestPanel($('motor-test'), {load: !settings});  // The control column loads it once the bot runs
 function openTests(open) {
   $('motor-drawer').hidden = !open;
   $('tests-open').textContent = open ? 'Close' : 'Open';
@@ -262,7 +266,7 @@ const Health = {parse(message) {  // docs/stream.md: the bot's hardware checks
   if (!Array.isArray(message?.components)) throw new Error('health without components');
   return message;
 }};
-const stream = new TransportService({url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`,
+const stream = new TransportService({url: streamUrl(settings), reconnectDelay: settings ? 2000 : 5000,
                                      kinds: {robot_state: RobotState, depth_frame: DepthFrame, imu: Imu, health: Health}});
 // The bot's newest hardware checks: on every change, every 2 s, and to each viewer as it connects.
 let latestHealth = null, healthAt = 0;
@@ -289,6 +293,8 @@ const health = new HealthView({banner: $('problems'), count: $('problems-count')
                                toggle: $('problems-toggle'), panel: $('health'), close: $('health-close'), rows: $('health-rows'),
                                lights: $('health-lights'), diagnostics: $('health-diagnostics'), source: $('health-source'),
                                readingsAge: $('health-readings-age')});
+// The control column, with the controls in front and the live views beside it; it connects the stream while the bot runs.
+const control = settings ? new ControlPanel(settings, {stream, health, motorTest}) : null;
 let stateShown = null;
 clock.add(() => {
   const state = latestState;
@@ -299,6 +305,7 @@ clock.add(() => {
   explainParts(health.model, state);
   showMode(state); showTarget(state); showFace(state); showTests(state, health.model); showLimits(state);
   motorTest.update(state, health.model);
+  control?.update(state, health.model);
   return false;
 });
 // The ZED IMU's batches (docs/stream.md), in its sensor axes. The bytes are copied out of the decoder's
@@ -376,14 +383,15 @@ stream.on('close', () => {
   $('connection').textContent = '○ Reconnecting…';
   health.setOwn('link', {text: 'Lost the connection to the bot, reconnecting', status: 'fail'});
 });
-stream.connect();
-window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, get state() { return latestState; }};  // For DevTools
+if (!control) stream.connect();  // The control column connects it once the bot is up
+window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, control, get state() { return latestState; }};  // For DevTools
 
 // Once a second: connection freshness, frame rates, node health and message rates.
 const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
 setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
-  if (lastSnapshotAt) setText($('connection'), stale ? '○ No data' : '● Live');
+  if (control?.down) setText($('connection'), control.down);
+  else if (lastSnapshotAt) setText($('connection'), stale ? '○ No data' : '● Live');
   // The dashboard's own check: whether the bot is sending anything at all.
   if (stream.getState() === 'CONNECTED') {
     health.setOwn('link', lastSnapshotAt && stale ? {text: `No data from the bot for ${ago(age)}`, status: 'fail'} : null);

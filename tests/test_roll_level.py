@@ -144,7 +144,7 @@ def test_motor_tests_and_no_follow_leave_the_roll_alone(hold):
         if hold == "manual":
             node.manual = True
         else:
-            node.params.follow = False
+            node.set_following(False)
         now = [0.0]
         node.clock = lambda: now[0]
         for tick in range(100):

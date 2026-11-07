@@ -130,7 +130,7 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard #series{flex:1;min-height:0;width:100%;display:block}
 .dashboard .card{padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-height:0;overflow:hidden}
 .dashboard .card-title{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
-.dashboard .card-title h2{margin:0;font-size:13px;white-space:nowrap}
+.dashboard .card-title h2{margin:0;font-size:13px;white-space:nowrap;flex:none}  /* Whole; the note beside it gives way */
 .dashboard .card-title span{font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard .tests-status{margin:0;font:12px ui-monospace,monospace;color:var(--muted);line-height:1.35;overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}

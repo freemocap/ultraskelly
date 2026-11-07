@@ -25,7 +25,7 @@ const number = value => Number.isInteger(value) ? String(value) : value.toFixed(
 // because another does (`because`) shows in its own row, and only the part it follows from counts as a problem.
 export function healthOf(state, report) {
   const components = report?.components ? report.components.map(part => ({
-    id: part.id, name: part.label || part.id, short: SHORT[part.id] || part.label || part.id,
+    id: part.id, name: part.label || part.id, short: SHORT[part.id] || part.label || part.id, group: part.group ?? null,
     status: LIGHTS[part.status] ?? 'warn', word: part.status, message: part.message || '', fix: part.hint || '',
     since: part.since ?? null, restart: part.restart || '', detail: part.detail ?? null, because: part.because || null,
   })) : fromNodesAndCameras(state);
@@ -136,6 +136,7 @@ export class HealthView {
     this.seen = new Set();       // Problem ids in the last update
     this.own = new Map();        // The dashboard's own problems: 'link' (the bot unreachable), 'checks' and 'readings' (stale)
     this.rows = new Map(); this.lights = new Map(); this.key = ''; this.readings = ''; this.model = null;
+    this.offline = null;         // {title, text} while the control panel has the bot off on purpose
     elements.toggle.onclick = () => this.setOpen(this.$.panel.hidden);
     elements.lights.onclick = () => this.setOpen(this.$.panel.hidden);
     elements.close.onclick = () => this.setOpen(false);
@@ -146,7 +147,15 @@ export class HealthView {
     this.apply();
   }
 
-  problems() { return [...this.own.values(), ...(this.model?.problems ?? [])]; }
+  problems() { return this.offline ? [] : [...this.own.values(), ...(this.model?.problems ?? [])]; }
+
+  // While the control panel has the bot off, starting or stopping ({title, text}), or null once it runs: the banner
+  // says so plainly, and nothing the page last heard from the bot counts as a problem.
+  setOffline(note) {
+    if (JSON.stringify(note ?? null) === JSON.stringify(this.offline)) return;
+    this.offline = note ?? null;
+    this.renderBanner(); this.apply();
+  }
 
   apply() {
     const problems = this.problems().length;
@@ -183,6 +192,13 @@ export class HealthView {
 
   renderBanner() {
     const model = this.model, problems = this.problems(), banner = this.$.banner;
+    banner.classList.toggle('off', Boolean(this.offline));
+    if (this.offline) {
+      for (const kind of ['bad', 'warn', 'ok']) banner.classList.remove(kind);
+      setText(this.$.count, this.offline.title); setText(this.$.summary, this.offline.text ?? '');
+      setProperty(banner, 'title', this.offline.text ?? '');
+      return;
+    }
     banner.classList.toggle('bad', problems.some(problem => problem.status === 'fail'));
     banner.classList.toggle('warn', problems.length > 0 && !problems.some(problem => problem.status === 'fail'));
     banner.classList.toggle('ok', problems.length === 0 && Boolean(model?.checked));

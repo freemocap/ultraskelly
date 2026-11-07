@@ -37,7 +37,9 @@ class OrientationNodeParams(NodeParams):
     tilt_channel: int = Field(default=11, ge=0, le=15)
     roll_channel: int = Field(default=7, ge=0, le=15, description="Levels the followed face; upright at ROLL_LEVEL")
     follow: bool = Field(
-        default=True, description="Turn the head and waist toward the target; off, they move only for motor tests",
+        default=True,
+        description="Turn the head and waist toward the target from the start; off, they move only for motor tests "
+                    "until following is switched on (OrientationNode.set_following)",
     )
 
     # Waist motor channel
@@ -107,6 +109,9 @@ class OrientationNode(Node):
     waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
     waist_mode: WaistState = Field(default=WaistState.IDLE)
     manual: bool = Field(default=False, description="True while a motor test drives the actuators; tracking commands nothing")
+    following: bool | None = Field(
+        default=None, description="Whether the head and waist follow the target now: params.follow at start, then switched",
+    )
     motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(
         default=None, exclude=True, description="Ticked every control step; brakes the DC motors if the steps stop",
     )
@@ -124,7 +129,19 @@ class OrientationNode(Node):
             self.head_aim = HeadAim(self.params.aim, self.pan_angle, self.tilt_angle)
         if self.roll_level is None:
             self.roll_level = RollLevel(self.params.roll, self.roll_angle)
-    
+        if self.following is None:
+            self.following = self.params.follow
+
+    def set_following(self, on: bool) -> None:
+        """Follow the target, or hold still: the head stays where it was last sent and the waist brakes at once,
+        unless a motor test is driving it (the test brakes it when it ends). Either way the waist's next move
+        starts from rest. Runs on the event loop, between control steps."""
+        if not on and not self.manual:
+            self.waist_motor.throttle = 0.0
+        self.waist_drive = WaistDrive(self.params.waist)  # No stale move resumes
+        self.head_still_since = None
+        self.following = on
+
     @classmethod
     def create(
         cls,
@@ -206,7 +223,7 @@ class OrientationNode(Node):
         while self.faces_subscription is not None and not self.faces_subscription.empty():
             self.latest_faces = await self.faces_subscription.get()
             fresh_faces = True
-        if self.manual or not self.params.follow:  # A motor test drives, or nothing follows the target
+        if self.manual or not self.following:  # A motor test drives, or nothing follows the target
             await self.pubsub.publish(ServoStateTopic, ServoStateMessage(  # Angles as commanded, not measured
                 pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=self.roll_angle,
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,

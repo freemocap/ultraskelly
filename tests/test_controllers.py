@@ -109,7 +109,7 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
 def test_without_follow_the_head_and_waist_hold_still_for_a_target():
     async def scenario():
         bus, node, _ = create_controllers()
-        node.params.follow = False
+        node.set_following(False)
         for _ in range(20):
             await bus.publish(TargetLocationTopic, TargetLocationMessage(x=640, y=0))
             await node.step()

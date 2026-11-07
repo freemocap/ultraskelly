@@ -6,6 +6,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/dashboard.css">
+  <link rel="stylesheet" href="/panel.css">
   <script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
 </head>
 <body class="dashboard">
@@ -22,6 +23,49 @@
   </div>
 </header>
 <main class="layout">
+  <aside id="control" class="control" aria-label="Robot controls" hidden>
+    <div class="control-title"><h2>Robot</h2><span id="control-host"></span></div>
+    <div id="control-readout" class="readout" role="status" aria-live="polite">
+      <i class="beacon" aria-hidden="true"></i>
+      <div class="readout-text"><b id="control-state">Checking…</b><span id="control-since"></span></div>
+      <span id="control-uptime" class="readout-time"></span>
+    </div>
+    <p id="control-detail" class="control-detail"></p>
+    <div class="control-buttons">
+      <button id="control-power" class="big power">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>
+        <b>Turn on</b><span>Start the bot</span>
+      </button>
+      <button id="control-restart" class="big restart">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg>
+        <b>Restart</b><span>Stop, then start again</span>
+      </button>
+    </div>
+    <button id="control-follow" class="switch" role="switch" aria-checked="true">
+      <span class="switch-text"><b>Follow people</b><span id="control-follow-note"></span></span>
+      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
+    </button>
+    <button id="control-stop" class="estop" title="Stops every motor now; following stays off, even across restarts, until you switch it on">
+      <span class="estop-cap" aria-hidden="true"><b>STOP</b></span>
+      <span class="estop-text"><b>Stop all motors</b><span>Head holds still · waist and jaw brake · following off</span></span>
+    </button>
+    <p id="control-answer" class="control-answer" role="status" aria-live="polite"></p>
+    <section class="control-status" aria-label="What works on the robot">
+      <h3>Status</h3>
+      <dl id="control-parts">
+        <dt>Cameras</dt><dd data-group="cameras"></dd>
+        <dt>Tracking</dt><dd data-group="ai"></dd>
+        <dt>Motors</dt><dd data-group="motors"></dd>
+        <dt>Sensors</dt><dd data-group="sensors"></dd>
+        <dt>Power</dt><dd data-group="power"></dd>
+      </dl>
+    </section>
+    <section id="control-error-box" class="control-error" aria-label="The bot's last error">
+      <h3>Last error <span id="control-error-age"></span></h3>
+      <p id="control-error">—</p>
+    </section>
+  </aside>
+  <div id="bot-off" class="bot-off" hidden><div><b id="bot-off-title">The robot is off</b><span id="bot-off-note"></span></div></div>
   <section class="stage" aria-label="3D scene">
     <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
     <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p><p id="stage-head" class="stage-note"></p><p id="stage-note" class="stage-note" hidden></p><p id="stage-limits" class="stage-note" hidden></p></div>
