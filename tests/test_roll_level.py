@@ -99,6 +99,17 @@ def test_without_a_face_the_head_eases_back_upright():
     assert level.view == 0.0 and level.tilt is None  # Upright, the servo half the slack past 90 the way it came
 
 
+def test_without_a_face_a_roll_inside_the_deadband_still_goes_back_to_neutral():
+    # 2026-11-07, the owner: "make it return its roll to neutral when no face is viewed". A roll a few servo degrees
+    # off 90 is inside the 1 degree deadband (about 15 servo degrees), so it used to stay where it was.
+    level = RollLevel(RollLevelParams())
+    level.place(97.0)  # A motor test, or a face that has gone, left it here
+    for tick in range(200):  # No faces for 2 s
+        level.update(now=tick * 0.01)
+    assert level.view == 0.0  # Upright, with the play taken up coming down: half the slack under 90
+    assert level.servo == LEVEL - level.params.slack / 2
+
+
 def test_the_roll_stays_within_its_span_counting_the_slack_it_pushes_past():
     level = RollLevel(RollLevelParams())
     drive(level, lambda t: 35.0, 6.0)  # More than the roll can take up

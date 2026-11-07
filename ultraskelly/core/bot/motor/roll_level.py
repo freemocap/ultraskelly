@@ -8,7 +8,9 @@ way there, smooths that goal, and rolls toward it no faster than `max_speed` (an
 faster than `servo_speed`), only once it is more than `deadband` away, and never more than `span`
 servo degrees from level. It commands the servo half the linkage's `slack` past the roll in the
 way it turns, so a reversal takes the play up at once. Without a usable face for `lost_after`
-seconds it eases back to level.
+seconds it eases back to upright however little it is off, whatever the deadband (the owner,
+2026-11-07: "return its roll to neutral when no face is viewed"). It stops half the slack past
+LEVEL (90), the way it came, so the play is taken up and the head really is upright.
 
 Angles are the picture's rotation in degrees, clockwise on screen (image y points down). On
 2026-11-06 scripts/check_motor_directions.py found a larger roll angle turning the picture's
@@ -187,10 +189,11 @@ class RollLevel:
         p = self.params
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
-        if self.seen_at is None or now - self.seen_at > p.lost_after:
-            self.goal, self.tilt = 0.0, None  # No usable face lately: back to upright
-        if not self.turning and abs(self.goal - self.view) > p.deadband:
-            self.turning = True
+        lost = self.seen_at is None or now - self.seen_at > p.lost_after
+        if lost:
+            self.goal, self.tilt = 0.0, None  # No usable face lately: back to neutral
+        if not self.turning and (abs(self.goal - self.view) > p.deadband or (lost and self.view != self.goal)):
+            self.turning = True  # Back upright however little the roll is off it
         if self.turning:
             speed = min(p.max_speed, p.servo_speed * p.ratio)
             self.view, self.rate = s_curve_step(
