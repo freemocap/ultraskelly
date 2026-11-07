@@ -24,7 +24,12 @@
 </header>
 <main class="layout">
   <aside id="control" class="control" aria-label="Robot controls" hidden>
-    <div class="control-title"><h2>Robot</h2><span id="control-host"></span></div>
+    <button id="control-rail" class="control-rail" title="Show the robot controls" aria-controls="control" aria-expanded="false">
+      <i class="beacon" aria-hidden="true"></i><span id="control-rail-state" class="rail-word">Checking</span><b aria-hidden="true">›</b>
+    </button>
+    <div class="control-title"><h2>Robot</h2><span id="control-host"></span>
+      <button id="control-collapse" class="control-collapse" title="Fold the controls to a strip" aria-controls="control" aria-expanded="true">‹</button>
+    </div>
     <div id="control-readout" class="readout" role="status" aria-live="polite">
       <i class="beacon" aria-hidden="true"></i>
       <div class="readout-text"><b id="control-state">Checking…</b><span id="control-since"></span></div>
@@ -36,7 +41,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>
         <b>Turn on</b><span>Start the bot</span>
       </button>
-      <button id="control-restart" class="big restart">
+      <button id="control-restart" class="big restart" title="Stop the bot, then start it again">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg>
         <b>Restart</b><span>Stop, then start again</span>
       </button>
@@ -44,10 +49,6 @@
     <button id="control-follow" class="switch" role="switch" aria-checked="true">
       <span class="switch-text"><b>Follow people</b><span id="control-follow-note"></span></span>
       <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
-    </button>
-    <button id="control-stop" class="estop" title="Stops every motor now; following stays off, even across restarts, until you switch it on">
-      <span class="estop-cap" aria-hidden="true"><b>STOP</b></span>
-      <span class="estop-text"><b>Stop all motors</b><span>Head holds still · waist and jaw brake · following off</span></span>
     </button>
     <p id="control-answer" class="control-answer" role="status" aria-live="polite"></p>
     <section class="control-status" aria-label="What works on the robot">

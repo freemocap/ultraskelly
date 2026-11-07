@@ -1,9 +1,14 @@
 // The control column (docs/dashboard.md, "Control panel"). Served by the always-on control service
-// (ultraskelly/control) instead of the bot, the page turns the bot on and off, restarts it, switches following,
-// stops every motor and says how the bot is: running or not, since when, its last error and what works. The live
-// views beside it come straight from the bot's own port while it runs. Served by the bot itself, the page finds
-// no /api/panel and stays the plain dashboard.
+// (ultraskelly/control) instead of the bot, the page turns the bot on and off, restarts it, switches following
+// and says how the bot is: running or not, since when, its last error and what works. The column folds to a strip
+// that keeps the bot's lamp, and stays folded across reloads. The live views beside it come straight from the
+// bot's own port while it runs. Served by the bot itself, the page finds no /api/panel and stays the plain dashboard.
 import { setProperty, setText } from '/dom.js';
+
+const FOLDED = 'ultraskelly.control.folded';  // localStorage: '1' while the column is folded to its strip
+// localStorage, which a locked-down browser may refuse; the column then opens at every load.
+function stored(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function store(key, value) { try { localStorage.setItem(key, value); } catch { /* Not kept */ } }
 
 // The control service's settings ({bot_port, local, host, unit}), or null when the bot serves this page.
 export async function panelSettings() {
@@ -65,7 +70,7 @@ export function detailOf(status, live) {
   }
   if (bot.state === 'failed') return `Stopped: ${ended ?? 'it stopped'}${exit}`;
   if (bot.state === 'off') {
-    const asked = status.action?.action === 'stop' || status.action?.action === 'stop motors';
+    const asked = status.action?.action === 'stop';
     return asked && status.action.ok ? `Turned off from the panel at ${clockTime(status.action.time)}`
       : ended ? `Its last run ended: ${ended}${exit}` : 'Not running';
   }
@@ -103,9 +108,22 @@ export class ControlPanel {
       const on = this.$('control-follow').getAttribute('aria-checked') !== 'true';
       this.send('/api/follow', {following: on}, on ? 'Switching following on…' : 'Switching following off…');
     };
-    this.$('control-stop').onclick = () => this.send('/api/stop-motors', {}, 'Stopping every motor…', 'stop');
+    this.$('control-collapse').onclick = () => this.fold(true);
+    this.$('control-rail').onclick = () => this.fold(false);
+    this.fold(stored(FOLDED) === '1', false);
     this.poll();
     setInterval(() => this.poll(), 1000);
+  }
+
+  // Fold the column to its strip, or open it; `remember` keeps the choice for the next load (the Pi's window
+  // reopens on the same browser profile at every boot).
+  fold(folded, remember = true) {
+    this.$('control').classList.toggle('folded', folded);
+    document.body.classList.toggle('control-folded', folded);
+    this.$('control-collapse').setAttribute('aria-expanded', String(!folded));
+    this.$('control-rail').setAttribute('aria-expanded', String(!folded));
+    if (remember) store(FOLDED, folded ? '1' : '0');
+    dispatchEvent(new Event('resize'));  // The views beside the column take up the room it leaves or needs
   }
 
   // The header's connection word while the bot is not running (the dashboard's own while it is), else null.
@@ -132,7 +150,7 @@ export class ControlPanel {
 
   now() { return Date.now() / 1000 + this.offset; }
 
-  async send(path, body, busyText, kind = '') {
+  async send(path, body, busyText) {
     if (this.pending) return;
     this.pending = path;
     this.say(busyText, 'busy', 30);
@@ -141,7 +159,7 @@ export class ControlPanel {
       const reply = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
       const answer = await reply.json().catch(() => ({}));
       const notes = answer.notes?.length ? ` (${answer.notes.join('; ')})` : '';
-      if (reply.ok && answer.ok !== false) this.say(`${answer.message ?? 'Done'}${notes}`, kind === 'stop' ? 'stopped' : 'done');
+      if (reply.ok && answer.ok !== false) this.say(`${answer.message ?? 'Done'}${notes}`, 'done');
       else this.say(`${answer.error ?? answer.message ?? `Refused (HTTP ${reply.status})`}${notes}`, 'refused', 12);
     } catch (problem) {
       this.say(`The control panel did not answer: ${problem.message ?? problem}`, 'refused', 12);
@@ -173,15 +191,20 @@ export class ControlPanel {
     setText(this.$('control-since'), since ? `${running ? 'up since' : 'since'} ${clockTime(since)}` : '');
     setText(this.$('control-uptime'), since ? duration(this.now() - since) : '');
     setText(this.$('control-detail'), this.lost ? 'The control panel is not answering; is the Pi on the network?' : detailOf(this.status, live));
+    // The folded strip: the same lamp and word
+    const word = this.lost ? 'No answer' : info.word;
+    setProperty(this.$('control-rail'), 'className', `control-rail ${info.lamp}${this.lost ? ' lost' : ''}`);
+    setText(this.$('control-rail-state'), word);
+    setProperty(this.$('control-rail'), 'title', `Bot ${word.toLowerCase()}: show the robot controls`);
     // Buttons
     const on = this.isOn(), busy = Boolean(this.pending) || this.lost;
     const power = this.$('control-power');
     setProperty(power, 'className', `big power ${on ? 'turn-off' : 'turn-on'}`);
     setText(power.querySelector('b'), on ? 'Turn off' : 'Turn on');
     setText(power.querySelector('span'), on ? 'Stop the bot' : 'Start the bot');
+    setProperty(power, 'title', on ? 'Stop the bot' : 'Start the bot');
     setProperty(power, 'disabled', busy || bot.state === 'missing');
     setProperty(this.$('control-restart'), 'disabled', busy || !on);
-    setProperty(this.$('control-stop'), 'disabled', this.pending === '/api/stop-motors' || this.lost);
     setProperty(this.$('control-follow'), 'disabled', busy);
     // The reply to this page's last command, else the newest command from any screen
     const answer = this.answer && performance.now() < this.answer.until ? this.answer : null;

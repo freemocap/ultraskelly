@@ -32,16 +32,15 @@ bot's own server on port 8080 serves the same page without the column.
 
 ```text
 ┌ UltraSkelly / control panel ─────────────────────────────────── live · 20/s ┐
-│ ┌ Robot ──────────────┐ ┌───────────────────────────────┐ ┌───────────────┐ │
+│ ┌ Robot ───────────‹──┐ ┌───────────────────────────────┐ ┌───────────────┐ │
 │ │ ● RUNNING  up 1:12  │ │ 3D scene                      │ │ OAK           │ │
 │ │ following people    │ │                               │ │               │ │
 │ │ [Turn off][Restart] │ │ dimmed under "The robot is    │ ├───────────────┤ │
 │ │ Follow people   ON  │ │ off" while it is not running  │ │ ZED Mini      │ │
-│ │ (STOP ALL MOTORS)   │ └───────────────────────────────┘ │ depth, IMU    │ │
-│ │ answer line         │ ┌ Time series ┬ Motor tests ────┐ │               │ │
-│ │ Status lamps        │ │                               │ │               │ │
-│ │ Last error          │ └───────────────────────────────┘ └───────────────┘ │
-│ └─────────────────────┘                                                     │
+│ │ answer line         │ └───────────────────────────────┘ │ depth, IMU    │ │
+│ │ Status lamps        │ ┌ Time series ┬ Motor tests ────┐ │               │ │
+│ │ Last error          │ │                               │ │               │ │
+│ └─────────────────────┘ └───────────────────────────────┘ └───────────────┘ │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -58,11 +57,10 @@ bot's own server on port 8080 serves the same page without the column.
   `--no-follow` in `/var/lib/ultraskelly-control/bot-options`. The bot's service passes
   it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
   bot is off, the switch says which way its next start goes.
-- **STOP ALL MOTORS:** following goes off, for every start until it is switched back on.
-  Then the running bot ends any motor test and brakes the waist and jaw; the head holds
-  where it was last sent, and the cameras and views run on. If the bot does not confirm
-  within 2 s (off, starting, hung, or older than this switch), the panel stops the bot and
-  brakes the DC motors itself with `scripts/stop_motors.py`.
+- **‹ (fold):** folds the column to a 44 px strip that keeps the bot's lamp and state
+  word; a click on the strip opens it again. The browser keeps the choice
+  (`localStorage`), so the Pi's window stays folded across reloads and reboots. Turn off
+  is the way to stop every motor: the bot's service brakes the DC motors as it stops.
 - **Answer line:** what the last command did, the same on every page showing the panel.
 - **Status:** the bot's own health checks (see Health) as lamps in five rows: Cameras
   (OAK, ZED Mini), Tracking (OAK models, Hailo-8, Depth), Motors (Servo board, Motor HAT,

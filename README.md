@@ -127,7 +127,7 @@ and the poses, faces and hands found in it, and `robot_state` messages with moto
 target, rates, node health and the OAK chip's load. The browser decodes them with FreeMoCap's `@freemocap/client` and
 draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
 On the Pi, the control panel on port 80 serves the same page with big buttons that turn
-the bot on and off, restart it, switch following and stop every motor
+the bot on and off, restart it and switch following
 ([Control panel](docs/dashboard.md#control-panel)); `scripts/open-dashboard.sh` opens it
 full-screen on the Pi's monitor.
 [The dashboard layout](docs/dashboard.md) describes its panels and sizing.

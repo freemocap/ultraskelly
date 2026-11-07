@@ -1,4 +1,4 @@
-"""HTTP commands for dashboard motor tests and the control panel's motor switches, beside the read-only /stream.
+"""HTTP commands for dashboard motor tests and the control panel's following switch, beside the read-only /stream.
 
     GET  /api/motor-test       {"enabled", "limits", "running", "last", "waist_travel", "following"}
     POST /api/motor-test       {"actuator": "pan"|"tilt", "angle": 100}
@@ -6,7 +6,6 @@
     POST /api/motor-test/stop  {}
     GET  /api/follow           {"following": true}
     POST /api/follow           {"following": false}: the head and waist follow the target, or hold still
-    POST /api/motors/stop      {}: every motor stops now: following off, any test stopped, both DC motors braked
 
 A test's reply comes once it has finished or been stopped: 200 with the test's record,
 whose "outcome" is "done", "stopped" or "failed: ...". A test that will not run is answered
@@ -68,15 +67,8 @@ def add_motor_test_routes(app: web.Application, tester: MotorTester) -> None:
         tester.orientation.set_following(switch.following)
         return web.json_response({"ok": True, "following": tester.orientation.following})
 
-    async def stop_all(request: web.Request) -> web.Response:
-        if request.content_type != "application/json":
-            return web.json_response({"ok": False, "error": "Send the stop as JSON"}, status=415)
-        stopped_test = await tester.stop_all()
-        return web.json_response({"ok": True, "following": tester.orientation.following, "stopped_test": stopped_test})
-
     app.router.add_get("/api/motor-test", state)
     app.router.add_post("/api/motor-test", run)
     app.router.add_post("/api/motor-test/stop", stop)
     app.router.add_get("/api/follow", following)
     app.router.add_post("/api/follow", follow)
-    app.router.add_post("/api/motors/stop", stop_all)

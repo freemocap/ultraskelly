@@ -41,6 +41,28 @@ def test_it_brakes_once_per_stall_and_only_once_armed():
     assert not watchdog.check()
 
 
+def test_a_stall_is_an_error_only_when_it_caught_a_motor_driven(caplog):
+    # Every start stalls the loop about 0.8 s with the motors at rest (the Pi, 2026-11-07), and the control panel
+    # shows the bot's newest error: that stall is a warning, braked all the same.
+    now = [0.0]
+    waist, mouth = Motor(), Motor()
+    watchdog = MotorWatchdog({"waist": waist, "mouth": mouth}, timeout=0.5, clock=lambda: now[0])
+    watchdog.tick()
+    now[0] = 0.8
+    with caplog.at_level("WARNING", logger="ultraskelly.core.bot.motor.motor_watchdog"):
+        assert watchdog.check()
+    assert [record.levelname for record in caplog.records] == ["WARNING"]
+    assert waist.commands[-1][1] == mouth.commands[-1][1] == 0.0
+    watchdog.tick()  # Logs that the loop runs again
+    caplog.clear()
+    waist.throttle = 0.4  # Driven when the next stall comes
+    now[0] = 2.0
+    with caplog.at_level("WARNING", logger="ultraskelly.core.bot.motor.motor_watchdog"):
+        assert watchdog.check()
+    assert [record.levelname for record in caplog.records] == ["ERROR"] and "waist driven" in caplog.records[0].message
+    assert waist.commands[-1][1] == 0.0
+
+
 def test_a_motor_that_cannot_be_braked_does_not_stop_the_others():
     now = [0.0]
     broken, mouth = Motor(fails=True), Motor()

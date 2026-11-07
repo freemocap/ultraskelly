@@ -1,5 +1,5 @@
 # The control panel: the web page on port 80 that turns the bot on and off, restarts
-# it, switches following and stops every motor (ultraskelly/control). It runs all the
+# it and switches following (ultraskelly/control). It runs all the
 # time and loads none of the bot's code, so it answers while the bot is off or broken.
 # scripts/install-services.sh fills in @USER@ and @REPO@ and installs this as
 # /etc/systemd/system/ultraskelly-control.service. It moves nothing by itself.

@@ -318,7 +318,7 @@ def test_the_head_aim_check_follows_the_live_following_switch(tmp_path):
     watch = launcher._watch_head(orientation)
     watch()
     assert launcher.health.get("head").status == Status.OK
-    orientation.set_following(False)  # As the control panel's switch and its Stop all motors do
+    orientation.set_following(False)  # As the control panel's following switch does
     watch()
     assert launcher.health.get("head").status == Status.OFF
     orientation.set_following(True)

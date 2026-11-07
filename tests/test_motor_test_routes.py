@@ -101,22 +101,3 @@ def test_following_switches_live_and_only_for_true_or_false():
         reply = await client.post("/api/follow", json={"following": True})
         assert (await reply.json())["following"] is True
     serve(scenario)
-
-
-def test_stop_all_motors_ends_a_test_brakes_the_dc_motors_and_turns_following_off():
-    async def scenario(client, server, recorder):
-        test = asyncio.create_task(client.post("/api/motor-test", json={"actuator": "waist", "throttle": 0.5, "seconds": 0.5}))
-        for _ in range(400):
-            if server.motor_tests.current is not None or test.done():
-                break
-            await asyncio.sleep(0.005)
-        assert server.motor_tests.current is not None  # The test runs
-        reply = await client.post("/api/motors/stop", json={})
-        assert await reply.json() == {"ok": True, "following": False, "stopped_test": True}
-        assert (await (await test).json())["test"]["outcome"] == "stopped"
-        assert recorder.latest["waist"].value == 0.0 and recorder.latest["mouth"].value == 0.0
-        again = await client.post("/api/motors/stop", json={})  # Nothing running: braked again all the same
-        assert (await again.json())["stopped_test"] is False
-        assert (await client.post("/api/motors/stop", data="")).status == 415
-        assert server.motor_tests.orientation.following is False
-    serve(scenario)

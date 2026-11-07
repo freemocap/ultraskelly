@@ -244,15 +244,11 @@ class FakeService:
 
 def bot_routes(heard: list, *, live_switch: bool) -> web.Application:
     """The running bot's own routes (ultraskelly/ui/motor_test_routes.py); `heard` keeps what it was sent. Without
-    `live_switch`, a bot from before the panel: no /api/follow or /api/motors/stop."""
+    `live_switch`, a bot from before the panel: no /api/follow."""
     async def follow(request):
         body = await request.json()
         heard.append(("follow", body))
         return web.json_response({"ok": True, "following": body["following"]})
-
-    async def stop_all(request):
-        heard.append(("stop", await request.json()))
-        return web.json_response({"ok": True, "following": False, "stopped_test": False})
 
     async def tests(request):
         return web.json_response({"enabled": True, "following": True})
@@ -260,7 +256,6 @@ def bot_routes(heard: list, *, live_switch: bool) -> web.Application:
     app = web.Application()
     if live_switch:
         app.router.add_post("/api/follow", follow)
-        app.router.add_post("/api/motors/stop", stop_all)
     app.router.add_get("/api/motor-test", tests)
     return app
 
@@ -296,7 +291,8 @@ def panel(scenario, tmp_path, *, state="running", bot=True, live_switch=True, **
 def test_the_panel_serves_the_dashboard_and_says_how_the_bot_is(tmp_path):
     async def scenario(client, server, service, heard):
         page = await (await client.get("/")).text()
-        assert 'id="control"' in page and 'id="control-stop"' in page
+        assert 'id="control"' in page and 'id="control-collapse"' in page and 'id="control-rail"' in page
+        assert "control-stop" not in page  # The stop-all button was removed at the owner's request, 2026-11-07
         assert (await client.get("/panel.js")).content_type == "text/javascript"
         assert await (await client.get("/api/panel")).json() == {
             "bot_port": server.bot_port, "local": False, "host": "ultraskelly-rpi5", "unit": "ultraskelly-bot.service",
@@ -375,42 +371,6 @@ def test_following_switched_while_the_bot_starts_reaches_it_once_it_runs(tmp_pat
         assert await until(heard_it, 5.0)
         assert heard == [("follow", {"following": False})]
     panel(scenario, tmp_path, state="starting")
-
-
-def test_stop_all_motors_is_held_by_a_running_bot_and_following_stays_off(tmp_path):
-    async def scenario(client, server, service, heard):
-        reply = await (await client.post("/api/stop-motors", json={})).json()
-        assert reply["ok"] and reply["how"] == "held" and heard == [("stop", {})]
-        assert service.commands == []  # The bot runs on, holding still, its cameras on
-        assert StartOptions(tmp_path / "bot-options").panel() == ["--no-follow"]
-    panel(scenario, tmp_path)
-
-
-def test_stop_all_motors_stops_a_bot_that_does_not_answer_and_brakes_the_motors_itself(tmp_path):
-    brake = [sys.executable, "-c", "print('Braked both DC motors')"]
-
-    async def scenario(client, server, service, heard):
-        reply = await client.post("/api/stop-motors", json={})
-        body = await reply.json()
-        assert reply.status == 200 and body["how"] == "stopped" and service.commands == ["stop"]
-        assert body["message"] == "All motors stopped: the bot is stopping and the waist and jaw are braked"
-        body = await (await client.post("/api/stop-motors", json={})).json()  # Now off: nothing to stop, braked again
-        assert body["ok"] and service.commands == ["stop"]
-        assert body["message"] == "All motors stopped: the waist and jaw are braked"
-        assert StartOptions(tmp_path / "bot-options").panel() == ["--no-follow"]
-    panel(scenario, tmp_path, bot=False, stop_motors=brake)
-
-
-def test_stop_all_motors_says_so_when_nothing_could_stop_them(tmp_path):
-    fails = [sys.executable, "-c", "import sys; print('No motor board at 0x60'); sys.exit(1)"]
-
-    async def scenario(client, server, service, heard):
-        service.refuse = "Interactive authentication required."
-        reply = await client.post("/api/stop-motors", json={})
-        body = await reply.json()
-        assert reply.status == 502 and not body["ok"] and body["message"] == "Could not stop the motors"
-        assert any("authentication" in note for note in body["notes"]) and any("0x60" in note for note in body["notes"])
-    panel(scenario, tmp_path, bot=False, stop_motors=fails)
 
 
 def test_motor_tests_pass_through_to_the_bot_and_say_when_it_is_off(tmp_path):

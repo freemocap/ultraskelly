@@ -156,16 +156,6 @@ class MotorTester:
         await asyncio.shield(self.task)
         return True
 
-    async def stop_all(self) -> bool:
-        """The control panel's stop: following off first, so tracking cannot take over from a test that ends, then
-        the running test stopped, then both DC motors braked. The head holds where it was last sent. Returns
-        whether a test was running."""
-        self.orientation.set_following(False)
-        stopped = await self.stop()
-        self._brake_dc_motors()
-        logger.info(f"All motors stopped from the control panel{' (a motor test was cut short)' if stopped else ''}; following is off")
-        return stopped
-
     async def _interrupted(self, seconds: float) -> bool:
         """Wait up to `seconds`; True if a stop came first."""
         try:

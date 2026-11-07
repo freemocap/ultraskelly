@@ -5,7 +5,6 @@
     GET  /api/bot                {"bot": BotStatus, "last_error", "start": the options it starts with, "action", "time"}
     POST /api/bot/start, /api/bot/stop, /api/bot/restart     {}
     POST /api/follow             {"following": bool}: kept for every start, and switched in the running bot
-    POST /api/stop-motors        {}: every motor stops now, and following stays off across restarts
     GET  /api/motor-test, POST /api/motor-test, POST /api/motor-test/stop: passed to the bot
 
 Every POST must send JSON and reach the panel by the robot's own name or address, so another
@@ -31,22 +30,18 @@ STATUS_TTL = 0.5  # Seconds one systemctl answer serves every page that asks (ea
 ERROR_TTL = 5.0  # Seconds before the log is read again, unless the bot's state changes first
 BOT_TIMEOUT = ClientTimeout(total=2.0)  # The bot's motor switches answer at once, or the bot is not answering
 TEST_TIMEOUT = ClientTimeout(total=60.0)  # A motor test answers once it has finished
-UP = ("running", "starting", "restarting", "waiting", "stopping")  # States in which the bot may yet drive a motor
 
 
 class ControlServer:
-    """`bot` is a SystemdBot or a LocalBot; `stop_motors` the command that brakes the DC motors directly, or None
-    where there are no motor boards."""
+    """`bot` is a SystemdBot or a LocalBot."""
 
     def __init__(
-        self, bot, *, options: StartOptions, bot_port: int = 8080, stop_motors: list[str] | None = None,
-        stop_motors_cwd: str | None = None, hostname: str | None = None, local: bool = False, clock=time.time,
+        self, bot, *, options: StartOptions, bot_port: int = 8080, hostname: str | None = None, local: bool = False,
+        clock=time.time,
     ) -> None:
         self.bot = bot
         self.options = options
         self.bot_port = bot_port
-        self.stop_motors_command = stop_motors
-        self.stop_motors_cwd = stop_motors_cwd
         self.hostname = hostname or socket.gethostname()
         short = self.hostname.split(".")[0].lower()
         # The names a page may reach the panel by: this computer's own, never another domain's name for it.
@@ -73,7 +68,6 @@ class ControlServer:
         app.router.add_get("/api/bot", self._bot_status)
         app.router.add_post("/api/bot/{verb}", self._act)
         app.router.add_post("/api/follow", self._follow)
-        app.router.add_post("/api/stop-motors", self._stop_motors)
         app.router.add_get("/api/motor-test", self._to_bot)
         app.router.add_post("/api/motor-test", self._to_bot)
         app.router.add_post("/api/motor-test/stop", self._to_bot)
@@ -207,57 +201,6 @@ class ControlServer:
                 return
             if status.state not in ("starting",):
                 return
-
-    # --- Stop every motor -----------------------------------------------------------------------
-
-    async def _stop_motors(self, request: web.Request) -> web.Response:
-        notes = []
-        try:
-            self.options.set_following(False)  # Every start from now on holds still, until following is switched on
-        except OSError as error:
-            notes.append(f"following could not be kept off for the next start ({error})")
-        status = await self.status(fresh=True)
-        if status.state == "running":
-            reply = await self.bot_post("/api/motors/stop", {})
-            if reply is not None and reply[0] == 200:
-                message = "All motors stopped: the head holds still, the waist and jaw are braked, following is off"
-                return web.json_response({**self._did("stop motors", True, message), "how": "held", "notes": notes})
-        # The bot did not confirm it (off, starting, not answering, or from before this switch): stop it, then brake
-        # the DC motors directly. Its service brakes them again once it has stopped.
-        stopped = False
-        if status.state in UP:
-            try:
-                await self.bot.act("stop")
-                stopped = True
-            except ActionFailed as failed:
-                notes.append(f"the bot could not be stopped: {failed}")
-        braked, why = await self.brake()
-        if not braked:
-            notes.append(why)
-        done = [*(["the bot is stopping"] if stopped else []), *(["the waist and jaw are braked"] if braked else [])]
-        ok = stopped or braked or status.state in ("off", "failed", "missing")
-        message = (f"All motors stopped: {' and '.join(done)}" if done else
-                   "Nothing was running: the bot is off" if ok else "Could not stop the motors")
-        self._status_at = 0.0
-        return web.json_response({**self._did("stop motors", ok, message), "how": "stopped" if stopped else "braked",
-                                  "notes": notes}, status=200 if ok else 502)
-
-    async def brake(self) -> tuple[bool, str]:
-        """Brake every DC motor on the motor board directly (scripts/stop_motors.py); it needs no robot lock."""
-        if self.stop_motors_command is None:
-            return False, "no motor boards here to brake directly"
-        from ultraskelly.control.bots import launch
-
-        try:
-            process = await launch(*self.stop_motors_command, cwd=self.stop_motors_cwd,
-                                   stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-            output, _ = await asyncio.wait_for(process.communicate(), 12)
-        except (OSError, TimeoutError) as error:
-            return False, f"the motor board could not be braked directly ({error!r})"
-        lines = output.decode("utf-8", "replace").strip().splitlines()
-        if process.returncode != 0:
-            return False, f"the motor board could not be braked directly: {lines[-1] if lines else process.returncode}"
-        return True, lines[-1] if lines else "braked"
 
     # --- The bot's own routes ------------------------------------------------------------------
 

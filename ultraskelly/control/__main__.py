@@ -58,10 +58,7 @@ def main() -> None:
         server = ControlServer(None, options=options, bot_port=args.bot_port, local=True)
         server.bot = LocalBot(command, probe=server.probe)
     else:
-        server = ControlServer(
-            SystemdBot(args.unit), options=options, bot_port=args.bot_port,
-            stop_motors=[sys.executable, "-m", "scripts.stop_motors"], stop_motors_cwd=str(REPO),
-        )
+        server = ControlServer(SystemdBot(args.unit), options=options, bot_port=args.bot_port)
     logging.getLogger(__name__).info(
         f"Control panel on port {args.port} for {'a local stand-in bot' if local else args.unit}; "
         f"start options in {options_file}"

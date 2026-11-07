@@ -55,18 +55,35 @@ class MotorWatchdog:
         self.last_tick = None
 
     def check(self) -> bool:
-        """Brake the motors if the loop has gone quiet; True if this call braked them."""
+        """Brake the motors if the loop has gone quiet; True if this call braked them. A stall that caught a DC motor
+        driven is logged as an error. One with every motor at rest is a warning, since nothing was moving: the bot's
+        nodes block the loop for about 0.8 s as they start, and the control panel shows the bot's newest error."""
         last = self.last_tick
         if last is None or self.tripped_at is not None or self.clock() - last <= self.timeout:
             return False
         self.tripped_at, self.trips = self.clock(), self.trips + 1
-        logger.error(f"Control loop stalled for over {self.timeout:.1f} s: braking the DC motors")
+        driven = [name for name, motor in self.motors.items() if self._driven(motor)]
+        if driven:
+            logger.error(f"Control loop stalled for over {self.timeout:.1f} s with {', '.join(driven)} driven: "
+                         "braking the DC motors")
+        else:
+            logger.warning(f"Control loop stalled for over {self.timeout:.1f} s with the DC motors at rest: "
+                           "braking them all the same")
         for name, motor in self.motors.items():
             try:
                 motor.throttle = 0.0
             except Exception:
                 logger.exception(f"Motor watchdog could not brake {name}")
         return True
+
+    @staticmethod
+    def _driven(motor: object) -> bool:
+        """Whether a motor's last command drives it (not braked at 0, not released at None); one whose command
+        cannot be read counts as driven."""
+        try:
+            return bool(motor.throttle)
+        except Exception:
+            return True
 
     def start(self) -> None:
         self._stopping.clear()

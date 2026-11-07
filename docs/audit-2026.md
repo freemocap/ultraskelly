@@ -437,15 +437,26 @@ reads only that cache, offline. On the robot's Pi the check found all six there.
 
 At the owner's request ("I need to be able to turn the thing on and off") the Pi's monitor
 shows a control panel: `ultraskelly-control.service` on port 80 serves the dashboard with
-buttons that start, stop and restart `ultraskelly-bot`, a following switch kept across
-restarts in `/var/lib/ultraskelly-control/bot-options`, and a stop for every motor
+buttons that start, stop and restart `ultraskelly-bot`, and a following switch kept across
+restarts in `/var/lib/ultraskelly-control/bot-options`
 ([docs/dashboard.md](dashboard.md#control-panel)). It runs as the robot's user with
 `NoNewPrivileges=yes`; one polkit rule allows it exactly `start`, `stop` and `restart`
-of the bot's unit. Proven on the PC only, against a stand-in bot and stand-ins for
-systemd: `tests/test_control_panel.py` (the rule evaluated under node, not polkitd) and
-headless-Chrome screenshots. Not yet seen on the Pi: the rule under Trixie's polkitd,
-binding port 80 through `CAP_NET_BIND_SERVICE`, journal access for the panel, and the
-bot's unit reading the panel's options at its next restart.
+of the bot's unit. `tests/test_control_panel.py` covers it against a stand-in bot and
+stand-ins for systemd, with the rule evaluated under node.
+
+Seen on the Pi the same day (715e6c8, polkitd 126): the panel bound port 80 through
+`CAP_NET_BIND_SERVICE` and answered at `http://ultraskelly-rpi5.local/`. Restart, Turn off
+and Turn on went through the polkit rule: off in 16 s, the DC motors braked by the
+service's stop hook, and on in 12 s. The following switch reached the running bot at
+once, and the next start carried the panel's `--follow`. A POST naming another host, or
+not sent as JSON, was refused. The user's `adm` group gave the panel the bot's log.
+Chromium's first start on the new address opened at its default half-screen size; the
+second went full screen. Not yet seen: the window after a reboot.
+
+The first version had a red button that stopped every motor and kept following off. The
+owner had it removed the same day, and the column made smaller and foldable. Turn off is
+the stop: the bot's service brakes the DC motors as it stops
+(`scripts/stop-motors-after-bot.sh`).
 
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
