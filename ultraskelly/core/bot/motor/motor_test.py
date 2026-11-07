@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 SERVO_TRAVEL = (0.0, 180.0)  # Degrees: every angle the servo board's scale has (750-2250 µs)
 SWEEP_STEP = 0.02  # Seconds between the commands of a servo test's sweep
+SERVOS = ("pan", "tilt", "roll")  # The head's servos, which a test turns to an angle
 
 
 class MotorTestLimits(NodeParams):
@@ -49,7 +50,7 @@ class MotorTestRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    actuator: Literal["pan", "tilt", "waist", "mouth"]
+    actuator: Literal["pan", "tilt", "roll", "waist", "mouth"]
     angle: float | None = Field(default=None, ge=SERVO_TRAVEL[0], le=SERVO_TRAVEL[1], description="Servo angle in degrees, 0-180")
     throttle: float | None = Field(default=None, ge=-1.0, le=1.0, description="Motor drive; negative jaw drive opens it")
     seconds: float | None = Field(default=None, gt=0.0, description="How long to drive the motor")
@@ -101,9 +102,11 @@ class MotorTester:
             "simulated": self.simulated,
             "limits": {
                 **self.limits.model_dump(),
-                "servo_windows": {name: list(SERVO_TRAVEL) for name in ("pan", "tilt")},
-                # +1: a larger angle turns the view right (pan) or down (tilt), as the head's aim has it (head_aim.py)
-                "directions": {"pan": self.orientation.params.aim.pan_direction, "tilt": self.orientation.params.aim.tilt_direction},
+                "servo_windows": {name: list(SERVO_TRAVEL) for name in SERVOS},
+                # +1: a larger angle turns the view right (pan) or down (tilt), as the head's aim has it (head_aim.py),
+                # or tips the head clockwise as seen from behind (roll; roll_level.py's direction, measured -1)
+                "directions": {"pan": self.orientation.params.aim.pan_direction, "tilt": self.orientation.params.aim.tilt_direction,
+                               "roll": self.orientation.params.roll.direction},
             },
             "running": self.current,
             "last": self.last,
@@ -120,7 +123,7 @@ class MotorTester:
             raise MotorTestRefused(reason)
         if self.task is not None and not self.task.done():
             raise MotorTestRefused(f"Busy: {self.current['description']} is running", busy=True)
-        if request.actuator in ("pan", "tilt"):
+        if request.actuator in SERVOS:
             if request.angle is None or request.throttle is not None or request.seconds is not None:
                 raise MotorTestRefused("A servo test takes an angle and nothing else")
             return
@@ -169,10 +172,11 @@ class MotorTester:
 
     async def _sweep(self, servo, actuator: str, target: float) -> bool:
         """Turn a head servo to `target` no faster than the head turns it when following (pan_servo_speed for pan,
-        servo_speed for tilt), not at the servo's own full speed: a whole-range test then takes seconds, not a jerk.
-        True if a stop came first; the servo holds where the sweep had got to."""
+        servo_speed for tilt, the roll's own servo_speed for roll), not at the servo's own full speed: a whole-range
+        test then takes seconds, not a jerk. True if a stop came first; the servo holds where the sweep had got to."""
         aim = self.orientation.params.aim
-        speed = min(aim.servo_speed, aim.pan_servo_speed) if actuator == "pan" else aim.servo_speed
+        speed = {"pan": min(aim.servo_speed, aim.pan_servo_speed), "tilt": aim.servo_speed,
+                 "roll": self.orientation.params.roll.servo_speed}[actuator]
         start = float(getattr(self.orientation, f"{actuator}_angle"))
         steps = max(1, math.ceil(abs(target - start) / (speed * SWEEP_STEP)))
         for step in range(1, steps + 1):
@@ -194,9 +198,8 @@ class MotorTester:
         self.orientation.manual = self.mouth.manual = True  # Tracking commands nothing now
         try:
             self._brake_dc_motors()  # Whatever tracking was doing stops: only the tested actuator moves
-            if request.actuator in ("pan", "tilt"):
-                channel = self.orientation.params.pan_channel if request.actuator == "pan" else self.orientation.params.tilt_channel
-                servo = self.orientation.servo_kit.servo[channel]
+            if request.actuator in SERVOS:
+                servo = self.orientation.servo_kit.servo[getattr(self.orientation.params, f"{request.actuator}_channel")]
                 if await self._sweep(servo, request.actuator, request.angle):
                     outcome = "stopped"
                 sent = servo.angle  # After the actuator limits

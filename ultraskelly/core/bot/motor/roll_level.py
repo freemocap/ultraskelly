@@ -49,7 +49,7 @@ class RollLevelParams(NodeParams):
     )
     span: float = Field(
         default=25.0, gt=0.0, le=30.0,
-        description="Servo degrees the roll may move either side of level: 5 short of its hard limits (ActuatorLimits)",
+        description="Servo degrees the roll may move either side of level (motor tests may send it anywhere in 0-180)",
     )
     deadband: float = Field(default=1.0, ge=0.0, le=20.0, description="The roll turns only once its goal is further than this")
     reach: float = Field(
@@ -119,6 +119,13 @@ class RollLevel:
 
     def _view(self, servo: float) -> float:
         return self.params.direction * self.params.ratio * (servo - LEVEL)
+
+    def place(self, roll: float) -> None:
+        """Something else moved the roll here (a motor test): carry on from here. The goal stays, so levelling turns on
+        from this angle at its own pace, toward the followed face, or back to upright without one."""
+        self.servo, self.view, self.rate, self.turning = roll, self._view(roll), 0.0, False
+        self.pushing, self.extreme = 0, roll
+        self.history.clear()
 
     def span(self) -> float:
         """The largest rotation the roll may command either way: its servo, pushing half the slack past it,

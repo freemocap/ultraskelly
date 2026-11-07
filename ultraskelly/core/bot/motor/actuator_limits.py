@@ -21,10 +21,10 @@ class ActuatorLimits(NodeParams):
     pan_max_degrees: float = Field(default=180.0, ge=0.0, le=180.0)
     tilt_min_degrees: float = Field(default=0.0, ge=0.0, le=180.0)
     tilt_max_degrees: float = Field(default=180.0, ge=0.0, le=180.0)
-    # Roll is turned only by its own controller (roll_level.py, at most 25 degrees from upright):
-    # 30 either side of 90, as far as the dashboard's servo tests go.
-    roll_min_degrees: float = Field(default=60.0, ge=0.0, le=180.0)
-    roll_max_degrees: float = Field(default=120.0, ge=0.0, le=180.0)
+    # Levelling turns roll at most `span` (25) degrees from upright (roll_level.py); motor tests may send
+    # it anywhere in 0-180, as pan and tilt (the owner, 2026-11-07).
+    roll_min_degrees: float = Field(default=0.0, ge=0.0, le=180.0)
+    roll_max_degrees: float = Field(default=180.0, ge=0.0, le=180.0)
     waist_max_throttle: float = Field(default=0.8, ge=0.0, le=1.0)
     mouth_max_throttle: float = Field(default=1.0, ge=0.0, le=1.0)
 

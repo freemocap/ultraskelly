@@ -143,8 +143,8 @@ another command as the bot, which must serve the dashboard's `/stream` and
 - **Motor tests:** the buttons are in the strip card itself, no panel to open
   (`motor-test.js`), by where the head goes: Pan ◀◀ ◀10 90 ▶10 ▶▶ (the robot's own left
   and right, as its camera's picture and the 3D view from behind show them; mirrored for
-  someone facing it) and Tilt ▲▲ ▲10 90 ▼10 ▼▼. The doubled arrows go all the way, to 0 or
-  180; the head's `pan_direction` and `tilt_direction` say which (on this robot a larger
+  someone facing it), Tilt ▲▲ ▲10 90 ▼10 ▼▼ and Roll ↺↺ ↺10 90 ↻10 ↻↻ (toward its left or
+  right shoulder, seen from behind). The doubled arrows go all the way, to 0 or 180; the head's `pan_direction` and `tilt_direction` say which (on this robot a larger
   tilt angle turns the head down). The commanded servo angle sits beside each row; Waist − and + and Jaw Open, each sending the drive × seconds in its row; then Stop
   and a status line. The line shows this page's answer for a few seconds, then what the bot
   reports: a test running from any screen, the last test's outcome, or why tests cannot

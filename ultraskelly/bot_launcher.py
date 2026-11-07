@@ -362,7 +362,7 @@ class BotLauncher(BaseModel):
 
     def _unavailable(self, actuator: str) -> str | None:
         """Why a motor test on `actuator` cannot reach a board now, or None; simulated tests run."""
-        board = "servo_board" if actuator in ("pan", "tilt") else "motor_board"
+        board = "servo_board" if actuator in ("pan", "tilt", "roll") else "motor_board"
         component = self.health.get(board)
         if self.config.simulate_motors or component is None:
             return None

@@ -111,7 +111,8 @@ export class MotorTestPanel {
         button(`${forth[0]}${SERVO_STEP}`, `${label}: ${forth[1]}, ${SERVO_STEP}° of servo`, () => move(current() + SERVO_STEP * toward)),
         button(`${forth[0]}${forth[0]}`, `${label}: all the way ${forth[1]} (${forthEnd}°)`, () => move(forthEnd))), this.shown[actuator]];
     };
-    const directions = limits.directions ?? {pan: 1, tilt: 1};  // +1: a larger angle turns the head right (pan), down (tilt)
+    // +1: a larger angle turns the head right (pan), down (tilt) or clockwise as seen from behind (roll; -1 on this robot)
+    const directions = limits.directions ?? {pan: 1, tilt: 1, roll: -1};
     // A DC motor's row: its buttons, then the drive and seconds each press sends.
     const dc = (actuator, label, drive, seconds, buttons) => [name(label), element('span', {className: 'motor-test-drive'},
       ...buttons.map(([text, title, sign]) => button(text, title, () => this.send({actuator, throttle: sign * Number(drive.value), seconds: Number(seconds.value)}))),
@@ -121,12 +122,14 @@ export class MotorTestPanel {
     const jawDrive = number(limits.mouth_max_throttle, limits.mouth_max_throttle, 'Jaw drive (throttle)');
     const jawSeconds = number(Math.min(.2, limits.mouth_max_seconds), limits.mouth_max_seconds, 'Jaw seconds');
     const grid = element('div', {className: 'motor-test', title:
-      `One at a time; tracking pauses during each test. Pan ${windows.pan[0]}–${windows.pan[1]}°, tilt ${windows.tilt[0]}–${windows.tilt[1]}°; waist up to ${limits.waist_max_throttle.toFixed(2)} ` +
+      `One at a time; tracking pauses during each test. Pan ${windows.pan[0]}–${windows.pan[1]}°, tilt ${windows.tilt[0]}–${windows.tilt[1]}°, roll ${windows.roll[0]}–${windows.roll[1]}°; waist up to ${limits.waist_max_throttle.toFixed(2)} ` +
       `for ${limits.waist_max_seconds.toFixed(2)} s, at most ${limits.waist_max_travel.toFixed(2)} throttle-seconds one way; jaw up to ` +
       `${limits.mouth_max_throttle.toFixed(2)} for ${limits.mouth_max_seconds.toFixed(2)} s.`},
       // Pan by the robot's own left and right, as its camera's picture and the 3D view from behind show them.
       ...servo('pan', 'Pan', directions.pan, [['◀', "to the robot's left"], ['▶', "to the robot's right"]]),
       ...servo('tilt', 'Tilt', directions.tilt, [['▲', 'up'], ['▼', 'down']]),
+      // Roll by which way the head tips as seen from behind it: toward its left shoulder or its right.
+      ...servo('roll', 'Roll', directions.roll ?? -1, [['↺', 'toward its left shoulder'], ['↻', 'toward its right shoulder']]),
       ...dc('waist', 'Waist', waistDrive, waistSeconds, [['−', 'Drive the waist with negative throttle', -1], ['+', 'Drive the waist with positive throttle', 1]]),
       ...dc('mouth', 'Jaw', jawDrive, jawSeconds, [['Open', 'Drive the jaw open (negative throttle); its spring closes it', -1]]));
     this.stopButton = element('button', {textContent: '■ Stop', className: 'motor-test-stop', title: 'Stop the running test', onclick: () => this.stop()});
@@ -203,7 +206,7 @@ export class MotorTestPanel {
   update(state, model) {
     if (!this.limits) return;
     const servosDown = down(model, 'servo_board'), motorsDown = down(model, 'motor_board');
-    for (const name of ['pan', 'tilt']) {
+    for (const name of ['pan', 'tilt', 'roll']) {
       const value = state.motors?.commands?.[name]?.value;
       this.commands[name] = value ?? undefined;
       setText(this.shown[name], value == null ? '—' : `${value.toFixed(0)}°${servosDown ? ' not sent' : ''}`);
