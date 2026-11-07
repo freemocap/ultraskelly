@@ -35,8 +35,8 @@ bot's own server on port 8080 serves the same page without the column.
 │ ┌ Robot ───────────‹──┐ ┌───────────────────────────────┐ ┌───────────────┐ │
 │ │ ● RUNNING  up 1:12  │ │ 3D scene                      │ │ OAK           │ │
 │ │ following people    │ │                               │ │               │ │
-│ │ [Turn off][Restart] │ │ dimmed under "The robot is    │ ├───────────────┤ │
-│ │ Follow people   ON  │ │ off" while it is not running  │ │ ZED Mini      │ │
+│ │ [Turn off][Restart] │ │                               │ ├───────────────┤ │
+│ │ Follow people   ON  │ │                               │ │ ZED Mini      │ │
 │ │ answer line         │ └───────────────────────────────┘ │ depth, IMU    │ │
 │ │ Status lamps        │ ┌ Time series ┬ Motor tests ────┐ │               │ │
 │ │ Last error          │ │                               │ │               │ │
@@ -69,9 +69,9 @@ bot's own server on port 8080 serves the same page without the column.
   it, and how long ago; or `scripts/run-bot.sh`'s "Not starting: another program is
   using the robot", with the program that holds the lock.
 
-While the bot is not running, the 3D scene and the camera views are dimmed under "The
-robot is off" (or "Starting…") with the reason, and the header says so instead of listing
-every part as failed. The live views read the bot's `/stream` straight from port 8080, so
+While the bot is not running, the views keep what they last showed, nothing covers
+them, the motor test buttons are greyed out, and the header says "Bot off" (or
+"Bot starting") instead of listing every part as failed. The live views read the bot's `/stream` straight from port 8080, so
 the panel adds no second copy of the video. Motor tests pass through the panel to the bot.
 
 How it runs:

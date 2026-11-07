@@ -126,14 +126,6 @@ body.dashboard.control .sensors{overflow-x:hidden}
 .dashboard .rail-word{writing-mode:vertical-rl;font:700 12px var(--console);letter-spacing:.14em;text-transform:uppercase;color:#7d8b90}
 .dashboard .control-rail b{font:700 16px/1 var(--console)}
 
-/* While the bot is not running, the live views say why, in place. */
-.dashboard .bot-off{grid-area:1 / 2 / 3 / 4;z-index:4;display:grid;place-items:center;border-radius:6px;border:1px dashed #3c4c54;
-  background:radial-gradient(ellipse at center,rgba(16,21,24,.82),rgba(10,14,16,.94))}
-.dashboard .bot-off>div{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:min(620px,80%);text-align:center}
-.dashboard .bot-off b{font:700 clamp(22px,2.4vw,38px) var(--console);letter-spacing:.04em;color:#c3cdcf}
-.dashboard .bot-off span{font-size:clamp(13px,1vw,16px);color:var(--muted);line-height:1.45}
-.dashboard .bot-off.busy b{color:#ffcf7a}.dashboard .bot-off.fail b{color:#ff8f86}.dashboard .bot-off.warn b{color:#ffcf7a}
-
 /* The header's banner, while the bot is off on purpose: plain, not a problem. */
 .dashboard .problems.off{border-color:#39444a;background:#151c20;color:var(--muted)}
 .dashboard .problems.off b{color:#c3cdcf}
@@ -147,7 +139,6 @@ body.dashboard.control .sensors{overflow-x:hidden}
 /* Narrow screens: the controls first, then the live views; folded, the strip runs across the top. */
 @media (max-width:999px){
   .dashboard .control{order:-1;overflow:visible}
-  .dashboard .bot-off{order:0;min-height:140px;padding:16px}
   .dashboard .control .big{height:48px}
   .dashboard .control .control-collapse{transform:rotate(90deg)}
   .dashboard .control>.control-rail{flex-direction:row;padding:4px 8px}

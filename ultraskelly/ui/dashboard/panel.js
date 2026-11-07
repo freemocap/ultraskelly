@@ -24,14 +24,14 @@ export function streamUrl(settings) {
   return `${scheme}://${settings ? `${location.hostname}:${settings.bot_port}` : location.host}/stream`;
 }
 
-// Each state of the bot (ultraskelly/control/bots.py STATES): its word, its lamp, what the live views say meanwhile.
+// Each state of the bot (ultraskelly/control/bots.py STATES): its word, its lamp, and the readout's line meanwhile.
 const STATES = {
   running: {word: 'Running', lamp: 'on'},
   starting: {word: 'Starting', lamp: 'busy', note: 'Booting the cameras and loading the models; it takes a few seconds'},
   stopping: {word: 'Stopping', lamp: 'busy', note: 'Stopping its parts; the head centres and the waist brakes'},
   restarting: {word: 'Restarting', lamp: 'busy', note: 'It stopped by itself and starts again in a moment'},
   waiting: {word: 'Waiting', lamp: 'warn', note: 'Another program is using the robot; the bot starts once it is done'},
-  off: {word: 'Off', lamp: 'off', note: 'Turn it on to see its cameras, the 3D view and the motor tests'},
+  off: {word: 'Off', lamp: 'off'},
   failed: {word: 'Failed', lamp: 'fail', note: 'It stopped and will not start again by itself'},
   missing: {word: 'Not installed', lamp: 'fail', note: 'No ultraskelly-bot service here: run scripts/install-services.sh'},
   unknown: {word: 'Unknown', lamp: 'warn', note: 'The service manager did not answer'},
@@ -217,13 +217,9 @@ export class ControlPanel {
     setText(this.$('control-error'), error ? error.text : 'None in the bot\'s recent log');
     setText(this.$('control-error-age'), error ? `${clockTime(error.time)} · ${duration(this.now() - error.time)} ago` : '');
     setProperty(this.$('control-error-box'), 'className', `control-error${error ? error.waiting ? ' waiting' : ' error' : ''}`);
-    // The live views, the banner and the stream follow the bot
-    const overlay = this.$('bot-off');
-    setProperty(overlay, 'hidden', running);
-    setProperty(overlay, 'className', `bot-off ${info.lamp}`);
-    setText(this.$('bot-off-title'), {off: 'The robot is off', failed: 'The bot stopped', missing: 'No bot service'}[bot.state] ?? `${info.word}…`);
-    setText(this.$('bot-off-note'), bot.state === 'waiting' ? detailOf(this.status, null) : info.note ?? '');
-    this.views.health?.setOffline(running ? null : {title: `Robot ${info.word.toLowerCase()}`, text: bot.state === 'off' ? 'turn it on from the panel' : info.note ?? ''});
+    // The header, the motor test buttons and the stream follow the bot; the live views just keep what they last had
+    this.views.health?.setOffline(running ? null : {title: `Bot ${info.word.toLowerCase()}`, text: ''});
+    this.views.motorTest?.setOnline(running);
     this.follow(running || (bot.state === 'stopping' && this.views.stream?.getState() === 'CONNECTED'));
     if (running && !this.wasRunning) this.views.motorTest?.load();
     this.wasRunning = running;

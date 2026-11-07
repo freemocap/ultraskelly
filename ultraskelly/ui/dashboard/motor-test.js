@@ -131,8 +131,19 @@ export class MotorTestPanel {
 
   setRunning(running) {
     this.running = running;
-    for (const made of this.buttons) made.disabled = running || !this.enabled;
-    this.stopButton.disabled = !this.enabled;
+    const usable = this.enabled && this.online !== false;
+    for (const made of this.buttons) made.disabled = running || !usable;
+    this.stopButton.disabled = !usable;
+  }
+
+  // Whether the bot is up, from the control panel (the bot's own page never says, so its buttons stay usable): the
+  // buttons are greyed out while it is not.
+  setOnline(online) {
+    if (this.online === online) return;
+    this.online = online;
+    if (!this.buttons) return;
+    this.setRunning(this.running);
+    if (!online) { this.answer = null; this.show('Bot not running'); }
   }
 
   show(text, kind = '') {
