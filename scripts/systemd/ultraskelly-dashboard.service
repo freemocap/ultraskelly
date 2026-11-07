@@ -8,7 +8,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=exec
-# Wait for the desktop and the bot's server as long as they take.
+# Wait for the desktop and the control panel as long as they take.
 Environment=DASHBOARD_WAIT_SECONDS=0
 ExecStart=@REPO@/scripts/open-dashboard.sh
 # Reopen Chromium after it crashes. Closing the window (Alt+F4), or opening the

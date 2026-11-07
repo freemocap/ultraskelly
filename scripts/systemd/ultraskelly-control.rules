@@ -1,0 +1,13 @@
+// Lets the control panel (ultraskelly-control.service, run as @USER@) start, stop and
+// restart the bot's service, and nothing more: no other unit, no other verb (not
+// enable, kill or edit), no other user. scripts/install-services.sh fills in @USER@
+// and installs this as /etc/polkit-1/rules.d/50-ultraskelly-control.rules; polkit
+// reads it at once. Written in ES5, which polkit's JavaScript engine runs.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "ultraskelly-bot.service" &&
+        ["start", "stop", "restart"].indexOf(action.lookup("verb")) >= 0 &&
+        subject.user === "@USER@") {
+        return polkit.Result.YES;
+    }
+});

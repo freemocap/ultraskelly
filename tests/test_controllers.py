@@ -119,6 +119,34 @@ def test_without_follow_the_head_and_waist_hold_still_for_a_target():
     asyncio.run(scenario())
 
 
+def test_following_switched_off_holds_the_head_brakes_the_waist_and_comes_back_on():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        now = [0.0]
+        node.clock = lambda: now[0]
+
+        async def person_at(x, seconds):
+            for tick in range(round(seconds * 100)):
+                if tick % 3 == 0:
+                    await bus.publish(TargetLocationTopic, TargetLocationMessage(x=x, y=240, captured=now[0]))
+                await node.step()
+                now[0] += 0.01
+
+        await person_at(600, 1.0)  # Off to one side: the head turns toward them
+        turned = (node.pan_angle, node.tilt_angle)
+        assert turned[0] != 90.0
+        node.waist_motor.throttle = 0.3  # As if the waist were turning
+        node.set_following(False)  # The control panel's switch
+        assert node.waist_motor.throttle == 0.0  # Braked at once, not at the next step
+        await person_at(40, 1.0)  # Someone on the other side: nothing follows
+        assert (node.pan_angle, node.tilt_angle) == turned and node.waist_motor.throttle == 0.0
+        node.set_following(True)
+        await person_at(40, 1.0)
+        assert node.pan_angle != turned[0]  # Following again
+        bus.close()
+    asyncio.run(scenario())
+
+
 def test_the_robot_launches_with_the_calmer_tuning():
     # 2026-11-06, the user: "turn down the aggressiveness". Gain 0.05 overshot 84 px on the robot.
     from ultraskelly.__main__bot import launch_config

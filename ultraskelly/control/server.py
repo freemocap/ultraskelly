@@ -13,6 +13,7 @@ web page can neither send one nor reach this service through a name of its own (
 """
 import asyncio
 import ipaddress
+import json
 import logging
 import socket
 import time
@@ -47,6 +48,11 @@ class ControlServer:
         self.stop_motors_command = stop_motors
         self.stop_motors_cwd = stop_motors_cwd
         self.hostname = hostname or socket.gethostname()
+        short = self.hostname.split(".")[0].lower()
+        # The names a page may reach the panel by: this computer's own, never another domain's name for it.
+        self.names = {"localhost", short, f"{short}.local", self.hostname.lower()}
+        if hostname is None:
+            self.names.add(socket.getfqdn().lower())
         self.local = local
         self.clock = clock
         self.http: ClientSession | None = None
@@ -87,7 +93,9 @@ class ControlServer:
         return await handler(request)
 
     def trusted(self, host: str | None) -> bool:
-        """Whether a request's Host names this robot: an address, localhost, or this computer's name with any domain."""
+        """Whether a request's Host names this robot: an address, localhost, or this computer's own name (alone, with
+        .local, or as the computer itself spells it in full). A page that reached the panel through a name of its own
+        (DNS rebinding) sends that name, and is refused."""
         name = (host or "").strip()
         if name.startswith("["):
             name = name[1:name.find("]")] if "]" in name else name[1:]
@@ -98,8 +106,7 @@ class ControlServer:
             return True
         except ValueError:
             pass
-        label = name.split(".")[0].lower()
-        return bool(label) and label in ("localhost", self.hostname.split(".")[0].lower())
+        return name.lower().rstrip(".") in self.names
 
     async def _asset(self, request: web.Request) -> web.Response:
         path, content_type = ASSETS[request.path]
@@ -258,13 +265,19 @@ class ControlServer:
         return f"http://127.0.0.1:{self.bot_port}{path}"
 
     async def bot_post(self, path: str, payload: dict) -> tuple[int, dict] | None:
-        """POST to the bot; (status, reply) or None when it does not answer."""
+        """POST to the bot; (status, reply) or None when it does not answer. A reply that is not JSON, such as an
+        older bot's 404 for a route it does not have, still gives its status."""
         try:
             async with self.http.post(self._bot_url(path), json=payload, timeout=BOT_TIMEOUT) as reply:
-                body = await reply.json(content_type=None) if reply.content_length != 0 else {}
-                return reply.status, body
-        except (ClientError, TimeoutError, OSError, ValueError):
+                text = (await reply.read()).decode("utf-8", "replace")
+                status = reply.status
+        except (ClientError, TimeoutError, OSError):
             return None
+        try:
+            body = json.loads(text) if text else {}
+        except ValueError:
+            body = {"text": text}
+        return status, body if isinstance(body, dict) else {"reply": body}
 
     async def probe(self) -> bool:
         """Whether the bot's server answers (a LocalBot's readiness)."""

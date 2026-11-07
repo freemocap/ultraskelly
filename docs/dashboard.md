@@ -22,6 +22,94 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Control panel
+
+Since 2026-11-07 the Pi's monitor shows this dashboard with a control column on its left.
+That page comes from the control panel, `ultraskelly-control.service`, on port 80
+(`http://ultraskelly-rpi5.local/` from other computers). The panel runs all the time and
+loads none of the bot's code, so it answers while the bot is off, starting or broken. The
+bot's own server on port 8080 serves the same page without the column.
+
+```text
+┌ UltraSkelly / control panel ─────────────────────────────────── live · 20/s ┐
+│ ┌ Robot ──────────────┐ ┌───────────────────────────────┐ ┌───────────────┐ │
+│ │ ● RUNNING  up 1:12  │ │ 3D scene                      │ │ OAK           │ │
+│ │ following people    │ │                               │ │               │ │
+│ │ [Turn off][Restart] │ │ dimmed under "The robot is    │ ├───────────────┤ │
+│ │ Follow people   ON  │ │ off" while it is not running  │ │ ZED Mini      │ │
+│ │ (STOP ALL MOTORS)   │ └───────────────────────────────┘ │ depth, IMU    │ │
+│ │ answer line         │ ┌ Time series ┬ Motor tests ────┐ │               │ │
+│ │ Status lamps        │ │                               │ │               │ │
+│ │ Last error          │ └───────────────────────────────┘ └───────────────┘ │
+│ └─────────────────────┘                                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Readout:** the bot's state as a lit word (RUNNING, STARTING, RESTARTING, WAITING for
+  the robot lock, STOPPING, OFF, FAILED), since when and for how long, and one line of
+  why: following or holding still, simulated motors, how often it restarted by itself,
+  how its last run ended, or which program holds the robot lock.
+- **Turn on / Turn off** and **Restart:** `systemctl start`, `stop` and `restart` of
+  `ultraskelly-bot`. Turn off lasts until Turn on or the next boot; the bot stays enabled
+  at boot.
+- **Follow people:** on, the head and waist turn toward people; off, they hold still and
+  move only for motor tests. The switch reaches the running bot at once
+  (`POST /api/follow` on the bot) and is kept for every later start as `--follow` or
+  `--no-follow` in `/var/lib/ultraskelly-control/bot-options`. The bot's service passes
+  it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
+  bot is off, the switch says which way its next start goes.
+- **STOP ALL MOTORS:** following goes off, for every start until it is switched back on.
+  Then the running bot ends any motor test and brakes the waist and jaw; the head holds
+  where it was last sent, and the cameras and views run on. If the bot does not confirm
+  within 2 s (off, starting, hung, or older than this switch), the panel stops the bot and
+  brakes the DC motors itself with `scripts/stop_motors.py`.
+- **Answer line:** what the last command did, the same on every page showing the panel.
+- **Status:** the bot's own health checks (see Health) as lamps in five rows: Cameras
+  (OAK, ZED Mini), Tracking (OAK models, Hailo-8, Depth), Motors (Servo board, Motor HAT,
+  Head aim), Sensors (ZED IMU) and Power. Not checked while the bot is off.
+- **Last error:** the newest error in the bot's journal, with the exception that followed
+  it, and how long ago; or `scripts/run-bot.sh`'s "Not starting: another program is
+  using the robot", with the program that holds the lock.
+
+While the bot is not running, the 3D scene and the camera views are dimmed under "The
+robot is off" (or "Starting…") with the reason, and the header says so instead of listing
+every part as failed. The live views read the bot's `/stream` straight from port 8080, so
+the panel adds no second copy of the video. Motor tests pass through the panel to the bot.
+
+How it runs:
+
+- `python -m ultraskelly.control` (aiohttp). `scripts/install-services.sh` installs it
+  from `scripts/systemd/ultraskelly-control.service`, enables it and restarts it on every
+  run. Restart it after pulling new code: `sudo systemctl restart ultraskelly-control`,
+  which moves nothing.
+- It runs as the robot's user with `NoNewPrivileges=yes`, so neither it nor any program
+  it runs can use that user's passwordless sudo; port 80 comes from
+  `CAP_NET_BIND_SERVICE` alone. Starting, stopping and restarting the bot rest on one
+  polkit rule, `scripts/systemd/ultraskelly-control.rules`, installed as
+  `/etc/polkit-1/rules.d/50-ultraskelly-control.rules`. It allows exactly `start`,
+  `stop` and `restart` of `ultraskelly-bot.service`, for that user only.
+  `systemctl --no-ask-password` turns a missing rule into an error on the answer line
+  instead of a wait for a password nobody can type.
+- Its one file, `/var/lib/ultraskelly-control/bot-options` (its `StateDirectory`), is
+  replaced whole: written beside it, flushed to the card, then renamed over it, so a
+  power cut leaves the old file or the new one.
+- Every POST must send JSON and name the robot in its `Host` header: an address,
+  `localhost`, the Pi's name or `<name>.local`. So another web page can neither send a
+  command nor reach the panel through a name of its own (DNS rebinding).
+- It reads the bot's log with `journalctl` as the robot's user, which needs the `adm`
+  or `systemd-journal` group; `scripts/setup-pi.sh` checks for it.
+
+Development without the robot:
+
+```bash
+python -m ultraskelly.control --port 8000 --local-bot
+```
+
+runs `python -m ultraskelly.replay --serve --people 3` as the bot, started and stopped
+by the panel's buttons; it moves nothing. `--local-bot COMMAND...`, given last, runs
+another command as the bot, which must serve the dashboard's `/stream` and
+`/api/motor-test` on `--bot-port` (default 8080).
+
 ## Panels
 
 - **Header:** connection state, `robot_state` messages per second, whether the motors

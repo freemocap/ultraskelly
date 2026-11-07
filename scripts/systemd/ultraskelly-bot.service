@@ -20,7 +20,11 @@ WorkingDirectory=@REPO@
 #   ULTRASKELLY_BOT_OPTIONS=--simulate-motors
 # while the motor boards are disconnected, or --record to save every run.
 EnvironmentFile=-/etc/default/ultraskelly-bot
-ExecStart=@REPO@/scripts/run-bot.sh $ULTRASKELLY_BOT_OPTIONS
+# The control panel's switches (ultraskelly-control.service), e.g.
+#   ULTRASKELLY_PANEL_OPTIONS=--no-follow
+# come last, so the panel's --follow or --no-follow wins over the line above.
+EnvironmentFile=-/var/lib/ultraskelly-control/bot-options
+ExecStart=@REPO@/scripts/run-bot.sh $ULTRASKELLY_BOT_OPTIONS $ULTRASKELLY_PANEL_OPTIONS
 # After every exit, including crashes and watchdog kills that skip the bot's own stop
 # commands, brake the DC motors (scripts/stop_motors.py), within 10 s.
 ExecStopPost=-@REPO@/scripts/stop-motors-after-bot.sh

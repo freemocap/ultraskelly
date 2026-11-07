@@ -24,7 +24,7 @@ from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestRefused,
 
 
 class FollowRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)  # true or false only: no "no", 0 or "off"
     following: bool
 
 

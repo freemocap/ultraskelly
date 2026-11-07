@@ -1,0 +1,37 @@
+# The control panel: the web page on port 80 that turns the bot on and off, restarts
+# it, switches following and stops every motor (ultraskelly/control). It runs all the
+# time and loads none of the bot's code, so it answers while the bot is off or broken.
+# scripts/install-services.sh fills in @USER@ and @REPO@ and installs this as
+# /etc/systemd/system/ultraskelly-control.service. It moves nothing by itself.
+[Unit]
+Description=UltraSkelly control panel (turns the bot on and off; port 80)
+Documentation=file://@REPO@/docs/dashboard.md
+# Keep trying however often it fails, every 5 s.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/.venv/bin/python -m ultraskelly.control --port 80
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5s
+# Port 80 without root, and no other privilege.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Neither it nor any program it runs may gain privileges (no sudo, no setuid), so it
+# can start, stop and restart the bot only as the polkit rule allows
+# (/etc/polkit-1/rules.d/50-ultraskelly-control.rules, from ultraskelly-control.rules).
+NoNewPrivileges=yes
+# Its one file, the switches the bot starts with, is
+# /var/lib/ultraskelly-control/bot-options; ultraskelly-bot.service reads it. All else
+# is read-only to it.
+StateDirectory=ultraskelly-control
+StateDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

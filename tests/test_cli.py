@@ -20,3 +20,9 @@ def test_no_window_is_still_accepted_for_older_commands_and_hidden_from_help():
 def test_window_and_no_window_together_are_refused_before_anything_starts():
     result = run("--hardware", "--window", "--no-window")
     assert result.returncode == 2 and "contradict" in result.stderr
+
+
+def test_follow_and_no_follow_go_with_hardware():
+    for option in ("--follow", "--no-follow"):
+        result = run(option)
+        assert result.returncode == 2 and "--follow or --no-follow" in result.stderr

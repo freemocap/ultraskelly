@@ -86,3 +86,37 @@ def test_the_dashboard_panel_is_served():
         page = await (await client.get("/")).text()
         assert 'id="motor-test"' in page
     serve(scenario)
+
+
+def test_following_switches_live_and_only_for_true_or_false():
+    async def scenario(client, server, recorder):
+        assert await (await client.get("/api/follow")).json() == {"following": True}
+        reply = await client.post("/api/follow", json={"following": False})
+        assert reply.status == 200 and (await reply.json())["following"] is False
+        assert (await (await client.get("/api/motor-test")).json())["following"] is False
+        for body in ({"following": "no"}, {"following": 0}, {"following": True, "now": True}, {}):
+            assert (await client.post("/api/follow", json=body)).status == 400, body
+        assert (await client.post("/api/follow", data="following=true")).status == 415  # A plain form, as any page could send
+        assert server.motor_tests.orientation.following is False  # Nothing refused switched it
+        reply = await client.post("/api/follow", json={"following": True})
+        assert (await reply.json())["following"] is True
+    serve(scenario)
+
+
+def test_stop_all_motors_ends_a_test_brakes_the_dc_motors_and_turns_following_off():
+    async def scenario(client, server, recorder):
+        test = asyncio.create_task(client.post("/api/motor-test", json={"actuator": "waist", "throttle": 0.5, "seconds": 0.5}))
+        for _ in range(400):
+            if server.motor_tests.current is not None or test.done():
+                break
+            await asyncio.sleep(0.005)
+        assert server.motor_tests.current is not None  # The test runs
+        reply = await client.post("/api/motors/stop", json={})
+        assert await reply.json() == {"ok": True, "following": False, "stopped_test": True}
+        assert (await (await test).json())["test"]["outcome"] == "stopped"
+        assert recorder.latest["waist"].value == 0.0 and recorder.latest["mouth"].value == 0.0
+        again = await client.post("/api/motors/stop", json={})  # Nothing running: braked again all the same
+        assert (await again.json())["stopped_test"] is False
+        assert (await client.post("/api/motors/stop", data="")).status == 415
+        assert server.motor_tests.orientation.following is False
+    serve(scenario)

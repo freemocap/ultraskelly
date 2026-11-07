@@ -11,7 +11,9 @@
 # place is left alone, so it is safe to re-run. The first sudo may ask for the
 # password. Files under scripts/pi-system/ are installed at the same paths under /.
 # The robot services keep their start-at-boot setting unless you pass
-# --enable-services; the bot moves the motors when it starts.
+# --enable-services; the bot moves the motors when it starts. The control panel
+# that turns the bot on and off (http://<the Pi's name>.local/) always runs; it
+# moves nothing by itself.
 #
 # Each line is one setting or observation: OK; FIXED (put in place just now);
 # MISSING (run without --check to fix it); FAILED; WARN (hardware, power or network
@@ -25,7 +27,8 @@ config=/boot/firmware/config.txt
 lock=/run/lock/ultraskelly-robot.lock
 user="$(id -un)"
 uv="$(command -v uv || echo "$HOME/.local/bin/uv")"
-packages=(git curl patch chromium i2c-tools python3-munkres hailo-all)
+# polkitd runs the rule that lets the control panel start and stop the bot.
+packages=(git curl patch chromium i2c-tools python3-munkres hailo-all polkitd)
 
 mode=apply
 enable_services=
@@ -305,6 +308,15 @@ check_linger() {
 }
 fix_linger() { sudo loginctl enable-linger "$user"; }
 
+# The control panel reads the bot's log as $user to show its last error.
+check_journal_access() {
+  local groups=" $(id -nG "$user") "
+  [[ $groups == *" systemd-journal "* || $groups == *" adm "* ]] ||
+    { echo "$user cannot read the bot's log, so the control panel cannot show its last error"; return 1; }
+  echo "$user reads the bot's log (the control panel shows its last error)"
+}
+fix_journal_access() { sudo usermod -aG systemd-journal "$user"; }
+
 check_uv() {
   [[ -x $uv ]] || { echo "uv is not installed"; return 1; }
   "$uv" --version
@@ -350,15 +362,20 @@ fix_oak_models() (cd "$repo" && .venv/bin/python -m scripts.fetch_oak_models)
 
 check_services() {
   "$repo/scripts/install-services.sh" --check >/dev/null 2>&1 || { echo "not installed for $repo"; return 1; }
-  local bot dashboard options
+  local bot control dashboard options
   bot="$(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)"
+  control="$(systemctl is-enabled ultraskelly-control.service), $(systemctl is-active ultraskelly-control.service)"
   dashboard="$(systemctl --user is-enabled ultraskelly-dashboard.service), $(systemctl --user is-active ultraskelly-dashboard.service)"
+  if [[ $control != "enabled, active" ]]; then  # The control panel always runs
+    echo "installed, but the control panel is $control"
+    return 1
+  fi
   if [[ -n $enable_services && ($bot != enabled* || $dashboard != enabled*) ]]; then
     echo "installed but not enabled: bot $bot; dashboard $dashboard"
     return 1
   fi
   options=$(sed -n 's/^ULTRASKELLY_BOT_OPTIONS=//p' /etc/default/ultraskelly-bot 2>/dev/null)
-  echo "installed for this checkout: bot $bot${options:+ (options: $options)}; dashboard $dashboard"
+  echo "installed for this checkout: bot $bot${options:+ (options: $options)}; control panel $control; dashboard $dashboard"
 }
 fix_services() { "$repo/scripts/install-services.sh" ${enable_services:+"$enable_services"}; }
 
@@ -491,6 +508,7 @@ setting "Services at boot" check_linger fix_linger
 setting "uv" check_uv fix_uv
 setting "Python environment" check_venv fix_venv
 setting "OAK models" check_oak_models fix_oak_models
+setting "Journal access" check_journal_access fix_journal_access
 setting "Robot services" check_services fix_services
 observe "Last stop" check_last_stop
 observe "Power" check_power

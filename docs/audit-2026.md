@@ -416,6 +416,20 @@ It has since gained two settings: the ZED IMU's udev rule, and (2026-11-03) the 
 models, which it fetches into `~/ultraskelly-models/oak-zoo` when one is missing; `--check`
 reads only that cache, offline. On the robot's Pi the check found all six there.
 
+### Control panel (2026-11-07)
+
+At the owner's request ("I need to be able to turn the thing on and off") the Pi's monitor
+shows a control panel: `ultraskelly-control.service` on port 80 serves the dashboard with
+buttons that start, stop and restart `ultraskelly-bot`, a following switch kept across
+restarts in `/var/lib/ultraskelly-control/bot-options`, and a stop for every motor
+([docs/dashboard.md](dashboard.md#control-panel)). It runs as the robot's user with
+`NoNewPrivileges=yes`; one polkit rule allows it exactly `start`, `stop` and `restart`
+of the bot's unit. Proven on the PC only, against a stand-in bot and stand-ins for
+systemd: `tests/test_control_panel.py` (the rule evaluated under node, not polkitd) and
+headless-Chrome screenshots. Not yet seen on the Pi: the rule under Trixie's polkitd,
+binding port 80 through `CAP_NET_BIND_SERVICE`, journal access for the panel, and the
+bot's unit reading the panel's options at its next restart.
+
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
 **Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most

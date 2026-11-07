@@ -129,7 +129,10 @@ carries FreeMoCap's self-describing CBOR messages: `frame` messages with each OA
 and the poses, faces and hands found in it, and `robot_state` messages with motor commands,
 target, rates, node health and the OAK chip's load. The browser decodes them with FreeMoCap's `@freemocap/client` and
 draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
-`scripts/open-dashboard.sh` opens it full-screen on the Pi's monitor.
+On the Pi, the control panel on port 80 serves the same page with big buttons that turn
+the bot on and off, restart it, switch following and stop every motor
+([Control panel](docs/dashboard.md#control-panel)); `scripts/open-dashboard.sh` opens it
+full-screen on the Pi's monitor.
 [The dashboard layout](docs/dashboard.md) describes its panels and sizing.
 
 The dashboard's **Motor test** panel moves one actuator at a time: pan or tilt by 10°
@@ -180,9 +183,11 @@ summarizes how the waist moved and how loud it was while moving.
 scripts/install-services.sh --enable    # --disable stops it and keeps it from starting at boot
 ```
 
-installs two services for the checkout the script lives in: `ultraskelly-bot`, a system
-service that runs `scripts/run-bot.sh`, and `ultraskelly-dashboard`, the desktop user's
-service that opens the dashboard full screen once the bot answers. After any exit or
+installs three services for the checkout the script lives in: `ultraskelly-bot`, a system
+service that runs `scripts/run-bot.sh`; `ultraskelly-control`, the control panel on port
+80, a system service that always runs and turns the bot on and off; and
+`ultraskelly-dashboard`, the desktop user's service that opens the control panel full
+screen. After any exit or
 crash, systemd starts the bot again after 2 s, then waits longer each time, up to a
 minute. If the bot's event loop stalls for 30 s, systemd kills it with SIGUSR1, which
 first logs every thread's Python traceback. After every exit, crashes and kills
@@ -210,6 +215,7 @@ systemctl status ultraskelly-bot                # state and recent log
 journalctl -u ultraskelly-bot -f                # follow the log
 sudo systemctl stop ultraskelly-bot             # free the robot for a test; start to resume
 systemctl --user status ultraskelly-dashboard
+sudo systemctl restart ultraskelly-control      # after pulling new code; it moves nothing
 ```
 
 ### One program at a time
