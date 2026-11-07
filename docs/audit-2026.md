@@ -453,6 +453,17 @@ not sent as JSON, was refused. The user's `adm` group gave the panel the bot's l
 Chromium's first start on the new address opened at its default half-screen size; the
 second went full screen. Not yet seen: the window after a reboot.
 
+That size is Chromium's own default for a window with no saved place: half a 1920 px
+screen less 15 px, so 945 px
+([window_sizer.cc](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/window_sizer/window_sizer.cc)).
+With `--app`, `--start-fullscreen` only asks for full screen just after the window
+appears
+([web_app_startup_utils.cc](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/startup/web_app_startup_utils.cc)),
+and that ask can be missed. `scripts/open-dashboard.sh` now also passes `--start-maximized`,
+which Linux builds apply to app windows as they are made, even over a smaller saved place,
+so a missed ask still leaves the screen filled and F11 returns to that. Not yet seen on
+the Pi.
+
 The first version had a red button that stopped every motor and kept following off. The
 owner had it removed the same day, and the column made smaller and foldable. Turn off is
 the stop: the bot's service brakes the DC motors as it stops

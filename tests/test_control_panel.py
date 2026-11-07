@@ -1,6 +1,6 @@
-"""The control panel (ultraskelly/control): the always-on service that turns the bot on and off, switches following
-and stops every motor, against stand-ins for systemd and for the bot's own routes; its systemd units and polkit
-rule. Nothing here starts a real service or moves a motor."""
+"""The control panel (ultraskelly/control): the always-on service that turns the bot on and off, restarts it and
+switches following, against stand-ins for systemd and for the bot's own routes; its systemd units, its polkit rule
+and the Pi screen's window. Nothing here starts a real service or moves a motor."""
 import asyncio
 import json
 import shutil
@@ -414,6 +414,15 @@ def test_the_panels_service_runs_as_the_robots_user_and_can_gain_no_privilege():
             "CapabilityBoundingSet=CAP_NET_BIND_SERVICE", "ProtectSystem=strict", "Restart=always",
             "WantedBy=multi-user.target"} <= lines
     assert "ExecStart=/home/robot/ultraskelly/.venv/bin/python -m ultraskelly.control --port 80" in lines
+
+
+def test_the_pi_screen_opens_the_panel_full_screen_and_keeps_devtools():
+    opener = (ROOT / "scripts" / "open-dashboard.sh").read_text(encoding="utf-8")
+    chromium = opener[opener.index("exec chromium"):].split()
+    assert 'url="${1:-http://localhost/}"' in opener and '--app="$url"' in chromium  # The panel, as an app window
+    # Full screen is asked for once the window is up; maximized from the start still fills the screen if that is lost.
+    assert {"--start-fullscreen", "--start-maximized"} <= set(chromium)
+    assert not any(flag.startswith("--kiosk") for flag in chromium)  # Kiosk mode turns DevTools off
 
 
 # The rules file runs in a fresh context with only `polkit` in it, as polkitd runs it: nothing of node's leaks in.

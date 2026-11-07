@@ -47,8 +47,13 @@ if [[ -f "$preferences" ]]; then
   sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "$preferences"
 fi
 
+# --start-fullscreen asks for full screen just after the window appears, and that ask can
+# be lost: once on the Pi a first start stayed at Chromium's default 945 px window.
+# --start-maximized is part of the window from the start, so it still fills the screen,
+# and F11 goes back to maximized, not to half the screen.
 exec chromium \
   --app="$url" \
+  --start-maximized \
   --start-fullscreen \
   --user-data-dir="$profile" \
   --ozone-platform=wayland \
