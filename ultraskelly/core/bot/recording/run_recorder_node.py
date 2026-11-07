@@ -3,8 +3,10 @@
 Each run gets its own folder under `RunRecorderParams.folder`:
 
     <camera>.avi         every camera frame the bot saw (after any flip), Motion JPEG: the same
-                         JPEG bytes the stream sends, so each frame is encoded once
-    <camera>_frames.csv  per video frame: its index, the camera's frame number, capture and arrival times
+                         JPEG bytes the stream sends, so each frame is encoded once. An AVI holds
+                         4 GiB, about 80 minutes: the video goes on in <camera>-2.avi, -3.avi, ...
+    <camera>_frames.csv  per video frame: its index in the run, the camera's frame number, capture and
+                         arrival times, and the video file it is in with its index there
     poses.jsonl          per detector result: the frame it came from and each person's keypoints
     targets.csv          every target the detector published; empty x and y when nobody was seen
     servo_state.csv      the head controller's published angles and lock flags
@@ -46,7 +48,7 @@ from pydantic import Field, SkipValidation
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import ActuatorCommand, CommandRecorder
 from ultraskelly.core.bot.recording.microphone import Microphone, find_microphone
-from ultraskelly.core.bot.recording.mjpeg_avi import MjpegAviWriter
+from ultraskelly.core.bot.recording.mjpeg_avi import AviFull, MjpegAviWriter
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
     ImuTopic,
@@ -268,13 +270,21 @@ class RunRecorderNode(Node):
                 rows.writerow(header)
                 return rows
 
-            frames = table(f"{self.camera}_frames.csv", ("index", "frame_number", "captured", "received"))
+            frames = table(f"{self.camera}_frames.csv",
+                           ("index", "frame_number", "captured", "received", "video", "video_index"))
             targets = table("targets.csv", ("received", "x", "y", "angle"))
             servo = table("servo_state.csv", ("received", "pan", "tilt", "locked_x", "locked_y"))
             commands = table("commands.csv", ("time", "actuator", "value"))
             poses = files.enter_context(open(self.folder / "poses.jsonl", "w"))
             video = imu = None
+            part, part_frames = 1, 0  # The video file being written (oak.avi, then oak-2.avi, ...) and its frames
             previous_number = next_imu_sample = None
+
+            def open_part(size: tuple[int, int]) -> VideoWriter:
+                name = f"{self.camera}.avi" if part == 1 else f"{self.camera}-{part}.avi"
+                writer = self.open_writer(self.folder / name, size, self.params.nominal_fps)
+                files.callback(writer.release)
+                return writer
             checked_at, low_disk = -math.inf, False
             while (item := self.pending.get()) is not None:
                 kind, received, message = item
@@ -294,14 +304,22 @@ class RunRecorderNode(Node):
                         continue
                 if kind == "frame":
                     frame: FrameMessage = message
+                    height, width = frame.frame.shape[:2]
                     if video is None:
-                        height, width = frame.frame.shape[:2]
-                        video = self.open_writer(
-                            self.folder / f"{self.camera}.avi", (width, height), self.params.nominal_fps,
-                        )
-                        files.callback(video.release)
-                    video.write(frame.jpeg_bytes(self.jpeg_quality, self.encode_jpeg))
-                    frames.writerow((self.counts.get("frame", 0), message.frame_number, message.timestamp, received))
+                        video = open_part((width, height))
+                    jpeg = frame.jpeg_bytes(self.jpeg_quality, self.encode_jpeg)
+                    try:
+                        video.write(jpeg)
+                    except AviFull:  # 4 GiB, about 80 minutes: the file is complete, and the video goes on in the next
+                        video.release()
+                        part, part_frames = part + 1, 0
+                        video = open_part((width, height))
+                        logger.info(f"The recording's video continues in {self.camera}-{part}.avi")
+                        video.write(jpeg)
+                    name = f"{self.camera}.avi" if part == 1 else f"{self.camera}-{part}.avi"
+                    frames.writerow((self.counts.get("frame", 0), message.frame_number, message.timestamp, received,
+                                     name, part_frames))
+                    part_frames += 1
                     if previous_number is not None and message.frame_number is not None:
                         self.frames_missed += max(0, message.frame_number - previous_number - 1)
                     previous_number = message.frame_number

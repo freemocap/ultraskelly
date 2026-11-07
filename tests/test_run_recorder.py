@@ -8,6 +8,7 @@ import numpy as np
 
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.recording import run_recorder_node
+from ultraskelly.core.bot.recording.mjpeg_avi import AviFull
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams, prune_runs
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
@@ -295,3 +296,38 @@ def test_a_nearly_full_disk_stops_the_video_but_not_the_tables(tmp_path, monkeyp
 
     assert videos == [] and node.dropped["frame_low_disk"] == 3
     assert len(rows(node.folder / "targets.csv")) == 3
+
+
+def test_a_video_at_the_avi_size_limit_goes_on_in_the_next_file(tmp_path):
+    class SmallVideo(FakeVideo):  # Holds two frames, as an AVI holds 4 GiB
+        def write(self, jpeg):
+            if len(self.frames) == 2:
+                raise AviFull("full")
+            super().write(jpeg)
+
+    videos = []
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = RunRecorderNode.create(
+            pubsub=bus, params=RunRecorderParams(folder=tmp_path), camera="oak", frame_topic=FrameTopic,
+            commands=None, encode_jpeg=FakeEncoder(), open_writer=lambda *args: videos.append(SmallVideo(*args)) or videos[-1],
+        )
+        task = asyncio.create_task(node.run())
+        await asyncio.sleep(0.02)
+        for number in range(5):
+            await bus.publish(FrameTopic, frame(number))
+            await asyncio.sleep(0.02)
+        node.stop()
+        await task
+        bus.close()
+        return node
+
+    node = asyncio.run(scenario())
+
+    assert node.failure is None
+    assert [(video.path.name, len(video.frames), video.released) for video in videos] == [
+        ("oak.avi", 2, True), ("oak-2.avi", 2, True), ("oak-3.avi", 1, True)]
+    assert [(r["index"], r["video"], r["video_index"]) for r in rows(node.folder / "oak_frames.csv")] == [
+        ("0", "oak.avi", "0"), ("1", "oak.avi", "1"), ("2", "oak-2.avi", "0"), ("3", "oak-2.avi", "1"),
+        ("4", "oak-3.avi", "0")]

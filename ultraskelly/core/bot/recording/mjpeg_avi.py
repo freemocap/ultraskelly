@@ -3,8 +3,9 @@
 The recorder gets each camera frame as JPEG already: the stream encodes it once, or the
 camera does (an OAK's hardware encoder). This stores those bytes in an ordinary AVI 1.0
 file with an idx1 index, which OpenCV, FFmpeg and media players read. AVI 1.0 counts
-sizes in 32 bits, so a frame that would take the file past 4 GiB, roughly an hour and a
-half of 640x480 video, raises instead of being written.
+sizes in 32 bits, so a frame that would take the file past 4 GiB, about 80 minutes of the
+OAK's 640x480 video, raises `AviFull` instead of being written; the file stays whole, and the
+recorder goes on in a new one.
 """
 import math
 import struct
@@ -13,6 +14,11 @@ from pathlib import Path
 AVIF_HASINDEX = 0x10
 AVIIF_KEYFRAME = 0x10
 MAX_RIFF_SIZE = 0xFFFF_FFFF
+
+
+class AviFull(OSError):
+    """The next frame would take the file past AVI 1.0's 4 GiB; nothing was written, and release() still
+    completes the file."""
 
 
 def _chunk(tag: bytes, data: bytes) -> bytes:
@@ -40,7 +46,7 @@ class MjpegAviWriter:
         chunk = _chunk(b"00dc", jpeg)
         index_size = 8 + 16 * (len(self.index) + 1)
         if position + len(chunk) + index_size - 8 > MAX_RIFF_SIZE:
-            raise OSError(f"{self.file.name} reached the AVI size limit of 4 GiB after {len(self.index)} frames")
+            raise AviFull(f"{self.file.name} reached the AVI size limit of 4 GiB after {len(self.index)} frames")
         self.file.write(chunk)
         self.index.append((position - self.movi_tag, len(jpeg)))
         self.largest = max(self.largest, len(jpeg))
