@@ -9,6 +9,7 @@ import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -91,7 +92,10 @@ def launch_config(
     # The head and waist run their defaults: tuned for the gearing measured on 2026-11-06 (about 0.24 degrees
     # of view per pan servo degree, 0.1 per tilt degree, ~0.15 s before the camera sees a move) and checked by
     # the closed-loop scenarios (tests/test_scenarios.py), which run the defaults, so nothing is overridden here.
-    config.orientation = OrientationNodeParams(follow=follow)
+    # The roll holds upright for now: measured on the robot on 2026-11-06, a larger roll angle turns the
+    # picture clockwise (opposite to RollLevelParams' assumed direction) by 0.10 degrees per servo degree
+    # (assumed 0.3). Turn it back on once its defaults and the closed-loop scenarios use those numbers.
+    config.orientation = OrientationNodeParams(follow=follow, roll=RollLevelParams(enabled=False))
     return config
 
 
