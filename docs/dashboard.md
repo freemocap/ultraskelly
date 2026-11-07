@@ -140,9 +140,11 @@ another command as the bot, which must serve the dashboard's `/stream` and
   LeonRT, and its temperature, with its memory and any frames sent before all their
   measurements came in the row's tooltip. A camera whose frames stop appears there too.
 - **Motor tests:** the buttons are in the strip card itself, no panel to open
-  (`motor-test.js`): Pan −10, 90 and +10 servo degrees; Tilt ▲10 (head up), 90 and ▼10
-  (head down), by the head's `tilt_direction`, since a larger tilt angle turns this head
-  down; each with the commanded servo angle beside it; Waist − and + and Jaw Open, each sending the drive × seconds in its row; then Stop
+  (`motor-test.js`), by where the head goes: Pan ◀◀ ◀10 90 ▶10 ▶▶ (the robot's own left
+  and right, as its camera's picture and the 3D view from behind show them; mirrored for
+  someone facing it) and Tilt ▲▲ ▲10 90 ▼10 ▼▼. The doubled arrows go all the way, to 0 or
+  180; the head's `pan_direction` and `tilt_direction` say which (on this robot a larger
+  tilt angle turns the head down). The commanded servo angle sits beside each row; Waist − and + and Jaw Open, each sending the drive × seconds in its row; then Stop
   and a status line. The line shows this page's answer for a few seconds, then what the bot
   reports: a test running from any screen, the last test's outcome, or why tests cannot
   run. The card title shows the net waist travel; the test limits are the buttons' tooltip.

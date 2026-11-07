@@ -147,11 +147,12 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
    A short strip scrolls the card. */
 .dashboard .card.tests{overflow-y:auto}
 .dashboard #motor-test{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
-.motor-test{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:4px 6px;align-items:center;font-size:11.5px}
+.motor-test{display:grid;grid-template-columns:auto minmax(0,1fr) 3.4em;gap:4px 6px;align-items:center;font-size:11.5px}
 .motor-test-name{color:#b9c5c8;white-space:nowrap}
-.motor-test-buttons,.motor-test-drive{display:flex;align-items:center;gap:3px;white-space:nowrap}
-.motor-test-drive{grid-column:2 / -1;color:var(--muted);font-size:11px}
-.motor-test button{min-width:28px;padding:3px 6px;font:11px ui-monospace,monospace}
+.motor-test-buttons{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px}  /* Five that share the width */
+.motor-test-drive{grid-column:2 / -1;display:flex;align-items:center;gap:3px;white-space:nowrap;color:var(--muted);font-size:11px}
+.motor-test button{min-width:0;padding:3px 1px;font:11px ui-monospace,monospace;white-space:nowrap;overflow:hidden}
+.motor-test-drive button{min-width:28px;padding:3px 6px}
 .motor-test input[type=number]{width:44px;height:21px;padding:0 3px;font-size:11px}
 .motor-test-value{font:11.5px ui-monospace,monospace;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .motor-test-foot{display:flex;align-items:center;gap:8px;margin-top:auto}
