@@ -50,14 +50,15 @@ installed_rule() {
   cat "$control_rule" 2>/dev/null || sudo -n cat "$control_rule" 2>/dev/null
 }
 
+# Options from a file that may not exist (yet): none, rather than an error that ends the script.
 bot_options() {
-  sed -n 's/^ULTRASKELLY_BOT_OPTIONS=//p' /etc/default/ultraskelly-bot 2>/dev/null
+  sed -n 's/^ULTRASKELLY_BOT_OPTIONS=//p' /etc/default/ultraskelly-bot 2>/dev/null || true
 }
 
 state() {
   local options panel
   options=$(bot_options)
-  panel=$(sed -n 's/^ULTRASKELLY_PANEL_OPTIONS=//p' "$panel_options" 2>/dev/null)
+  panel=$(sed -n 's/^ULTRASKELLY_PANEL_OPTIONS=//p' "$panel_options" 2>/dev/null || true)  # Written at its first switch
   echo "ultraskelly-bot (system):     $(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)${options:+, options $options from /etc/default/ultraskelly-bot}${panel:+, $panel from the control panel}"
   echo "ultraskelly-control (system): $(systemctl is-enabled ultraskelly-control.service), $(systemctl is-active ultraskelly-control.service), http://$(hostname).local/"
   echo "ultraskelly-dashboard (user): $(systemctl --user is-enabled ultraskelly-dashboard.service), $(systemctl --user is-active ultraskelly-dashboard.service)"
@@ -90,7 +91,8 @@ else
 fi
 sudo systemctl daemon-reload
 sudo systemctl enable ultraskelly-control.service
-sudo systemctl restart ultraskelly-control.service
+sudo systemctl restart ultraskelly-control.service ||
+  echo "The control panel did not start; see journalctl -u ultraskelly-control" >&2
 
 # The dashboard window belongs to the desktop session, so it is a user service;
 # lingering starts the user's service manager at boot.
