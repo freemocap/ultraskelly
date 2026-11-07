@@ -326,6 +326,20 @@ def test_the_head_aim_check_follows_the_live_following_switch(tmp_path):
     assert launcher.health.get("head").status == Status.OK
 
 
+def test_the_dashboard_tunes_the_running_controllers_starting_from_the_saved_tuning(tmp_path):
+    saved = tmp_path / "tuning.json"
+    saved.write_text('{"groups": {"aim": {"deadband": 0.25}, "jaw": {"lock_timeout": 0.5}}}', encoding="utf-8")
+    launcher = start(Robot(), tmp_path, tuning=saved)
+    orientation, mouth = launcher.controllers
+    # The controllers were given the configuration's own params objects: tuning one tunes the other.
+    assert orientation.params is launcher.config.orientation and mouth.params is launcher.config.mouth
+    assert orientation.head_aim.params.deadband == 0.25 and mouth.params.lock_timeout == 0.5  # Saved, so started with
+    assert launcher.server.tuning is launcher.tuning and launcher.tuning.file == saved
+    launcher.tuning.set({"aim": {"max_speed": 20}, "waist": {"enabled": False}})
+    assert orientation.head_aim.params.max_speed == 20 and orientation.waist_drive.params.enabled is False
+    assert launcher.tuning.state()["groups"][0]["unsaved"] == ["max_speed"]
+
+
 def test_simulated_motors_are_reported_off_and_not_opened(tmp_path):
     robot = Robot(servo_board=False, motor_board=False)
     launcher = start(robot, tmp_path, simulate_motors=True)

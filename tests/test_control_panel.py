@@ -253,10 +253,18 @@ def bot_routes(heard: list, *, live_switch: bool) -> web.Application:
     async def tests(request):
         return web.json_response({"enabled": True, "following": True})
 
+    async def tuning(request):
+        if request.method == "POST":
+            heard.append((request.path, request.content_type, await request.json()))
+        return web.json_response({"ok": True, "groups": [], "file": None})
+
     app = web.Application()
     if live_switch:
         app.router.add_post("/api/follow", follow)
     app.router.add_get("/api/motor-test", tests)
+    app.router.add_get("/api/tuning", tuning)
+    for path in ("/api/tuning", "/api/tuning/reset", "/api/tuning/save"):
+        app.router.add_post(path, tuning)
     return app
 
 
@@ -379,6 +387,26 @@ def test_motor_tests_pass_through_to_the_bot_and_say_when_it_is_off(tmp_path):
 
     async def off(client, server, service, heard):
         reply = await client.get("/api/motor-test")
+        assert reply.status == 503 and "off or still starting" in (await reply.json())["error"]
+
+    panel(running, tmp_path)
+    panel(off, tmp_path, bot=False, state="off")
+
+
+def test_tuning_passes_through_to_the_bot_as_json_and_says_when_it_is_off(tmp_path):
+    async def running(client, server, service, heard):
+        assert await (await client.get("/api/tuning")).json() == {"ok": True, "groups": [], "file": None}
+        for path, body in [("/api/tuning", {"aim": {"deadband": 0.2}}), ("/api/tuning/reset", {"group": "aim"}),
+                           ("/api/tuning/save", {})]:
+            reply = await client.post(path, json=body)
+            assert reply.status == 200
+        assert heard == [("/api/tuning", "application/json", {"aim": {"deadband": 0.2}}),
+                         ("/api/tuning/reset", "application/json", {"group": "aim"}), ("/api/tuning/save", "application/json", {})]
+        reply = await client.post("/api/tuning", data="aim=1")  # Only JSON passes, as for every command
+        assert reply.status == 415 and len(heard) == 3
+
+    async def off(client, server, service, heard):
+        reply = await client.get("/api/tuning")
         assert reply.status == 503 and "off or still starting" in (await reply.json())["error"]
 
     panel(running, tmp_path)

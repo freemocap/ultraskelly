@@ -169,6 +169,16 @@ class OrientationNode(Node):
         self.head_still_since = None
         self.following = on
 
+    def retune(self, groups: set[str]) -> None:
+        """Its params' `groups` (aim, roll, waist) were changed while it runs, from the dashboard's Tune window
+        (tuning.py): the head and the roll carry on from the angles last sent, as after a motor test, so a new
+        gearing or slack cannot make them jump. The waist reads its new settings at its next step. Runs on the
+        event loop, between control steps."""
+        if "aim" in groups:
+            self.head_aim.place(self.pan_angle, self.tilt_angle)
+        if "roll" in groups:
+            self.roll_level.place(self.roll_angle)
+
     @classmethod
     def create(
         cls,

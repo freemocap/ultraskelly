@@ -5,6 +5,7 @@
 // to a strip that keeps the bot's lamp, and stays folded across reloads. The live views beside it come straight from
 // the bot's own port while it runs. Served by the bot itself, the page finds no /api/panel and stays the plain dashboard.
 import { setProperty, setText } from '/dom.js';
+import { Tune } from '/tune.js';
 
 const FOLDED = 'ultraskelly.control.folded';  // localStorage: '1' while the column is folded to its strip
 // localStorage, which a locked-down browser may refuse; the column then opens at every load.
@@ -97,9 +98,9 @@ export class ControlPanel {
     this.$('control').hidden = false;
     document.body.classList.add('control');
     document.title = 'UltraSkelly · Control panel';
-    // The motor tests under the follow switch, the nodes under the status lamps: the controls together, and the strip
-    // left to the time series.
-    this.$('control-follow').after(document.querySelector('.card.tests'));
+    // The motor tests under the follow switch and the Tune key, the nodes under the status lamps: the controls together,
+    // and the strip left to the time series.
+    this.$('control-tune').after(document.querySelector('.card.tests'));
     this.$('control-parts').after(document.querySelector('.card.nodes'));
     this.$('control-power').onclick = () => {
       const on = this.isOn();
@@ -110,6 +111,8 @@ export class ControlPanel {
       const on = this.$('control-follow').getAttribute('aria-checked') !== 'true';
       this.send('/api/follow', {following: on}, on ? 'Switching following on…' : 'Switching following off…');
     };
+    this.tune = new Tune(this.$('tune'));
+    this.$('control-tune').onclick = () => this.tune.open();
     this.$('control-collapse').onclick = () => this.fold(true);
     this.$('control-rail').onclick = () => this.fold(false);
     // Whether the time series can run under the column: checked as the 3D scene or any of the column's blocks changes size.
@@ -229,6 +232,8 @@ export class ControlPanel {
     setProperty(power, 'disabled', busy || bot.state === 'missing');
     setProperty(this.$('control-restart'), 'disabled', busy || !on);
     setProperty(this.$('control-follow'), 'disabled', busy);
+    setProperty(this.$('control-tune'), 'disabled', this.lost || !running);
+    setProperty(this.$('control-tune'), 'title', running ? 'Tune the controllers as the bot runs' : 'The controllers are tuned while the bot runs');
     // The reply to this page's last command, else the newest command from any screen
     const answer = this.answer && performance.now() < this.answer.until ? this.answer : null;
     const recent = this.status.action && this.now() - this.status.action.time < 8 ? this.status.action : null;

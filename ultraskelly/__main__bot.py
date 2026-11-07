@@ -6,9 +6,12 @@ Tracks people with an OAK USB camera and YOLOv8 pose on the Hailo-8 AI HAT+.
 """
 import asyncio
 import logging
+from pathlib import Path
+
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.tuning import TUNING_FILE, load_tuning
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNodeParams, OakModelParams
@@ -22,7 +25,7 @@ logger = logging.getLogger(__name__)
 def launch_config(
     *, simulate_motors: bool = False, record: bool = False, microphone: str | None = None,
     zed: bool = False, zed_only: bool = False, depth: str | None = None, depth_previews: bool = False,
-    port: int = 8080, oak_models: bool = True, follow: bool = True,
+    port: int = 8080, oak_models: bool = True, follow: bool = True, tuning: Path | None = None,
 ) -> LaunchConfig:
     """The robot's declarative launch configuration.
 
@@ -37,6 +40,8 @@ def launch_config(
         port: The dashboard's port.
         oak_models: Run the face and hand models on the OAK's own chip (faces, head pose, gaze, face landmarks, hands).
         follow: Turn the head and waist toward the target; without, they move only for motor tests.
+        tuning: The file of settings saved from the dashboard's Tune window (TUNING_FILE on the robot), merged over
+            the controllers' settings below; None runs them as they are.
     """
 
     # Pose tracking (nose): OAK camera + Hailo-8
@@ -78,6 +83,8 @@ def launch_config(
     config.orientation = OrientationNodeParams(
         follow=follow, aim=HeadAimParams(deadband=0.12, max_acceleration=25.0),
     )
+    if tuning is not None:  # The owner's own tuning, saved from the dashboard, wins over the values above
+        config.tuning = load_tuning(config, tuning)
     return config
 
 
@@ -90,7 +97,7 @@ async def main(
     launcher = BotLauncher.from_config(launch_config(
         simulate_motors=simulate_motors, record=record, microphone=microphone,
         zed=zed, zed_only=zed_only, depth=depth, depth_previews=depth_previews, port=port, oak_models=oak_models,
-        follow=follow,
+        follow=follow, tuning=TUNING_FILE,
     ))
     await launcher.run()
 

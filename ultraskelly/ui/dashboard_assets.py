@@ -30,6 +30,7 @@ ASSETS: dict[str, tuple[Path, str]] = {
     "/headpose.js": (DASHBOARD / "headpose.js", "text/javascript"),
     "/motor-test.js": (DASHBOARD / "motor-test.js", "text/javascript"),
     "/resize.js": (DASHBOARD / "resize.js", "text/javascript"),
+    "/tune.js": (DASHBOARD / "tune.js", "text/javascript"),
     "/style.css": (SHARED / "style.css", "text/css"),
     "/skeleton.js": (SHARED / "skeleton.js", "text/javascript"),
     **{

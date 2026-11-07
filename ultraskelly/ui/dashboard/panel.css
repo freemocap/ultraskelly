@@ -1,6 +1,6 @@
 /* The control panel (panel.js): a control column in front of the live views, when the always-on control service
    serves the page. Top to bottom, packed: the bot's state and for how long, Turn on/off and Restart, the follow switch,
-   the motor tests, the status lamps, the nodes (filling the rest) and the last error on one line. ‹ folds the column to
+   Tune, the motor tests, the status lamps, the nodes (filling the rest) and the last error on one line. ‹ folds the column to
    a strip that keeps the bot's lamp. Local fonts only: the page stays offline. */
 body.dashboard.control{
   /* The usual width, or the one dragged with its handle (resize.js): at least 260 px, where the motor tests' buttons
@@ -112,6 +112,52 @@ body.dashboard.control :is([data-grip=tests],[data-grip=nodes]),body.dashboard.c
 .dashboard .control-error.error{border-color:#6b2a26;color:#ffb4a8}
 .dashboard .control-error.waiting{border-color:#6b5622;color:#ffd58a}
 
+/* Tune: a key under the follow switch, and the window it opens (tune.js) over the page. Each group is one grid, its
+   rows' cells in its columns (display:contents): name, slider, number, unit, ↺. */
+.dashboard .control .tune svg{color:var(--accent)}
+.dashboard dialog.tune{width:min(1800px,calc(100vw - 32px));max-width:none;max-height:calc(100vh - 32px);padding:0;overflow:hidden;
+  border:1px solid var(--key-edge);border-radius:10px;background:#12191c;color:var(--text);box-shadow:0 18px 60px rgba(0,0,0,.65)}
+.dashboard dialog.tune::backdrop{background:rgba(5,8,10,.6)}
+.dashboard .tune-frame{display:flex;flex-direction:column;max-height:calc(100vh - 34px)}
+.dashboard .tune-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:#161e22}
+.dashboard .tune-head h2{margin:0 6px 0 0;font-size:15px;outline:none}  /* Focused as the window opens, unmarked */
+.dashboard .tune-status{flex:1;min-width:0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard .tune-status.unsaved{color:#ffd58a}.dashboard .tune-status.refused{color:var(--orange)}
+.dashboard .tune-head button{font-size:12px;padding:5px 14px}
+.dashboard .tune-head .tune-close{padding:3px 10px;font-size:16px;line-height:1}
+/* Rows as tall as their groups: sections may shrink to nothing (style.css), and would overlap in a short window. */
+.dashboard .tune-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(390px,100%),1fr));grid-auto-rows:max-content;
+  align-items:start;gap:10px;min-height:0;padding:10px 12px;overflow:auto}
+.dashboard .tune-group{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(56px,1fr) 64px 56px 20px;align-items:center;gap:3px 6px;
+  padding:5px 10px 8px;border:1px solid var(--line);border-radius:8px;background:#151d21}
+.dashboard .tune-group header{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding-bottom:4px;margin-bottom:2px;border-bottom:1px solid #222c31}
+.dashboard .tune-group h3{margin:0;font-size:13px}
+.dashboard .tune-group-reset{font-size:11px;padding:2px 9px}
+.dashboard .tune-heading{grid-column:1 / -1;margin:5px 0 0;font-size:11px;font-weight:600;color:var(--muted)}
+.dashboard .tune-row{display:contents}
+.dashboard .tune-row>label{display:block;margin:0;font-size:12.5px;color:#c3cdcf;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard .tune-row.changed>label{color:var(--accent)}
+.dashboard .tune-row.unsaved>label::before{content:"• ";color:#ffd58a}
+.dashboard .tune-row>input[type=range]{display:block;width:100%;height:16px;margin:0;accent-color:var(--accent)}
+.dashboard .tune-row input[type=number]{display:block;width:100%;height:22px;margin:0;padding:0 4px;font:12px var(--console);text-align:right}
+.dashboard .tune-row>:is(.tune-switch,.tune-choice,.tune-numbers,.tune-fixed){grid-column:span 2}
+.dashboard .tune-unit{font:11px var(--console);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard .tune-undo{width:20px;height:20px;padding:0;border-color:transparent;background:none;color:var(--accent);font-size:14px;line-height:1}
+.dashboard .tune-undo:disabled{visibility:hidden}
+.dashboard .tune-switch{display:inline-flex;align-items:center;gap:7px;justify-self:start;padding:1px 4px 1px 0;border:0;background:none}
+.dashboard .tune-switch:hover{background:none}
+.dashboard .tune-switch-track{position:relative;width:32px;height:17px;border-radius:9px;background:#39444a;box-shadow:inset 0 1px 4px rgba(0,0,0,.5)}
+.dashboard .tune-switch-track::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#dfe5e2;transition:left .15s}
+.dashboard .tune-switch[aria-checked=true] .tune-switch-track{background:#2ea043}
+.dashboard .tune-switch[aria-checked=true] .tune-switch-track::after{left:17px}
+.dashboard .tune-switch-word{font:700 10.5px var(--console);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.dashboard .tune-choice{display:flex;gap:4px}
+.dashboard .tune-choice button{min-width:40px;padding:2px 8px;font:12px var(--console)}
+.dashboard .tune-choice button[aria-pressed=true]{border-color:var(--accent);background:#21453a;color:#d8fff0}
+.dashboard .tune-numbers{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:6px}
+.dashboard .tune-fixed{font:11px var(--console);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* Folded: a strip with the beacon and the state word, top to bottom; a click anywhere on it opens the column. */
 .dashboard .control.folded{padding:6px 4px;overflow:hidden}
 .dashboard .control:not(.folded)>.control-rail,.dashboard .control.folded>:not(.control-rail){display:none}
@@ -131,7 +177,13 @@ body.dashboard.control :is([data-grip=tests],[data-grip=nodes]),body.dashboard.c
   .dashboard .readout{padding:6px 8px 6px 10px}
 }
 
-/* Narrow screens: the controls first, then the live views; folded, the strip runs across the top. */
+/* Narrow screens: the controls first, then the live views; folded, the strip runs across the top. In the Tune window,
+   numbers are typed: no sliders, and the names keep their room. */
+@media (max-width:600px){
+  .dashboard .tune-group{grid-template-columns:minmax(0,1fr) 84px 60px 20px}
+  .dashboard .tune-row>input[type=range]{display:none}
+  .dashboard .tune-row>:is(.tune-switch,.tune-choice,.tune-numbers,.tune-fixed){grid-column:span 1}
+}
 @media (max-width:999px){
   .dashboard .control{order:-1;overflow:visible}
   .dashboard .control>.card.nodes{flex:none}
