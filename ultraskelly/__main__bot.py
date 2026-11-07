@@ -7,6 +7,7 @@ Tracks people with an OAK USB camera and YOLOv8 pose on the Hailo-8 AI HAT+.
 import asyncio
 import logging
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
@@ -67,8 +68,14 @@ def launch_config(
     # the owner, 2026-11-07: "head servos should move their FULL range of motion"), and the hard limits are the
     # servos' own 0-180, so motor tests reach every angle. Head first, then the waist (the user, 2026-11-06): the waist stays braked and the roll
     # upright, so only pan and tilt follow.
+    # Two changes from the tuned head (the owner, 2026-11-07): pan's servo no faster than 30 degrees a second
+    # ("decrease max pan servo speed"), and a deadband of 0.12, so a still head moves again for a face about 0.4
+    # degrees off (deadband / reach), 3 px, where 0.39 waited for 1.3, 10 px ("tighten that range"). The head battery
+    # passes with both and no new reversals (tests/test_scenarios_tuning.py). With the waist off: a tighter deadband
+    # keeps the head making small corrections, and the waist starts only once the head has held still.
     config.orientation = OrientationNodeParams(
         follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
+        aim=HeadAimParams(deadband=0.12, pan_servo_speed=30.0),
     )
     return config
 

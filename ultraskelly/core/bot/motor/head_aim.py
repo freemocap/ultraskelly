@@ -20,8 +20,8 @@ and one far from the current goal (someone new, or a stray detection) must show 
 
 Each tick the head turns toward the goal less the body's turn, so it counter-rotates as soon
 as the waist moves, without waiting for the camera. It turns no faster than `max_speed` (and
-its servos no faster than `servo_speed`), speeding up and slowing down at `max_acceleration`,
-keeps `end_margin` servo degrees clear of its end stops, and while the body is still it moves
+its servos no faster than `servo_speed`, pan's no faster than `pan_servo_speed`), speeding up
+and slowing down at `max_acceleration`, keeps `end_margin` servo degrees clear of its end stops, and while the body is still it moves
 only once its goal is more than `deadband` away, so jitter never moves it. Each servo is
 commanded half its linkage's slack (`pan_slack`, `tilt_slack`) past the view in the way it
 moves, so a reversal takes up the play at once. The goal's bearing from the body tells the
@@ -114,6 +114,10 @@ class HeadAimParams(NodeParams):
     max_speed: float = Field(default=15.0, gt=0.0, le=600.0, description="Top turning speed of the view, degrees per second")
     servo_speed: float = Field(
         default=150.0, gt=0.0, description="Top servo speed, servo degrees per second, slow enough that the servos keep up",
+    )
+    pan_servo_speed: float = Field(
+        default=150.0, gt=0.0,
+        description="Pan's own top servo speed, servo degrees per second, under servo_speed; the robot launches with 30",
     )
     max_acceleration: float = Field(
         default=34.0, gt=0.0,
@@ -317,7 +321,8 @@ class HeadAim:
                 if not self.turning[axis] and (abs(wanted - self.view[axis]) > p.deadband or (axis == 0 and body_turning)):
                     self.turning[axis] = True  # Counter-rotate against the body at once
                 if self.turning[axis]:
-                    speed = min(p.max_speed, p.servo_speed * self._ratio(axis))
+                    servo_speed = min(p.servo_speed, p.pan_servo_speed) if axis == 0 else p.servo_speed
+                    speed = min(p.max_speed, servo_speed * self._ratio(axis))
                     self.view[axis], self.rates[axis] = s_curve_step(
                         self.view[axis], self.rates[axis], wanted, up=speed, down=speed, jerk=p.max_acceleration, dt=dt,
                     )

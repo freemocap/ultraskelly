@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits, MotorTestRefused, MotorTestRequest
+from ultraskelly.core.bot.motor.motor_test import SWEEP_STEP, MotorTester, MotorTestLimits, MotorTestRefused, MotorTestRequest
 from ultraskelly.core.bot.motor.mouth_node import MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, create_simulated_motor_nodes
@@ -51,6 +51,27 @@ def test_servo_tests_reach_every_angle_the_servo_takes():
     asyncio.run(scenario())
     with pytest.raises(ValueError):  # Not an angle the servo board's scale has
         MotorTestRequest(actuator="tilt", angle=181)
+
+
+def test_a_servo_test_sweeps_at_the_heads_own_top_speed_and_a_stop_holds_it():
+    # 2026-11-07, the owner: "decrease max pan servo speed". A test jumped the servo at its own full speed; it now turns
+    # no faster than following does (pan_servo_speed for pan; the robot launches with 30 degrees a second).
+    async def scenario():
+        tester, recorder, bus = build()
+        tester.orientation.params.aim.pan_servo_speed = 60.0
+        result = await tester.run(MotorTestRequest(actuator="pan", angle=120))
+        pans = values(recorder, "pan")
+        assert result["outcome"] == "done" and pans[-1] == 120 and tester.orientation.pan_angle == 120
+        assert max(abs(b - a) for a, b in zip(pans, pans[1:])) <= 60.0 * SWEEP_STEP + 1e-9  # No jump anywhere
+        assert result["took"] >= 0.4  # 30 degrees at 60 a second: half a second
+        running = asyncio.create_task(tester.run(MotorTestRequest(actuator="pan", angle=30)))
+        await asyncio.sleep(0.3)
+        assert await tester.stop()
+        stopped = await running
+        assert stopped["outcome"] == "stopped" and 30 < stopped["sent"] < 120  # Held where the sweep had got to
+        assert tester.orientation.pan_angle == stopped["sent"]
+        bus.close()
+    asyncio.run(scenario())
 
 
 def test_a_waist_pulse_runs_alone_for_its_time_then_brakes():

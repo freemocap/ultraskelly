@@ -11,6 +11,7 @@ and the command recorder, so they show on the dashboard and in recordings.
 """
 import asyncio
 import logging
+import math
 import time
 from typing import Callable, Literal
 
@@ -24,6 +25,7 @@ from ultraskelly.core.bot.motor.waist_drive import WaistDrive
 logger = logging.getLogger(__name__)
 
 SERVO_TRAVEL = (0.0, 180.0)  # Degrees: every angle the servo board's scale has (750-2250 µs)
+SWEEP_STEP = 0.02  # Seconds between the commands of a servo test's sweep
 
 
 class MotorTestLimits(NodeParams):
@@ -165,6 +167,21 @@ class MotorTester:
         except TimeoutError:
             return False
 
+    async def _sweep(self, servo, actuator: str, target: float) -> bool:
+        """Turn a head servo to `target` no faster than the head turns it when following (pan_servo_speed for pan,
+        servo_speed for tilt), not at the servo's own full speed: a whole-range test then takes seconds, not a jerk.
+        True if a stop came first; the servo holds where the sweep had got to."""
+        aim = self.orientation.params.aim
+        speed = min(aim.servo_speed, aim.pan_servo_speed) if actuator == "pan" else aim.servo_speed
+        start = float(getattr(self.orientation, f"{actuator}_angle"))
+        steps = max(1, math.ceil(abs(target - start) / (speed * SWEEP_STEP)))
+        for step in range(1, steps + 1):
+            servo.angle = start + (target - start) * step / steps
+            setattr(self.orientation, f"{actuator}_angle", float(servo.angle))  # The dashboard shows the sweep
+            if step < steps and await self._interrupted(SWEEP_STEP):
+                return True
+        return False
+
     def _brake_dc_motors(self) -> None:
         for motor in (self.orientation.waist_motor, self.mouth.mouth_motor):
             try:
@@ -180,7 +197,8 @@ class MotorTester:
             if request.actuator in ("pan", "tilt"):
                 channel = self.orientation.params.pan_channel if request.actuator == "pan" else self.orientation.params.tilt_channel
                 servo = self.orientation.servo_kit.servo[channel]
-                servo.angle = request.angle
+                if await self._sweep(servo, request.actuator, request.angle):
+                    outcome = "stopped"
                 sent = servo.angle  # After the actuator limits
                 setattr(self.orientation, f"{request.actuator}_angle", float(sent))  # Tracking resumes from here
             else:

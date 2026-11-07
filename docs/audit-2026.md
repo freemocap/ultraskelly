@@ -861,6 +861,20 @@ would drive the wrong way. Motor tests can still go there. Tilt's measured 0.08 
 servo degree is unchanged: the whole window nods the head about 10 degrees. If the head goes much
 further by hand, the linkage gives somewhere between servo and head.
 
+### Slower pan, tighter centring (2026-11-07)
+
+At the owner's request ("decrease max pan servo speed", "tighten that range") the robot launches with
+pan's servo no faster than 30 degrees a second, about 8 degrees of view: tracking's pan servo topped
+out near 58. Motor tests now sweep at the same speed instead of jumping, so the end buttons take
+seconds. It also launches with a deadband of 0.12 instead of 0.39. Each new sighting moves the goal
+`reach` (0.30) of the face's offset, so a still head used to move again only for a face more than 1.3
+degrees off (about 10 px); now it takes 0.4 (about 3 px). On the measured plant the head battery
+passes with both: no new reversals, the worst settle 2.45 s where it was 2.05, and step-left now ends
+0.06 degrees off where it ended 0.32. The controller's defaults keep 0.39 and full pan speed. A
+tighter deadband keeps the head making small corrections, and the waist starts a move only once the
+head has held still for 0.3 s. With the waist on, the full scenarios fail at every deadband ("far"
+swings 14-20 degrees past the person): the waist was never tuned with the refitted head.
+
 ### The ZED IMU's clock wrap blanked the dashboard's charts (2026-11-06)
 
 The ZED Mini's IMU tick count is 24 bits, 39.0625 µs a tick, so it wraps every 655.36 s. `ZedImuNode`
