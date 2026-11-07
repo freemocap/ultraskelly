@@ -4,7 +4,7 @@ body.dashboard{
   /* The OAK video (4:3) and two rows of 16:9 tiles fit the window height; 656 px at 1920 wide draws the OAK 1:1.
      A size dragged with a handle (resize.js: --sensor-size and so on) comes first, within its own limits. */
   --sensor-w:var(--sensor-size,clamp(300px,min(34.1667vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),900px));
-  --strip-h:var(--strip-size,clamp(140px,22vh,240px));
+  --strip-h:var(--strip-size,clamp(160px,30vh,360px));  /* The time series' strip: 324 px on the Pi's 1080 */
   grid-template-rows:var(--header-h) minmax(0,1fr);font-size:13px;
 }
 @media (max-height:699px){body.dashboard{--header-h:36px}}
@@ -40,12 +40,9 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
 .dashboard .stage{grid-area:stage;position:relative;padding:0;overflow:hidden;background:#111b21}
 .dashboard #viewport{position:absolute;inset:0}
 .dashboard #viewport canvas{display:block;touch-action:none}
-.dashboard .stage-head{position:absolute;top:10px;left:12px;right:auto;display:block;pointer-events:none;z-index:1}
-.dashboard .stage-head h2{font-size:15px;margin:0}
-.dashboard .stage-head p{margin:2px 0 0;font-size:12px;color:var(--muted)}
+.dashboard .stage-head{position:absolute;top:8px;left:10px;right:auto;display:block;pointer-events:none;z-index:1}
+.dashboard .stage-head .info{pointer-events:auto}
 .dashboard .stage-foot{position:absolute;left:12px;right:12px;bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;gap:8px;pointer-events:none;z-index:1}
-.dashboard .stage-foot .hint{font-size:11px;color:var(--muted)}
-.dashboard .foot-left{display:flex;align-items:center;gap:12px}
 .dashboard .views,.dashboard .layers{display:flex;gap:4px;pointer-events:auto}
 .dashboard .views button,.dashboard .layers button{padding:4px 11px;border-radius:13px}
 .dashboard .views button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
@@ -96,14 +93,22 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
 .dashboard .lamp i{width:7px;height:7px;border-radius:50%;background:#5d6f76}
 .dashboard .drawer-close{position:absolute;top:6px;right:8px;padding:1px 8px;font-size:15px;line-height:1.2}
 .dashboard [hidden]{display:none !important}
+/* A panel's notes, instead of text on the panel: a small round i opens them in a popover beside it (dashboard.js
+   places it); a click elsewhere or Esc closes it. */
+.dashboard .info{flex:none;display:inline-grid;place-items:center;width:17px;height:17px;padding:0;border-radius:50%;
+  font:700 11px/1 ui-monospace,monospace;color:var(--muted);background:#1c262b;border:1px solid #3c4c54}
+.dashboard .info:hover{color:var(--text);border-color:var(--accent);background:#243138}
+.dashboard .info-note{position:fixed;inset:auto;margin:0;max-width:min(380px,calc(100vw - 16px));padding:8px 11px;
+  border:1px solid #3c4c54;border-radius:6px;background:var(--panel);color:var(--text);font-size:12px;line-height:1.45;
+  box-shadow:0 6px 24px rgba(0,0,0,.45)}
+.dashboard .info-note p{margin:0}.dashboard .info-note p+p{margin-top:6px}
 
 /* Sensor column: 7 px padding plus the shared 1 px section border keeps the OAK canvas at exactly 640x480. */
 .dashboard .sensors{grid-area:sensors;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 .dashboard .sensor{padding:7px;flex:none}
-.dashboard .sensor-title{height:24px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+.dashboard .sensor-title{height:24px;display:flex;align-items:center;gap:6px}
 .dashboard .sensor-title h2{margin:0;font-size:13px}
-.dashboard .sensor-title h2 span{font-weight:400;color:var(--muted);margin-left:3px}
-.dashboard .rate{font:12px ui-monospace,monospace;color:var(--accent);white-space:nowrap}
+.dashboard .rate{margin-left:auto;font:12px ui-monospace,monospace;color:var(--accent);white-space:nowrap}
 .dashboard .tile{position:relative;margin:0;background:#0b1318;outline:1px solid #2c3a40;border-radius:2px;overflow:hidden;cursor:zoom-in}
 .dashboard .oak .tile{aspect-ratio:4/3}
 .dashboard .tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -121,19 +126,16 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
 .dashboard .tile.stale canvas{opacity:.35}
 .dashboard .target-row{height:24px;display:flex;align-items:center;gap:10px;font:12px ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden}
 .dashboard .target-row>*{flex:none}  /* Keep each item whole; the row clips its least important ones at the end */
-.dashboard #target-face{color:var(--orange)}
 .dashboard .badge{font:600 11px system-ui,sans-serif;padding:2px 8px;border-radius:9px;background:#243138;color:var(--muted)}
 .dashboard .badge.tracking{background:#1c3a31;color:var(--accent)}
 .dashboard .face-card{aspect-ratio:16/9;margin:0;padding:6% 7%;background:#0b1318;outline:1px solid #2c3a40;border:0;border-radius:2px;
   container-type:inline-size;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
-.dashboard .face-head{display:flex;justify-content:space-between;gap:6px;font-size:max(11px,4.6cqw);color:#e4e7df}
-.dashboard #face-alignment{color:var(--muted);font:max(10px,4cqw) ui-monospace,monospace}
+.dashboard .face-head{font-size:max(11px,4.6cqw);color:#e4e7df}
 .dashboard .face-distance{font:600 max(16px,12cqw) ui-monospace,monospace;color:var(--orange);line-height:1}
 .dashboard .face-distance.none{color:var(--muted)}
-.dashboard .face-position,.dashboard .face-foot{font:max(10px,4.3cqw) ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dashboard .face-position{font:max(10px,4.3cqw) ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard .depth-legend{height:22px;display:flex;align-items:center;gap:6px;font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap}
 .dashboard .depth-legend i{flex:0 1 150px;height:7px;border-radius:4px;background:#243138}
-.dashboard #depth-info{margin-left:auto;font-family:system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis}
 /* Beside the 3D scene the column's height is shared out, after the rules above. The tracking camera's video: 4:3
    across the column, or the height dragged (resize.js --oak-size), with room left below for the ZED's tiles at 60 px
    tall; a column with no height to spare gives it 4/7 of what there is. The ZED's four 16:9 tiles share the rest, with
@@ -146,11 +148,18 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
   .dashboard .tiles{grid-template-columns:repeat(2,min((100cqw - 22px) / 2,(100cqh - var(--oak-h) - 144px) * 8 / 9));justify-content:center}
 }
 
-/* Readout strip: the cards' shares of its width, or those dragged (resize.js), with a handle between each two. */
-.dashboard .strip{grid-area:strip;display:grid;min-height:0;
-  grid-template-columns:minmax(0,var(--series-fr,2.4fr)) 8px minmax(0,var(--tests-fr,1fr)) 8px minmax(0,var(--nodes-fr,1fr))}
-.dashboard .series{gap:4px}
-.dashboard .series h2 span{font-weight:400;color:var(--muted);margin-left:3px}
+/* Readout strip: the time series takes what the motor tests and the nodes leave, each of those its usual share or the
+   width dragged (resize.js), with a handle before it. With the control panel those two are in its column, and the strip
+   is the time series alone (panel.css). */
+.dashboard .strip{grid-area:strip;display:flex;min-width:0;min-height:0;overflow:hidden}
+@media (min-width:1000px){
+  .dashboard .strip>.card.series{flex:1 1 0;min-width:0}
+  .dashboard .strip>.card.tests{flex:none;width:var(--tests-size,calc((100% - 16px) / 4.4))}
+  .dashboard .strip>.card.nodes{flex:none;width:var(--nodes-size,calc((100% - 16px) / 4.4))}
+  .dashboard .strip>.grip{flex:none;width:8px}
+}
+.dashboard .card.series{position:relative}
+.dashboard .series>.info{position:absolute;top:6px;right:8px;z-index:1}  /* Over the time series' corner */
 .dashboard #series{flex:1;min-height:0;width:100%;display:block}
 .dashboard .card{padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-height:0;overflow:hidden}
 .dashboard .card-title{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
@@ -173,8 +182,8 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
 @container (max-width:230px){.dashboard #rates{grid-template-columns:auto minmax(0,1fr)}}  /* A narrow card: one rate a row */
 .dashboard dd.stale,.dashboard span.stale{color:var(--orange)}
 
-/* Motor tests (motor-test.js): the buttons in the strip's card, a row per actuator, then Stop and the status line.
-   A short strip scrolls the card. */
+/* Motor tests (motor-test.js): the buttons in their card, a row per actuator, then Stop and the status line. The card
+   sits in the strip, or with the control panel in its column; a short strip scrolls it. */
 .dashboard .card.tests{overflow-y:auto}
 .dashboard #motor-test{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
 .motor-test{display:grid;grid-template-columns:auto minmax(0,1fr) 3.4em;gap:4px 6px;align-items:center;font-size:11.5px}
@@ -205,13 +214,13 @@ body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizi
   .dashboard .sensors{overflow:visible;order:2;gap:8px}
   .dashboard .strip{display:contents}
   .dashboard .card{overflow:visible}
-  .dashboard .series{order:3;height:300px}.dashboard .tests{order:4}.dashboard .drawer{order:5}.dashboard .nodes{order:6}
+  /* The strip's cards in turn; with the control panel the motor tests and the nodes stay in its column */
+  .dashboard .strip>.series{order:3;height:300px}.dashboard .strip>.tests{order:4}.dashboard .drawer{order:5}.dashboard .strip>.nodes{order:6}
   .dashboard .drawer{width:auto;max-height:none;margin:0;box-shadow:none;align-self:stretch}
   .dashboard .drawer.health{width:auto;order:0}
   /* The banner takes its own line under the title */
   .dashboard header{flex-wrap:wrap;height:auto;row-gap:4px;padding-top:4px;padding-bottom:5px}
   .dashboard .problems{order:3;flex:1 1 100%;margin:0;font-size:11px}.dashboard .problems.bad{font-size:12px}
-  .dashboard .stage-foot .hint{display:none}
   .dashboard .status .pill{display:inline}  /* Real or simulated motors stays visible; the message rate gives way */
   .dashboard #state-rate{display:none}
 }

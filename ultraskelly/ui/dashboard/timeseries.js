@@ -12,15 +12,15 @@ const WINDOW_S = 30;
 const DRAW_MS = 250;
 const CAPACITY = 4096;  // Samples kept per trace: 30 s at up to about 130 a second
 
+// Lane titles are as short as they can be; the card's i explains them. "cmd" stays on the commanded lanes, which
+// are commands and not measured positions (AGENTS.md: label them apart from what is measured).
 export const LANES = [
-  {id: 'head', title: 'Head, commanded', unit: '°', digits: 1, traces: [['pan', '#8de3c2'], ['tilt', '#b8b0f0']], span: 20},
-  {id: 'drive', title: 'Waist and jaw drive, commanded', unit: '', digits: 2, traces: [['waist', '#ffb269'], ['jaw', '#f08fb8']], fixed: [-1, 1]},
-  {id: 'target', title: 'Target from the aim point', unit: ' px', digits: 0, traces: [['x', '#8de3c2'], ['y', '#b8b0f0']], symmetric: 60},
-  {id: 'face', title: 'Face distance, from depth', unit: ' m', digits: 2, traces: [['distance', '#ffb269']], fromZero: 2},
-  {id: 'accel', title: 'ZED accel m/s², sensor axes', unit: '', digits: 2, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 2,
-   waiting: 'Waiting for the ZED IMU'},
-  {id: 'gyro', title: 'ZED gyro °/s, sensor axes', unit: '', digits: 1, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 10,
-   waiting: 'Waiting for the ZED IMU'},
+  {id: 'head', title: 'Head cmd', unit: '°', digits: 1, traces: [['pan', '#8de3c2'], ['tilt', '#b8b0f0']], span: 20},
+  {id: 'drive', title: 'Drive cmd', unit: '', digits: 2, traces: [['waist', '#ffb269'], ['jaw', '#f08fb8']], fixed: [-1, 1]},
+  {id: 'target', title: 'Target', unit: ' px', digits: 0, traces: [['x', '#8de3c2'], ['y', '#b8b0f0']], symmetric: 60},
+  {id: 'face', title: 'Face', unit: ' m', digits: 2, traces: [['distance', '#ffb269']], fromZero: 2},
+  {id: 'accel', title: 'Accel m/s²', unit: '', digits: 2, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 2},
+  {id: 'gyro', title: 'Gyro °/s', unit: '', digits: 1, traces: [['x', '#ff8a80'], ['y', '#8ee59b'], ['z', '#82aaff']], symmetric: 10},
 ];
 
 const GAP = 8;  // px between lanes

@@ -1,12 +1,12 @@
 /* The control panel (panel.js): a control column in front of the live views, when the always-on control service
-   serves the page. Hardware-console look on the dashboard's palette: a recessed readout with a beacon, keys with
-   travel and a switch for following, kept compact. ‹ folds the column to a strip that keeps the beacon. Local
-   fonts only: the page stays offline. */
+   serves the page. Top to bottom, packed: the bot's state and for how long, Turn on/off and Restart, the follow switch,
+   the motor tests, the status lamps, the nodes (filling the rest) and the last error on one line. ‹ folds the column to
+   a strip that keeps the bot's lamp. Local fonts only: the page stays offline. */
 body.dashboard.control{
-  /* The usual widths, or those dragged with the handles (resize.js). */
-  --control-w:var(--control-size,clamp(240px,15vw,300px));
-  /* The live views share what the column leaves: the sensor column narrower than the dashboard's own. */
-  --sensor-w:var(--sensor-size,clamp(300px,min(28vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),720px));
+  /* The usual width, or the one dragged with its handle (resize.js): at least 260 px, where the motor tests' buttons
+     keep whole labels. The camera column keeps the dashboard's own width (dashboard.css), at which the OAK draws 1:1
+     and the cameras fill the column's height. */
+  --control-w:var(--control-size,clamp(260px,15vw,300px));
   --on:#3fb950;--on-glow:rgba(63,185,80,.35);--fail:#f85149;--warn:#d29922;--key:#222d33;--key-edge:#3c4c54;
   --console:ui-monospace,"Cascadia Mono","DejaVu Sans Mono",Consolas,monospace;
 }
@@ -14,41 +14,31 @@ body.dashboard.control.control-folded{--control-w:44px}  /* Folded wins over a d
 body.dashboard.control main.layout{grid-template-columns:var(--control-w) 8px minmax(0,1fr) 8px var(--sensor-w);
   grid-template-areas:"control control-grip stage sensors-grip sensors" "control control-grip strip-grip sensors-grip sensors"
                       "control control-grip strip sensors-grip sensors"}
+/* While the column's blocks fit beside the 3D scene (panel.js sets body.series-under: on the Pi's 1080 px they do), and
+   whenever the column is folded, the time series runs under the column too, across from the left edge. Otherwise the
+   column keeps the full height. */
+body.dashboard.control.series-under main.layout{grid-template-areas:"control control-grip stage sensors-grip sensors"
+  "strip-grip strip-grip strip-grip sensors-grip sensors" "strip strip strip sensors-grip sensors"}
 .dashboard [data-grip=control]{grid-area:control-grip}
 @media (min-width:1000px){body.dashboard.control:not(.control-folded) [data-grip=control]{display:block}}
 body.dashboard.control .sensors{overflow-x:hidden}
-/* Below 1600 px the strip keeps the time series and the motor tests; the open column's status lamps stand for the
-   nodes card. Folded, the strip is the dashboard's own again. */
-@media (min-width:1000px) and (max-width:1599px){
-  body.dashboard.control:not(.control-folded) .strip{grid-template-columns:minmax(0,var(--series-fr,1.7fr)) 8px minmax(0,var(--tests-fr,1fr))}
-  body.dashboard.control:not(.control-folded) :is(.card.nodes,[data-grip=tests-nodes]){display:none}
-}
+/* The motor tests and the nodes are in the column, so the strip is the time series alone: their handles go, and so do
+   the nodes card's lamps, which the column's status lamps show. */
+body.dashboard.control :is([data-grip=tests],[data-grip=nodes]),body.dashboard.control #health-lights{display:none}
 
-/* The column: a rack panel, screwed on at its corners. */
-.dashboard .control{grid-area:control;display:flex;flex-direction:column;gap:8px;min-height:0;overflow-y:auto;padding:12px 10px 10px;
-  border:1px solid var(--line);border-radius:8px;
-  background:
-    radial-gradient(circle at 8px 8px,#45535a 0 2px,#1d262b 2.6px,transparent 3.2px),
-    radial-gradient(circle at calc(100% - 8px) 8px,#45535a 0 2px,#1d262b 2.6px,transparent 3.2px),
-    radial-gradient(circle at 8px calc(100% - 8px),#45535a 0 2px,#1d262b 2.6px,transparent 3.2px),
-    radial-gradient(circle at calc(100% - 8px) calc(100% - 8px),#45535a 0 2px,#1d262b 2.6px,transparent 3.2px),
-    linear-gradient(180deg,#1b2428,#141b1f 60%,#12181b)}
-.dashboard .control>*{flex:none}  /* Each block keeps its height; a short window scrolls the column */
-.dashboard .control h2,.dashboard .control h3{margin:0;font:600 10.5px var(--console);letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
-.dashboard .control-title{display:flex;align-items:center;gap:8px;padding:0 0 0 4px}
-.dashboard .control-title span{flex:1;min-width:0;font:11px var(--console);color:#6f8188;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dashboard .control .control-collapse{flex:none;display:grid;place-items:center;width:24px;height:22px;padding:0 0 2px;border-radius:5px;
-  border:1px solid var(--key-edge);background:#1c262b;color:var(--muted);font:700 16px/1 var(--console)}
-.dashboard .control .control-collapse:hover{color:var(--text);border-color:var(--accent);background:#243138}
+/* The column. */
+.dashboard .control{grid-area:control;display:flex;flex-direction:column;gap:8px;min-height:0;overflow-y:auto;padding:10px;
+  border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,#1b2428,#141b1f 60%,#12181b)}
+.dashboard .control>*{flex:none}  /* Each block keeps its height; the nodes take what is left */
+.dashboard .control>.card.nodes{flex:1 1 0;min-height:110px}
+.dashboard .control>.card.nodes #nodes{flex:none}.dashboard .control>.card.nodes #rates{flex:1 1 auto;align-content:start}
 
-/* The readout: a recessed display with the state in lit letters. */
-.dashboard .readout{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 12px;
+/* The readout: the state in lit letters, how long it has been so, and the fold button. */
+.dashboard .readout{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:9px;padding:7px 8px 7px 12px;
   border-radius:8px;border:1px solid #26323a;background:linear-gradient(180deg,#070b0d,#0c1215);
   box-shadow:inset 0 2px 10px rgba(0,0,0,.7),0 1px 0 rgba(255,255,255,.04)}
-.dashboard .readout-text{display:flex;flex-direction:column;gap:3px;min-width:0}
 .dashboard .readout b{font:700 clamp(16px,1.2vw,21px)/1 var(--console);letter-spacing:.06em;text-transform:uppercase;color:#7d8b90;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dashboard .readout-text span{font:11px var(--console);color:var(--muted)}
 .dashboard .readout-time{font:600 13px var(--console);color:#9fb0b5;white-space:nowrap}
 .dashboard .beacon{flex:none;width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#56646a,#2a3338 70%);box-shadow:inset 0 0 0 1px #0007}
 .dashboard .readout.on b,.dashboard .control-rail.on .rail-word{color:#7ee29a;text-shadow:0 0 12px rgba(63,185,80,.5)}
@@ -61,16 +51,28 @@ body.dashboard.control .sensors{overflow-x:hidden}
 .dashboard :is(.readout,.control-rail).fail .beacon{background:radial-gradient(circle at 35% 30%,#ffd2cd,#f85149 55%,#8e1519);box-shadow:0 0 12px 3px rgba(248,81,73,.4)}
 .dashboard :is(.readout,.control-rail).lost{opacity:.55}
 @keyframes beacon{50%{box-shadow:0 0 14px 4px rgba(210,153,34,.5);filter:brightness(1.25)}}
-.dashboard .control-detail{margin:-2px 4px 0;font-size:12px;line-height:1.35;color:#c3cdcf}
+.dashboard .control .control-collapse{display:grid;place-items:center;width:24px;height:22px;padding:0 0 2px;border-radius:5px;
+  border:1px solid var(--key-edge);background:#1c262b;color:var(--muted);font:700 16px/1 var(--console)}
+.dashboard .control .control-collapse:hover{color:var(--text);border-color:var(--accent);background:#243138}
+
+/* Two lines that show only when they have something to say: why the bot is as it is, and the answer to the last
+   command. */
+.dashboard :is(.control-detail,.control-answer){margin:-2px 4px 0;font-size:12px;line-height:1.35}
+.dashboard :is(.control-detail,.control-answer):empty{display:none}
+.dashboard .control-detail{color:#c3cdcf}
+.dashboard .control-answer{color:var(--muted)}
+.dashboard .control-answer.done{color:var(--accent)}
+.dashboard .control-answer.refused{color:var(--orange)}
+.dashboard .control-answer.busy::after{content:"▍";margin-left:2px;animation:caret 1s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
 
 /* Keys: an icon and a word, with travel; what each does is its tooltip. */
 .dashboard .control-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.dashboard .control .big{display:flex;align-items:center;justify-content:center;gap:7px;height:clamp(40px,4.6vh,50px);padding:6px 10px;
+.dashboard .control .big{display:flex;align-items:center;justify-content:center;gap:7px;height:clamp(38px,4.2vh,46px);padding:6px 10px;
   border-radius:8px;border:1px solid var(--key-edge);background:linear-gradient(180deg,#29363d,var(--key));color:var(--text);white-space:nowrap;
   box-shadow:0 3px 0 #0a0f12,inset 0 1px 0 rgba(255,255,255,.07);transition:transform .06s,box-shadow .06s,filter .15s}
 .dashboard .control .big svg{flex:none;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 .dashboard .control .big b{font-size:14px;font-weight:700;letter-spacing:.01em}
-.dashboard .control .big span{display:none}
 .dashboard .control .big:hover:not(:disabled){filter:brightness(1.12);border-color:var(--accent)}
 .dashboard .control .big:active:not(:disabled),.dashboard .control .switch:active:not(:disabled){transform:translateY(2px);box-shadow:0 1px 0 #0a0f12,inset 0 1px 0 rgba(255,255,255,.05)}
 .dashboard .control .power.turn-on{border-color:#3fb950;background:linear-gradient(180deg,#245a33,#183f24);color:#e3ffe9;
@@ -80,14 +82,12 @@ body.dashboard.control .sensors{overflow-x:hidden}
 .dashboard .control .restart svg{color:var(--accent)}
 .dashboard .control button:disabled{opacity:.42;cursor:default}
 
-/* Following: a switch. */
-.dashboard .control .switch{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:44px;padding:7px 10px 7px 12px;text-align:left;white-space:normal;
+/* Following: a switch; what it does now is its tooltip. */
+.dashboard .control .switch{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:38px;padding:6px 10px 6px 12px;text-align:left;
   border-radius:8px;border:1px solid var(--key-edge);background:linear-gradient(180deg,#232e34,#1c262b);color:var(--text);
   box-shadow:0 3px 0 #0a0f12,inset 0 1px 0 rgba(255,255,255,.06);transition:transform .06s,box-shadow .06s}
 .dashboard .control .switch:hover:not(:disabled){border-color:var(--accent)}
-.dashboard .switch-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-.dashboard .switch-text b{font-size:14px}
-.dashboard .switch-text span{font-size:11px;color:var(--muted);line-height:1.25}
+.dashboard .switch-text{min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard .switch-track{position:relative;width:42px;height:22px;border-radius:11px;background:#39444a;box-shadow:inset 0 2px 5px rgba(0,0,0,.55);transition:background .2s}
 .dashboard .switch-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:linear-gradient(180deg,#f4f6f1,#b9c2c4);
   box-shadow:0 2px 4px rgba(0,0,0,.5);transition:left .2s}
@@ -96,30 +96,21 @@ body.dashboard.control .sensors{overflow-x:hidden}
 .dashboard .switch-word{width:2.2em;font:700 11.5px var(--console);letter-spacing:.08em;text-transform:uppercase;color:#7d8b90}
 .dashboard .switch[aria-checked=true] .switch-word{color:#7ee29a}
 
-/* The answer to the last command. */
-.dashboard .control-answer{margin:-2px 4px 0;min-height:1.4em;font-size:12px;color:var(--muted);line-height:1.4}
-.dashboard .control-answer.done{color:var(--accent)}
-.dashboard .control-answer.refused{color:var(--orange)}
-.dashboard .control-answer.busy::after{content:"▍";margin-left:2px;animation:caret 1s steps(1) infinite}
-@keyframes caret{50%{opacity:0}}
-
-/* What works: a lamp for each part the bot checks. */
-.dashboard .control-status,.dashboard .control-error{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:rgba(9,13,15,.55)}
-.dashboard .control-status h3,.dashboard .control-error h3{margin-bottom:6px}
-.dashboard #control-parts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;margin:0;align-items:baseline}
-.dashboard #control-parts dt{font-size:11.5px;color:var(--muted)}
-.dashboard #control-parts dd{margin:0;display:flex;flex-wrap:wrap;gap:3px 10px;font-size:12px}
+/* What works: a lamp for each part the bot checks, its message on hover. */
+.dashboard .control-parts{display:flex;flex-wrap:wrap;gap:4px 11px;padding:7px 10px;border:1px solid var(--line);border-radius:6px;
+  background:rgba(9,13,15,.55);font-size:12px}
 .dashboard .part-lamp{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .dashboard .part-lamp i{width:8px;height:8px;border-radius:50%;background:#39444a}
 .dashboard .part-lamp.ok i{background:var(--on);box-shadow:0 0 6px var(--on-glow)}
 .dashboard .part-lamp.warn i{background:var(--warn);box-shadow:0 0 6px rgba(210,153,34,.45)}
 .dashboard .part-lamp.fail i{background:var(--fail);box-shadow:0 0 6px rgba(248,81,73,.5)}
 .dashboard .part-lamp.fail{color:#ffb4a8}.dashboard .part-lamp.warn{color:#ffd58a}.dashboard .part-lamp.off{color:var(--muted)}
-.dashboard .part-none{color:#6f8188;font-size:11.5px}
-.dashboard .control-error h3 span{margin-left:6px;color:#6f8188;letter-spacing:0;text-transform:none}
-.dashboard .control-error p{margin:0;font:11.5px/1.4 var(--console);color:#6f8188;white-space:pre-wrap;overflow-wrap:anywhere}
-.dashboard .control-error.error{border-color:#6b2a26}.dashboard .control-error.error p{color:#ffb4a8}
-.dashboard .control-error.waiting{border-color:#6b5622}.dashboard .control-error.waiting p{color:#ffd58a}
+
+/* The last error: one line, its time first; the whole text on hover. */
+.dashboard .control-error{margin:0;padding:5px 10px;border:1px solid var(--line);border-radius:6px;font:11.5px/1.4 var(--console);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
+.dashboard .control-error.error{border-color:#6b2a26;color:#ffb4a8}
+.dashboard .control-error.waiting{border-color:#6b5622;color:#ffd58a}
 
 /* Folded: a strip with the beacon and the state word, top to bottom; a click anywhere on it opens the column. */
 .dashboard .control.folded{padding:6px 4px;overflow:hidden}
@@ -136,13 +127,14 @@ body.dashboard.control .sensors{overflow-x:hidden}
 
 /* Short windows: tighter still, and the column scrolls if it must. */
 @media (max-height:760px){
-  .dashboard .control{gap:6px;padding:10px 8px 8px}
-  .dashboard .readout{padding:7px 10px}
+  .dashboard .control{gap:6px;padding:8px}
+  .dashboard .readout{padding:6px 8px 6px 10px}
 }
 
 /* Narrow screens: the controls first, then the live views; folded, the strip runs across the top. */
 @media (max-width:999px){
   .dashboard .control{order:-1;overflow:visible}
+  .dashboard .control>.card.nodes{flex:none}
   .dashboard .control .big{height:48px}
   .dashboard .control .control-collapse{transform:rotate(90deg)}
   .dashboard .control>.control-rail{flex-direction:row;padding:4px 8px}

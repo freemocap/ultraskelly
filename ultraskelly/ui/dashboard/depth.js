@@ -87,7 +87,7 @@ export class DepthViews {
       const u = Math.floor((event.clientX - box.left - (box.width - depth.width * scale) / 2) / scale);
       const v = Math.floor((event.clientY - box.top - (box.height - depth.height * scale) / 2) / scale);
       const inside = u >= 0 && v >= 0 && u < depth.width && v < depth.height, mm = inside ? depth.mm[v * depth.width + u] : 0;
-      caption.textContent = !inside ? label : `${label} · ${mm ? metres(mm) : 'unknown'}`;
+      caption.textContent = !inside ? label : [label, mm ? metres(mm) : 'unknown'].filter(Boolean).join(' · ');
     });
     tile.figure.addEventListener('mouseleave', () => { caption.textContent = label; });
   }

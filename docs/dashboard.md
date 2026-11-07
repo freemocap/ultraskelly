@@ -31,23 +31,41 @@ loads none of the bot's code, so it answers while the bot is off, starting or br
 bot's own server on port 8080 serves the same page without the column.
 
 ```text
-┌ UltraSkelly / control panel ─────────────────────────────────── live · 20/s ┐
-│ ┌ Robot ───────────‹──┐ ┌───────────────────────────────┐ ┌───────────────┐ │
-│ │ ● RUNNING  up 1:12  │ │ 3D scene                      │ │ OAK           │ │
-│ │ following people    │ │                               │ │               │ │
-│ │ [Turn off][Restart] │ │                               │ ├───────────────┤ │
-│ │ Follow people   ON  │ │                               │ │ ZED Mini      │ │
-│ │ answer line         │ └───────────────────────────────┘ │ depth, IMU    │ │
-│ │ Status lamps        │ ┌ Time series ┬ Motor tests ────┐ │               │ │
-│ │ Last error          │ │                               │ │               │ │
-│ └─────────────────────┘ └───────────────────────────────┘ └───────────────┘ │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌ UltraSkelly ─ All hardware OK ───────────────────────── ● Live · 20/s · motors ┐
+│ ┌─────────────────┐ ┌ i ────────────────────────────────┐ ┌ OAK i ── 30 fps ─┐ │
+│ │ ● RUNNING 1 h ‹ │ │ 3D scene                          │ │                  │ │
+│ │ [Turn off][Rest]│ │                                   │ │                  │ │
+│ │ Follow people ON│ │                                   │ │                  │ │
+│ │ Motor tests     │ │                                   │ │                  │ │
+│ │  Pan Tilt Roll  │ │                                   │ ├ ZED i ───────────┤ │
+│ │  Waist  Jaw     │ │                                   │ │ L        R       │ │
+│ │ ● status lamps  │ │ [Cloud Mesh Gaze] [Orbit…Top]     │ │ heat map  Face   │ │
+│ │ Nodes           │ │                                   │ │                  │ │
+│ └─────────────────┘ └───────────────────────────────────┘ │                  │ │
+│ ┌ Head cmd · Drive cmd · Target · Face · Accel · Gyro ─i┐ │                  │ │
+│ │                                                       │ │                  │ │
+│ └───────────────────────────────────────────────────────┘ └──────────────────┘ │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+The page shows live values, not explanations (the owner, 2026-11-07: "No static
+text"). Each panel's explanation sits behind its small **i**, which opens it in a
+popover; a click elsewhere or Esc closes it. Fixed details are tooltips: hover the
+readout, a lamp, the follow switch, a rate or the last error. Commanded values keep a
+short "cmd" (see Time series).
+
+The column holds, top to bottom and packed: the readout, Turn on/off and Restart, the
+follow switch, the motor tests, the status lamps, the nodes card (which takes what is
+left) and the last error. While those fit beside the 3D scene, as on the Pi's 1080 px,
+the time series runs under both, across from the left edge; when they do not, on a
+shorter window or with the strip dragged tall, the column keeps the full height
+(`panel.js` measures it). Folded, the time series always runs under it. The camera
+column has the dashboard's own width, at which the OAK draws 1:1.
+
 - **Readout:** the bot's state as a lit word (RUNNING, STARTING, RESTARTING, WAITING for
-  the robot lock, STOPPING, OFF, FAILED), since when and for how long, and one line of
-  why: following or holding still, simulated motors, how often it restarted by itself,
-  how its last run ended, or which program holds the robot lock.
+  the robot lock, STOPPING, OFF, FAILED) and for how long; since when, and which robot,
+  on hover. A line under it appears only for what the word does not say: that the bot
+  restarted itself, how its last run ended, or which program holds the robot lock.
 - **Turn on / Turn off** and **Restart:** `systemctl start`, `stop` and `restart` of
   `ultraskelly-bot`. Turn off lasts until Turn on or the next boot; the bot stays enabled
   at boot.
@@ -56,19 +74,25 @@ bot's own server on port 8080 serves the same page without the column.
   (`POST /api/follow` on the bot) and is kept for every later start as `--follow` or
   `--no-follow` in `/var/lib/ultraskelly-control/bot-options`. The bot's service passes
   it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
-  bot is off, the switch says which way its next start goes.
-- **‹ (fold):** folds the column to a 44 px strip that keeps the bot's lamp and state
-  word; a click on the strip opens it again, at the width it was dragged to, if any (see
-  Sizing). The browser keeps the choice (`localStorage`), so the Pi's window stays
-  folded across reloads and reboots. Turn off is the way to stop every motor: the bot's
-  service brakes the DC motors as it stops.
-- **Answer line:** what the last command did, the same on every page showing the panel.
-- **Status:** the bot's own health checks (see Health) as lamps in five rows: Cameras
-  (OAK, ZED Mini), Tracking (OAK models, Hailo-8, Depth), Motors (Servo board, Motor HAT,
-  Head aim), Sensors (ZED IMU) and Power. Not checked while the bot is off.
-- **Last error:** the newest error in the bot's journal, with the exception that followed
-  it, and how long ago; or `scripts/run-bot.sh`'s "Not starting: another program is
-  using the robot", with the program that holds the lock.
+  bot is off, the switch shows which way its next start goes; its tooltip says so.
+- **‹ (fold):** folds the column, motor tests and nodes included, to a 44 px strip that
+  keeps the bot's lamp and state word; a click on the strip opens it again, at the width
+  it was dragged to, if any (see Sizing). The browser keeps the choice (`localStorage`),
+  so the Pi's window stays folded across reloads and reboots. Turn off is the way to stop
+  every motor: the bot's service brakes the DC motors as it stops.
+- **Answer line:** what the last command did, the same on every page showing the panel;
+  only while there is one.
+- **Motor tests:** the card from the strip (see Panels), under the follow switch.
+- **Status:** the bot's own health checks (see Health) as one row of lamps, by group:
+  OAK and ZED Mini; OAK models, Hailo-8 and Depth; Servo board, Motor HAT and Head aim;
+  ZED IMU; Pi power. Each lamp's message and fix are its tooltip. None while the bot is
+  off or not yet checked.
+- **Nodes:** the nodes card from the strip, its lamps left out (the status lamps are the
+  same checks), with the message rates.
+- **Last error:** one line, the newest error in the bot's journal with its time; the
+  exception that followed it and how long ago on hover. Or `scripts/run-bot.sh`'s "Not
+  starting: another program is using the robot", with the program that holds the lock.
+  No line while there is none.
 
 While the bot is not running, the views keep what they last showed, nothing covers
 them, the motor test buttons are greyed out, and the header says "Bot off" (or
@@ -121,26 +145,31 @@ another command as the bot, which must serve the dashboard's `/stream` and
 - **Header:** connection state, `robot_state` messages per second, whether the motors
   are simulated or real, and the problems banner (see Health).
 - **3D scene:** the schematic skeleton driven by the commanded head pan and tilt, the
-  waist drive arrow and the jaw. These are commands, not measured positions, and the
-  scene says so. View buttons: orbit, behind the head, side, top. The ZED's point cloud
-  and mesh and the OAK's gaze ride on the head, each with a layer toggle (see Depth and
-  Gaze).
-- **Tracking camera (OAK):** the video with the poses found in each frame, the aim
+  waist drive arrow and the jaw. These are commands, not measured positions; the scene's
+  i says so, with how far the head turns per servo degree. View buttons: orbit, behind
+  the head, side, top. The ZED's point cloud and mesh and the OAK's gaze ride on the head,
+  each with a layer toggle (see Depth and Gaze).
+- **OAK** (the tracking camera): the video with the poses found in each frame, the aim
   crosshair, jaw zone and target ring, and the faces and hands the OAK's own chip finds
-  (see Faces and hands), drawn in the browser. The row under it shows the
-  target state, pixel, face distance, whether the target is inside the jaw zone, its body
-  angle and its age; a narrow tile drops the last of these. Without video, as in
+  (see Faces and hands), drawn in the browser. The title gives the camera's frame rate,
+  and the frames this page drew in the last second as its tooltip. The row under the video
+  shows the target state, pixel, whether the target is inside the jaw zone, its body angle
+  and its age; a narrow tile drops the last of these. Without video, as in
   `replay --serve`, the tile shows the target on a grid.
-- **Eyes and depth (ZED Mini):** the left and right eyes (`zed_left`, `zed_right`), the
-  depth heat map with a metre scale, and the tracked face in 3D as the Pi's face locator
-  reports it (`robot_state.face`): its distance from between the eyes, its position in the
-  head frame, the OAK pixel it came from, the alignment that placed it and its age.
+- **ZED** (the ZED Mini): the left and right eyes (L, R: `zed_left`, `zed_right`), the
+  depth heat map with a metre scale (hover it for a distance), and the tracked face in 3D
+  as the Pi's face locator reports it (`robot_state.face`): its distance from between the
+  eyes and its position in the head frame; the OAK pixel it came from and its age on
+  hover. The i gives the share of depth known, the depth method and the alignment that
+  placed the face.
 - **Readout strip:** the time series (below), motor tests, and node health with the
   message rates and the OAK chip's own (`robot_state.oak`): its frames, faces found, head
   poses, face meshes and hands measured a second, and in one row its two CPUs, LeonOS and
   LeonRT, and its temperature, with its memory and any frames sent before all their
   measurements came in the row's tooltip. A camera whose frames stop appears there too.
-- **Motor tests:** the buttons are in the strip card itself, no panel to open
+  With the control panel the motor tests and the nodes are in its column and the strip is
+  the time series alone.
+- **Motor tests:** the buttons are in the card itself, no panel to open
   (`motor-test.js`), by where the head goes: Pan ◀◀ ◀10 90 ▶10 ▶▶ (the robot's own left
   and right, as its camera's picture and the 3D view from behind show them; mirrored for
   someone facing it), Tilt ▲▲ ▲10 90 ▼10 ▼▼ and Roll ↺↺ ↺10 90 ↻10 ↻↻ (toward its left or
@@ -149,7 +178,7 @@ another command as the bot, which must serve the dashboard's `/stream` and
   and a status line. The line shows this page's answer for a few seconds, then what the bot
   reports: a test running from any screen, the last test's outcome, or why tests cannot
   run. The card title shows the net waist travel; the test limits are the buttons' tooltip.
-  A short strip scrolls the card. Angles stay commands, not where a servo is. After a servo
+  A short card scrolls. Angles stay commands, not where a servo is. After a servo
   test, a line appears when the servo board's read-back shows a problem: the command did
   not reach the chip, the chip is asleep, or its readings are stale. While a board is down
   the controllers still run and record their commands, but nothing reaches it, so the
@@ -161,14 +190,17 @@ Click a video tile to enlarge it over the 3D scene; click it again or press Esc 
 ## Time series
 
 Strip charts of the last 30 s (`timeseries.js`), on the Pi's clock (`robot_state.time`):
-the head pan and tilt and the waist and jaw drive, as commanded; the target's offset from
-the aim point, which is the controllers' input; the face distance from the Pi's face
-locator; and the ZED's accelerometer (m/s²) and gyroscope (°/s), measured, from the `imu`
-messages ([the stream](stream.md#imu-messages)). The IMU's values are in its own sensor
-axes, which the lanes say: the ZED sits rolled, so gravity reads about (-6.8, 7.3, -1.2)
-m/s², and their place in the head frame is not measured. No motor reports its position:
-the servos have no feedback and the DC motors no encoders, so there is no measured motor
-trace, and the panel says so. Each lane's header gives the newest values. The canvas
+Head cmd and Drive cmd, the head pan and tilt and the waist and jaw drive as commanded;
+Target, the target's offset from the aim point, which is the controllers' input; Face,
+the face distance from the Pi's face locator; and Accel (m/s²) and Gyro (°/s), the ZED's
+IMU, measured, from the `imu` messages ([the stream](stream.md#imu-messages)). The
+titles are short and the card's i explains them; "cmd" stays on the commanded lanes, which
+AGENTS.md wants labelled apart from what is measured. The IMU's values are in its own
+sensor axes: the ZED sits rolled, so gravity reads about (-6.8, 7.3, -1.2) m/s², and
+their place in the head frame is not measured. No motor reports its position: the servos
+have no feedback and the DC motors no encoders, so there is no measured motor trace. Each
+lane's header gives the newest values. The lanes sit two abreast, one under the other on
+a narrow card, three abreast on a wide short one. The canvas
 redraws at most 4 times a second, only when something new arrived, at one point per pixel
 column (the first, lowest, highest and last value in it). The IMU's 794 samples a second
 arrive in batches of about 53; each batch keeps its lowest and highest value per axis, and
@@ -182,33 +214,37 @@ At least 1000 px wide:
 - Sensor column width: `clamp(300px, min(34.17vw, (100vh - header - 142px) / 1.3125), 900px)`.
   The OAK video (4:3) and the two rows of 16:9 tiles then fit the window height. At 1920
   px wide the column is 656 px, so the OAK's 640×480 frame draws without scaling.
-- Readout strip height: `clamp(140px, 22vh, 240px)`; the time series takes 2.4 parts of
-  its width, the motor tests and the nodes 1 part each.
+- Readout strip height: `clamp(160px, 30vh, 360px)`, 324 px on the Pi; the motor tests
+  and the nodes take 1 part in 4.4 of its width each, the time series the rest.
+- The control panel's column: `clamp(260px, 15vw, 300px)`, 288 px on the Pi.
 - Text 11 to 14 px.
 
 | Window | 3D scene | OAK video | Eye and depth tiles | Strip |
 | --- | --- | --- | --- | --- |
-| Pi monitor, 1920×1080 | 1240×774 | 640×480 | 317×178 | 238 |
-| Desktop browser, 1920×950 | 1314×673 | 566×425 | 280×158 | 209 |
-| Laptop browser, 1366×657 | 977×452 | 349×262 | 171×96 | 145 |
+| Pi monitor, 1920×1080 | 1240×688 | 640×480 | 317×178 | 324 |
+| Desktop browser, 1920×950 | 1314×597 | 566×425 | 280×158 | 285 |
+| Laptop browser, 1366×657 | 977×400 | 349×262 | 171×96 | 197 |
+
+With the control panel on the Pi: the column 288×688, the 3D scene 944×688, the cameras as
+above, and the time series 1240×324 under the column and the scene.
 
 Every window at least 562 px tall fits without scrolling. Narrower than 1000 px, the
 page is one scrolling column: 3D scene, OAK, ZED tiles, then the cards.
 
 Every panel can be resized (`resize.js`). The 8 px between two panels is a handle:
-control column and 3D scene, 3D scene and camera column, 3D scene and strip, between the
-strip's cards, and between the tracking camera and the ZED's tiles. Drag it; a line
-shows under the pointer. A double-click puts the usual size back; either handle between
-the cards gives all three their usual widths. The browser keeps the sizes
-(`localStorage` `ultraskelly.sizes`), so the Pi's window opens as it was left, across
-reloads and reboots. The control panel on port 80 and the bot's own dashboard on 8080
-keep separate sizes. The phone layout has no handles.
+control column and 3D scene, 3D scene and camera column, 3D scene and strip, before the
+motor tests and before the nodes in the strip, and between the tracking camera and the
+ZED's tiles. Drag it; a line shows under the pointer. A double-click puts the usual
+size back. The browser keeps the sizes (`localStorage` `ultraskelly.sizes`), so the
+Pi's window opens as it was left, across reloads and reboots. The control panel on port
+80 and the bot's own dashboard on 8080 keep separate sizes. The phone layout has no
+handles.
 
-- Limits: the control column 220 px to 35 % of the window wide; the camera column from
+- Limits: the control column 260 px to 35 % of the window wide; the camera column from
   260 px to what leaves the 3D scene 480 px; the strip from 90 px to what leaves the
-  scene 220 px tall. While dragged, each card keeps at least 200 px (time series), 236 px
-  (motor tests, whose button labels stay whole) or 160 px (nodes). A dragged size keeps
-  its limits as the window changes, so a smaller window narrows it rather than overflow.
+  scene 220 px tall; the motor tests from 236 px and the nodes from 160 px, each to half
+  of what leaves the time series 200 px. A dragged size keeps its limits as the window
+  changes, so a smaller window narrows it rather than overflow.
 - The tracking camera's video stays 4:3, at most the column's width, and at most as tall
   as leaves the ZED's tiles 60 px. The ZED's four 16:9 tiles share what is left. To make
   both bigger, widen the column first, then share its height out with the handle between

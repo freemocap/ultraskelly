@@ -19,6 +19,20 @@ import { resizable } from '/resize.js';
 // The panels at the sizes they were left at, each handle between them working (resize.js).
 resizable(document);
 
+// A panel's notes open from its i button (index.html: a popover, which a click elsewhere or Esc closes), just under the
+// button and inside the window: placed by the button as they open, then moved in once their size is known.
+for (const note of document.querySelectorAll('.info-note')) {
+  const button = document.querySelector(`[popovertarget="${note.id}"]`);
+  const place = () => {
+    const at = button.getBoundingClientRect(), box = note.getBoundingClientRect();
+    const above = at.top - 4 - box.height, below = at.bottom + 4;
+    note.style.left = `${Math.round(Math.max(8, Math.min(at.left, innerWidth - box.width - 8)))}px`;
+    note.style.top = `${Math.round(below + box.height > innerHeight - 8 && above >= 8 ? above : below)}px`;
+  };
+  note.addEventListener('beforetoggle', event => { if (event.newState === 'open') place(); });
+  note.addEventListener('toggle', event => { if (event.newState === 'open') place(); });
+}
+
 const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
 const fixed = (value, digits, unit = '') => value == null ? '—' : `${value.toFixed(digits)}${unit}`;
@@ -120,18 +134,16 @@ function showLimits(state) {
   setText($('stage-limits'), note ?? ''); setProperty($('stage-limits'), 'hidden', !note);
 }
 
+// The face card: its distance and place, or the part that keeps it from being found; the pixel and age on hover.
 function showFace(state) {
   const face = state.face, fresh = faceFresh(face);
-  const nominal = face?.alignment === 'nominal' ? ' (nominal)' : '';
-  setText($('target-face'), fresh ? `face ${face.distance.toFixed(2)} m${nominal}` : '');
   setText($('face-distance'), fresh ? `${face.distance.toFixed(2)} m` : '—');
   $('face-distance').classList.toggle('none', !fresh);
-  setText($('face-alignment'), face?.alignment ?? '');
+  setText($('face-alignment'), face?.alignment ?? '—');
   const [x, y, z] = facePoint ?? [];
   setText($('face-position'), fresh ? `${metres(x)} fwd · ${metres(y)} left · ${metres(z)} up`
-    : reasons.depth ? reasons.depth.message : reasons.oak ? `No OAK target: ${reasons.oak.message}`
-    : !face ? 'No face locator in this run' : 'No face located');
-  setText($('face-foot'), fresh && face.pixel ? `from OAK pixel ${face.pixel.map(Math.round).join(', ')} · ${ago(face.age)} old` : '');
+    : reasons.depth ? reasons.depth.message : reasons.oak ? `No OAK target: ${reasons.oak.message}` : '—');
+  setProperty($('face-position'), 'title', fresh && face.pixel ? `From OAK pixel ${face.pixel.map(Math.round).join(', ')}, ${ago(face.age)} old` : '');
 }
 
 function showTarget(state) {
@@ -203,7 +215,8 @@ function showHealth(state) {
     setProperty(card, 'className', `node ${node.state}`); setProperty(card, 'title', node.error || node.name);
     setText(name, node.name); setText(status, node.state);
   }
-  setText($('node-summary'), `${nodes.filter(node => node.state === 'running').length}/${nodes.length} running`);
+  setText($('node-summary'), `${nodes.filter(node => node.state === 'running').length}/${nodes.length}`);
+  setProperty($('node-summary'), 'title', 'Nodes running');
 }
 
 // The stream: the SDK reconnects, answers heartbeats and validates every message.
@@ -348,8 +361,10 @@ stream.on('close', () => {
 if (!control) stream.connect();  // The control column connects it once the bot is up
 window.ultraskelly = {clock, scene, tiles, depth, series, stream, motorTest, oakFinds, health, control, get state() { return latestState; }};  // For DevTools
 
-// Once a second: connection freshness, frame rates, node health and message rates.
-const rateText = (drawn, camera) => camera?.width ? `${drawn} drawn · ${camera.fps.toFixed(1)} fps` : drawn ? `${drawn} drawn` : '—';
+// Once a second: connection freshness, frame rates, node health and message rates. A camera's rate is its own; the
+// frames this page drew in the last second are the tooltip.
+const rateText = camera => camera?.width ? `${camera.fps.toFixed(1)} fps` : '—';
+const drawnText = drawn => `${drawn ?? 0} frames drawn here in the last second`;
 setInterval(() => {
   const age = (performance.now() - lastSnapshotAt) / 1000, stale = !lastSnapshotAt || age > 1.5;
   if (control?.down) setText($('connection'), control.down);
@@ -368,10 +383,11 @@ setInterval(() => {
   setText($('state-rate'), `${snapshotsThisSecond}/s`); snapshotsThisSecond = 0;
   setProperty($('connection'), 'title', lastSnapshotAt ? `Newest robot_state ${ago(age)} ago` : '');
   const drawn = tiles.tick(), cameras = latestState?.cameras ?? {};
-  setText($('oak-rate'), rateText(drawn.oak, cameras[tiles.trackingId]));
+  setText($('oak-rate'), rateText(cameras[tiles.trackingId])); setProperty($('oak-rate'), 'title', drawnText(drawn.oak));
   clock.setFrameRate(cameras[tiles.trackingId]?.fps);  // The page draws at most once per tracking frame
   const depthShown = depth.tick();
   scene?.depth.tick();  // Hides depth that stopped arriving
-  setText($('zed-rate'), rateText(drawn.zed_left, cameras.zed_left) + (depthShown ? ` · depth ${depthShown}/s` : ''));
+  setText($('zed-rate'), rateText(cameras.zed_left) + (depthShown ? ` · depth ${depthShown}/s` : ''));
+  setProperty($('zed-rate'), 'title', drawnText(drawn.zed_left));
   if (latestState) showHealth(latestState);
 }, 1000);

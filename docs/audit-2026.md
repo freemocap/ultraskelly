@@ -477,6 +477,18 @@ nothing dragged every panel sits where it did, to the pixel. A reload keeps the 
 sizes. The folded column stays 44 px over a dragged width and gets that width back when
 opened. Dragged to every limit, nothing overflows the window. Not yet seen on the Pi.
 
+In the same pass the owner asked for no static text, bigger plots and no empty space on
+the left. Explanations moved behind a small i per panel (a popover). Fixed details became
+tooltips, and the titles were cut to a word (OAK, ZED, Face). The motor tests and the
+nodes moved into the control column, which is packed top to bottom. While the column fits
+beside the 3D scene, the time series runs under both; `panel.js` measures this. On the Pi's
+1920×1080 the time series grew from 571×238 to 1240×324. The column's empty space below
+its last block went from 533 px to none. The visible words while running went from 271
+to 153. The camera column has the plain dashboard's width again, so the OAK draws 1:1.
+"cmd" stays on the commanded lanes, per AGENTS.md. Checked in headless Chrome at
+1920×1080 (on and off), 1280×720, the bot's own page and a phone: nothing overflows.
+Not yet seen on the Pi.
+
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
 **Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most

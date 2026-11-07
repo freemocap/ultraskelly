@@ -1,8 +1,9 @@
 // The control column (docs/dashboard.md, "Control panel"). Served by the always-on control service
 // (ultraskelly/control) instead of the bot, the page turns the bot on and off, restarts it, switches following
-// and says how the bot is: running or not, since when, its last error and what works. The column folds to a strip
-// that keeps the bot's lamp, and stays folded across reloads. The live views beside it come straight from the
-// bot's own port while it runs. Served by the bot itself, the page finds no /api/panel and stays the plain dashboard.
+// and says how the bot is: running or not, for how long, what works and its last error. The column takes the motor
+// tests and the nodes cards from the strip, so the controls sit together and the time series has the strip. It folds
+// to a strip that keeps the bot's lamp, and stays folded across reloads. The live views beside it come straight from
+// the bot's own port while it runs. Served by the bot itself, the page finds no /api/panel and stays the plain dashboard.
 import { setProperty, setText } from '/dom.js';
 
 const FOLDED = 'ultraskelly.control.folded';  // localStorage: '1' while the column is folded to its strip
@@ -24,18 +25,21 @@ export function streamUrl(settings) {
   return `${scheme}://${settings ? `${location.hostname}:${settings.bot_port}` : location.host}/stream`;
 }
 
-// Each state of the bot (ultraskelly/control/bots.py STATES): its word, its lamp, and the readout's line meanwhile.
+// Each state of the bot (ultraskelly/control/bots.py STATES): its word, its lamp, and the readout's line when the word
+// alone does not say what is wrong.
 const STATES = {
   running: {word: 'Running', lamp: 'on'},
-  starting: {word: 'Starting', lamp: 'busy', note: 'Booting the cameras and loading the models; it takes a few seconds'},
-  stopping: {word: 'Stopping', lamp: 'busy', note: 'Stopping its parts; the head centres and the waist brakes'},
-  restarting: {word: 'Restarting', lamp: 'busy', note: 'It stopped by itself and starts again in a moment'},
-  waiting: {word: 'Waiting', lamp: 'warn', note: 'Another program is using the robot; the bot starts once it is done'},
+  starting: {word: 'Starting', lamp: 'busy'},
+  stopping: {word: 'Stopping', lamp: 'busy'},
+  restarting: {word: 'Restarting', lamp: 'busy'},
+  waiting: {word: 'Waiting', lamp: 'warn', note: 'Another program is using the robot'},
   off: {word: 'Off', lamp: 'off'},
-  failed: {word: 'Failed', lamp: 'fail', note: 'It stopped and will not start again by itself'},
-  missing: {word: 'Not installed', lamp: 'fail', note: 'No ultraskelly-bot service here: run scripts/install-services.sh'},
+  failed: {word: 'Failed', lamp: 'fail'},
+  missing: {word: 'Not installed', lamp: 'fail', note: 'No ultraskelly-bot service: run scripts/install-services.sh'},
   unknown: {word: 'Unknown', lamp: 'warn', note: 'The service manager did not answer'},
 };
+// The status lamps' order: the bot's check groups as core/bot/health.py COMPONENTS has them.
+const GROUPS = ['cameras', 'ai', 'motors', 'sensors', 'power'];
 // systemd's Result words: how the bot's last run ended.
 const ENDED = {
   'exit-code': 'it exited with an error', signal: 'it was killed', 'core-dump': 'it crashed', watchdog:
@@ -57,25 +61,22 @@ export function duration(seconds) {
 }
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// What the readout says under the state word: why it is so, and what it is doing.
-export function detailOf(status, live) {
-  const bot = status.bot, start = status.start ?? {};
+// The readout's line under the state word, only for what the word, the buttons and the follow switch do not already
+// say: that the bot keeps restarting, how a run ended, or which program holds the robot. Empty otherwise.
+export function detailOf(status) {
+  const bot = status.bot;
   const ended = bot.result && bot.result !== 'success' ? ENDED[bot.result] ?? `it ended (${bot.result})` : null;
   const exit = bot.exit?.code === 'exited' && bot.exit.status ? ` with status ${bot.exit.status}` : bot.exit?.code === 'killed' ? ` by signal ${bot.exit.status}` : '';
-  const following = live?.following ?? start.following;
-  if (bot.state === 'running') {
-    return [following === false ? 'Holding still: following is off' : 'Following people',
-            live?.simulated ? 'simulated motors' : null,
-            bot.restarts ? `restarted itself ${plural(bot.restarts, 'time')}` : null].filter(Boolean).join(' · ');
-  }
+  if (bot.state === 'running') return bot.restarts ? `Restarted itself ${plural(bot.restarts, 'time')}` : '';
   if (bot.state === 'failed') return `Stopped: ${ended ?? 'it stopped'}${exit}`;
   if (bot.state === 'off') {
-    const asked = status.action?.action === 'stop';
-    return asked && status.action.ok ? `Turned off from the panel at ${clockTime(status.action.time)}`
-      : ended ? `Its last run ended: ${ended}${exit}` : 'Not running';
+    const asked = status.action?.action === 'stop' && status.action.ok;
+    return !asked && ended ? `Its last run ended: ${ended}${exit}` : '';
   }
   if (bot.state === 'waiting' && status.last_error?.waiting) return status.last_error.text.split('\n').slice(1).join(' · ') || STATES.waiting.note;
-  if (bot.state === 'restarting') return `${ended ? `${ended[0].toUpperCase()}${ended.slice(1)}${exit}; ` : ''}starting again${bot.restarts ? ` (${plural(bot.restarts, 'restart')} so far)` : ''}`;
+  if (bot.state === 'restarting') {
+    return [ended && `${ended[0].toUpperCase()}${ended.slice(1)}${exit}`, bot.restarts && `${plural(bot.restarts, 'restart')} so far`].filter(Boolean).join(' · ');
+  }
   return STATES[bot.state]?.note ?? '';
 }
 
@@ -96,9 +97,10 @@ export class ControlPanel {
     this.$('control').hidden = false;
     document.body.classList.add('control');
     document.title = 'UltraSkelly · Control panel';
-    const title = document.querySelector('header h1 span');
-    if (title) title.textContent = '/ control panel';
-    setText(this.$('control-host'), settings.local ? 'local stand-in' : settings.host ?? '');
+    // The motor tests under the follow switch, the nodes under the status lamps: the controls together, and the strip
+    // left to the time series.
+    this.$('control-follow').after(document.querySelector('.card.tests'));
+    this.$('control-parts').after(document.querySelector('.card.nodes'));
     this.$('control-power').onclick = () => {
       const on = this.isOn();
       this.send(on ? '/api/bot/stop' : '/api/bot/start', {}, on ? 'Turning the bot off…' : 'Turning the bot on…');
@@ -110,6 +112,11 @@ export class ControlPanel {
     };
     this.$('control-collapse').onclick = () => this.fold(true);
     this.$('control-rail').onclick = () => this.fold(false);
+    // Whether the time series can run under the column: checked as the 3D scene or any of the column's blocks changes size.
+    let checking = 0;
+    const watch = new ResizeObserver(() => { checking ||= requestAnimationFrame(() => { checking = 0; this.fitColumn(); }); });
+    watch.observe(document.querySelector('.stage'));
+    for (const block of this.$('control').children) watch.observe(block);
     this.fold(stored(FOLDED) === '1', false);
     this.poll();
     setInterval(() => this.poll(), 1000);
@@ -123,7 +130,25 @@ export class ControlPanel {
     this.$('control-collapse').setAttribute('aria-expanded', String(!folded));
     this.$('control-rail').setAttribute('aria-expanded', String(!folded));
     if (remember) store(FOLDED, folded ? '1' : '0');
+    this.fitColumn();
     dispatchEvent(new Event('resize'));  // The views beside the column take up the room it leaves or needs
+  }
+
+  // The time series runs under the column too, from the left edge (body.series-under, panel.css), when the column's
+  // blocks fit beside the 3D scene with the nodes card at its smallest: on the Pi's 1080 px they do, unless the strip is
+  // dragged tall. Folded, it always does. Neither height depends on the choice; it moves under only with 24 px to spare
+  // and back only once the blocks no longer fit, so a status line coming and going cannot make it jump to and fro.
+  fitColumn() {
+    const column = this.$('control'), stage = document.querySelector('.stage'), was = document.body.classList.contains('series-under');
+    let under = column.classList.contains('folded');
+    if (!under) {
+      const style = getComputedStyle(column), blocks = [...column.children].filter(block => block.getClientRects().length);
+      const height = block => block.matches('.card.nodes') ? parseFloat(getComputedStyle(block).minHeight) || 0 : block.offsetHeight;
+      const need = blocks.reduce((sum, block) => sum + height(block), 0) + (parseFloat(style.rowGap) || 0) * Math.max(0, blocks.length - 1)
+        + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+      under = need <= stage.offsetHeight - (was ? 0 : 24);
+    }
+    if (under !== was) document.body.classList.toggle('series-under', under);
   }
 
   // The header's connection word while the bot is not running (the dashboard's own while it is), else null.
@@ -182,15 +207,14 @@ export class ControlPanel {
   render() {
     if (!this.status) return;
     const bot = this.status.bot, info = STATES[bot.state] ?? STATES.unknown, running = bot.state === 'running';
-    const live = running ? this.live : null;
-    // Readout
+    // Readout: the state word and for how long; since when, and on which robot, on hover
     const readout = this.$('control-readout');
     setProperty(readout, 'className', `readout ${info.lamp}${this.lost ? ' lost' : ''}`);
     setText(this.$('control-state'), this.lost ? 'No answer' : info.word);
-    const since = running ? bot.started ?? bot.since : bot.since;
-    setText(this.$('control-since'), since ? `${running ? 'up since' : 'since'} ${clockTime(since)}` : '');
+    const since = running ? bot.started ?? bot.since : bot.since, host = this.settings.local ? 'the local stand-in' : this.settings.host;
     setText(this.$('control-uptime'), since ? duration(this.now() - since) : '');
-    setText(this.$('control-detail'), this.lost ? 'The control panel is not answering; is the Pi on the network?' : detailOf(this.status, live));
+    setProperty(readout, 'title', `${info.word}${since ? ` since ${clockTime(since)}` : ''}${host ? ` on ${host}` : ''}`);
+    setText(this.$('control-detail'), this.lost ? 'The control panel is not answering' : detailOf(this.status));
     // The folded strip: the same lamp and word
     const word = this.lost ? 'No answer' : info.word;
     setProperty(this.$('control-rail'), 'className', `control-rail ${info.lamp}${this.lost ? ' lost' : ''}`);
@@ -201,8 +225,7 @@ export class ControlPanel {
     const power = this.$('control-power');
     setProperty(power, 'className', `big power ${on ? 'turn-off' : 'turn-on'}`);
     setText(power.querySelector('b'), on ? 'Turn off' : 'Turn on');
-    setText(power.querySelector('span'), on ? 'Stop the bot' : 'Start the bot');
-    setProperty(power, 'title', on ? 'Stop the bot' : 'Start the bot');
+    setProperty(power, 'title', on ? 'Stop the bot; its service brakes the DC motors as it stops' : 'Start the bot');
     setProperty(power, 'disabled', busy || bot.state === 'missing');
     setProperty(this.$('control-restart'), 'disabled', busy || !on);
     setProperty(this.$('control-follow'), 'disabled', busy);
@@ -212,11 +235,12 @@ export class ControlPanel {
     const shown = answer ?? (recent ? {text: recent.message, kind: recent.ok ? 'done' : 'refused'} : null);
     setText(this.$('control-answer'), shown?.text ?? '');
     setProperty(this.$('control-answer'), 'className', `control-answer ${shown?.kind ?? ''}`);
-    // Last error
-    const error = this.status.last_error;
-    setText(this.$('control-error'), error ? error.text : 'None in the bot\'s recent log');
-    setText(this.$('control-error-age'), error ? `${clockTime(error.time)} · ${duration(this.now() - error.time)} ago` : '');
-    setProperty(this.$('control-error-box'), 'className', `control-error${error ? error.waiting ? ' waiting' : ' error' : ''}`);
+    // The last error: one line with its time, the whole text and its age on hover; none, no line
+    const error = this.status.last_error, line = this.$('control-error');
+    setProperty(line, 'hidden', !error);
+    setText(line, error ? `${clockTime(error.time)} ${error.text.split('\n')[0]}` : '');
+    setProperty(line, 'title', error ? `${error.text}\n\n${clockTime(error.time)}, ${duration(this.now() - error.time)} ago` : '');
+    setProperty(line, 'className', `control-error ${error?.waiting ? 'waiting' : 'error'}`);
     // The header, the motor test buttons and the stream follow the bot; the live views just keep what they last had
     this.views.health?.setOffline(running ? null : {title: `Bot ${info.word.toLowerCase()}`, text: ''});
     this.views.motorTest?.setOnline(running);
@@ -244,31 +268,26 @@ export class ControlPanel {
     const button = this.$('control-follow');
     if (button.getAttribute('aria-checked') !== String(following)) button.setAttribute('aria-checked', String(following));
     setText(button.querySelector('.switch-word'), following ? 'On' : 'Off');
-    setText(this.$('control-follow-note'), liveFollowing != null
+    setProperty(button, 'title', liveFollowing != null
       ? following ? 'The head and waist turn toward people' : 'The head and waist hold still; motor tests still move them'
       : `${following ? 'On' : 'Off'} when the bot starts`);
   }
 
-  unchecked(running) {
-    if (running) return 'no checks from this bot';
-    return {off: 'not checked while it is off', starting: 'checked once it runs', restarting: 'checked once it runs again',
-            waiting: 'checked once it runs'}[this.status?.bot.state] ?? 'not checked now';
-  }
-
+  // The status lamps: one per part the bot checks, in its groups' order, its message on hover. None while the bot is
+  // not running or sends no checks; the readout says why.
   renderParts() {
     const running = this.status?.bot.state === 'running', model = running ? this.healthModel : null;
-    for (const row of this.$('control-parts').querySelectorAll('dd[data-group]')) {
-      const parts = model?.checked ? model.components.filter(part => part.group === row.dataset.group) : [];
-      const key = JSON.stringify([this.unchecked(running), parts.map(part => [part.id, part.status, part.message])]);
-      if (row.dataset.key === key && row.childElementCount) continue;
-      row.dataset.key = key;
-      row.replaceChildren(...(parts.length ? parts.map(part => {
-        const lamp = document.createElement('span');
-        lamp.className = `part-lamp ${part.status}`;
-        lamp.title = `${part.name}: ${part.message || part.word}${part.fix ? `\nFix: ${part.fix}` : ''}`;
-        lamp.append(document.createElement('i'), SHORT[part.id] ?? part.short ?? part.name);
-        return lamp;
-      }) : [Object.assign(document.createElement('span'), {className: 'part-none', textContent: this.unchecked(running)})]));
-    }
+    const parts = model?.checked ? GROUPS.flatMap(group => model.components.filter(part => part.group === group)) : [];
+    const row = this.$('control-parts'), key = JSON.stringify(parts.map(part => [part.id, part.status, part.message, part.fix]));
+    setProperty(row, 'hidden', !parts.length);
+    if (row.dataset.key === key) return;
+    row.dataset.key = key;
+    row.replaceChildren(...parts.map(part => {
+      const lamp = document.createElement('span');
+      lamp.className = `part-lamp ${part.status}`;
+      lamp.title = `${part.name}: ${part.message || part.word}${part.fix ? `\nFix: ${part.fix}` : ''}`;
+      lamp.append(document.createElement('i'), SHORT[part.id] ?? part.short ?? part.name);
+      return lamp;
+    }));
   }
 }

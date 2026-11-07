@@ -1,8 +1,8 @@
 """The dashboard's resizable panels (ultraskelly/ui/dashboard/resize.js), its parts that need no browser run under node:
-the limits a dragged size takes into the page's CSS, which way a drag moves each size, how the strip's cards share its
-width, which stored sizes are read back and what a double-click resets; the time series' lanes for the shape of their
-card; and that the page's handles, the script's sizes and the stylesheets' properties name one another. The drags
-themselves were checked in headless Chrome (docs/dashboard.md, "Sizing")."""
+the limits a dragged size takes into the page's CSS, which way a drag moves each size, which stored sizes are read back
+and what a double-click resets; the time series' lanes for the shape of their card; and that the page's handles, the
+script's sizes and the stylesheets' properties name one another. The drags themselves were checked in headless Chrome
+(docs/dashboard.md, "Sizing")."""
 import json
 import re
 import shutil
@@ -19,7 +19,6 @@ DASHBOARD = ROOT / "ultraskelly" / "ui" / "dashboard"
 SCRIPT = ROOT / "tests" / "js" / "dashboard_calls.mjs"
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="needs node to run the dashboard's JavaScript")
-USUAL_CARDS = {"series": 2.4, "tests": 1, "nodes": 1}
 
 
 def call(*calls: tuple) -> list:
@@ -36,11 +35,14 @@ def resize(name: str, *args):
 
 @needs_node
 def test_a_dragged_size_carries_its_limits_so_a_smaller_window_narrows_it_rather_than_overflow():
-    assert resize("expression", "control", 320.4) == "clamp(220px, 320px, 35vw)"
+    assert resize("expression", "control", 320.4) == "clamp(260px, 320px, 35vw)"  # 260: the motor tests keep whole labels
     # The camera column leaves the 3D scene 480 px beside the controls, whatever width they have or fold to.
     assert resize("expression", "sensors", 700) == "clamp(260px, 700px, 100vw - var(--control-w, 0px) - 512px)"
     assert resize("expression", "strip", 300) == "clamp(90px, 300px, 100vh - var(--header-h) - 244px)"  # 220 px of scene
     assert resize("expression", "oak", 383.6) == "384px"  # dashboard.css keeps the tracking camera within its column
+    # Beside the time series, each card at most half of what leaves it 200 px.
+    assert resize("expression", "tests", 300) == "clamp(236px, 300px, (100% - 216px) / 2)"
+    assert resize("expression", "nodes", 250) == "clamp(160px, 250px, (100% - 216px) / 2)"
 
 
 @needs_node
@@ -49,47 +51,31 @@ def test_each_size_grows_the_way_its_handle_is_dragged():
     assert resize("dragged", "sensors", 538, 50, 10) == 488   # Right: a narrower camera column, a wider 3D scene
     assert resize("dragged", "strip", 238, 10, -100) == 338   # Up: a taller strip
     assert resize("dragged", "oak", 391, 10, 40) == 431       # Down: a taller tracking camera
-
-
-@needs_node
-def test_two_cards_share_out_their_own_width_and_the_third_keeps_its():
-    shares = resize("splitCards", USUAL_CARDS, "series-tests", [571, 238], -100)  # The Pi's strip, time series narrower
-    assert shares["series"] == pytest.approx(3.4 * 471 / 809) and shares["tests"] == pytest.approx(3.4 * 338 / 809)
-    assert shares["nodes"] == 1
-    # Each card keeps its minimum while the pair has room: 200 px for the time series, 236 for the motor tests (whole
-    # button labels), 160 for the nodes.
-    assert resize("splitCards", USUAL_CARDS, "series-tests", [571, 238], -1000)["series"] == pytest.approx(3.4 * 200 / 809)
-    assert resize("splitCards", USUAL_CARDS, "series-tests", [571, 238], 1000)["tests"] == pytest.approx(3.4 * 236 / 809)
-    assert resize("splitCards", USUAL_CARDS, "tests-nodes", [238, 238], 1000)["tests"] == pytest.approx(2 * 316 / 476)
-    # A pair narrower than both minimums together stays halved.
-    assert resize("splitCards", USUAL_CARDS, "series-tests", [150, 150], 80)["series"] == pytest.approx(1.7)
+    assert resize("dragged", "tests", 278, -50, 10) == 328    # Left: wider motor tests, a narrower time series
+    assert resize("dragged", "nodes", 278, 30, 10) == 248     # Right: narrower nodes
 
 
 @needs_node
 def test_only_the_sizes_this_page_knows_are_read_back_from_the_browser():
-    kept = '{"control": 300, "sensors": "wide", "strip": -5, "oak": null, "cards": {"series": 2, "tests": 1}, "zoom": 3}'
-    assert resize("parseSizes", kept) == {"control": 300}  # A card's share missing: the cards' usual widths
-    assert resize("parseSizes", '{"cards": {"series": 2, "tests": 1.5, "nodes": 1}}') == {"cards": {"series": 2, "tests": 1.5, "nodes": 1}}
+    kept = '{"control": 300, "sensors": "wide", "strip": -5, "oak": null, "tests": 260, "cards": {"series": 2}, "zoom": 3}'
+    assert resize("parseSizes", kept) == {"control": 300, "tests": 260}
     assert resize("parseSizes", "not JSON") == {} and resize("parseSizes", None) == {} and resize("parseSizes", "[1, 2]") == {}
 
 
 @needs_node
 def test_a_double_click_puts_back_the_usual_size_of_its_own_handle():
-    sizes = {"control": 300, "sensors": 700, "oak": 400, "cards": {"series": 2, "tests": 1.4, "nodes": 1}}
-    assert resize("reset", sizes, "sensors") == {"control": 300, "oak": 400, "cards": sizes["cards"]}
-    # Either handle between the cards gives all three their usual widths: under 1600 px the control panel hides the
-    # nodes card, whose own share would otherwise keep the other two from theirs.
-    for grip in ("series-tests", "tests-nodes"):
-        assert resize("reset", sizes, grip) == {"control": 300, "sensors": 700, "oak": 400}
+    sizes = {"control": 300, "sensors": 700, "oak": 400, "tests": 260}
+    assert resize("reset", sizes, "sensors") == {"control": 300, "oak": 400, "tests": 260}
+    assert resize("reset", sizes, "tests") == {"control": 300, "sensors": 700, "oak": 400}
 
 
 @needs_node
 @pytest.mark.parametrize("width, height, columns", [
-    (549, 197, 2),   # The Pi's strip beside the controls, as before handles
-    (646, 197, 2),   # The bot's own dashboard on the Pi
-    (382, 117, 2),   # A 1280x720 window
-    (354, 255, 2),   # A phone
-    (194, 308, 1),   # Dragged narrow and tall: one lane under the other
+    (1220, 306, 2),  # The Pi's strip, under the controls and the 3D scene
+    (646, 306, 2),   # The bot's own dashboard on the Pi, beside the motor tests and the nodes
+    (579, 198, 2),   # A 1280x720 window
+    (352, 282, 1),   # A phone: one lane under the other
+    (194, 308, 1),   # Dragged narrow and tall
     (1400, 100, 3),  # Dragged wide and short: three abreast
 ])
 def test_the_time_series_lays_its_lanes_out_for_the_shape_of_its_card(width, height, columns):
@@ -114,18 +100,16 @@ class Handles(HTMLParser):
 def test_every_handle_on_the_page_has_a_size_that_the_stylesheets_read():
     page = Handles()
     page.feed((DASHBOARD / "index.html").read_text(encoding="utf-8"))
-    sizes, card_grips, cards = call(("resize.js", "SIZES"), ("resize.js", "CARD_GRIPS"), ("resize.js", "CARDS"))
-    assert set(page.found) == set(sizes) | set(card_grips) == {"control", "sensors", "strip", "oak", "series-tests", "tests-nodes"}
+    [sizes] = call(("resize.js", "SIZES"))
+    assert set(page.found) == set(sizes) == {"control", "sensors", "strip", "oak", "tests", "nodes"}
     for name, handle in page.found.items():
-        across = name in card_grips or sizes[name]["side"] == "width"  # Between panels side by side
+        across = sizes[name]["side"] == "width"  # Between panels side by side
         assert handle["role"] == "separator" and handle["aria-label"]
         assert handle["class"] == ("grip col" if across else "grip row")
         assert handle["aria-orientation"] == ("vertical" if across else "horizontal")
     styles = (DASHBOARD / "dashboard.css").read_text(encoding="utf-8") + (DASHBOARD / "panel.css").read_text(encoding="utf-8")
     for size in sizes.values():
         assert f"var({size['property']}," in styles  # Read with the usual size as the fallback
-    for card in cards:
-        assert f"var(--{card}-fr," in styles
     assert "/resize.js" in ASSETS and "import { resizable } from '/resize.js'" in (DASHBOARD / "dashboard.js").read_text(encoding="utf-8")
 
 

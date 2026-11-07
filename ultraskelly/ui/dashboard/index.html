@@ -11,7 +11,7 @@
 </head>
 <body class="dashboard">
 <header>
-  <div class="brand"><span class="mark">U/S</span><h1>UltraSkelly <span>/ live</span></h1></div>
+  <div class="brand"><span class="mark">U/S</span><h1>UltraSkelly</h1></div>
   <div id="problems" class="problems" role="status" aria-live="polite">
     <b id="problems-count">Waiting for the bot</b><span id="problems-summary"></span>
     <button id="problems-toggle" aria-controls="health" aria-expanded="false">Checks</button>
@@ -23,59 +23,50 @@
   </div>
 </header>
 <main class="layout">
+  <!-- The control column (panel.js), shown when the control panel serves the page. It moves the motor tests and the
+       nodes cards into itself, under the follow switch and the status lamps. -->
   <aside id="control" class="control" aria-label="Robot controls" hidden>
     <button id="control-rail" class="control-rail" title="Show the robot controls" aria-controls="control" aria-expanded="false">
       <i class="beacon" aria-hidden="true"></i><span id="control-rail-state" class="rail-word">Checking</span><b aria-hidden="true">›</b>
     </button>
-    <div class="control-title"><h2>Robot</h2><span id="control-host"></span>
+    <div id="control-readout" class="readout" role="status" aria-live="polite">
+      <i class="beacon" aria-hidden="true"></i><b id="control-state">Checking…</b><span id="control-uptime" class="readout-time"></span>
       <button id="control-collapse" class="control-collapse" title="Fold the controls to a strip" aria-controls="control" aria-expanded="true">‹</button>
     </div>
-    <div id="control-readout" class="readout" role="status" aria-live="polite">
-      <i class="beacon" aria-hidden="true"></i>
-      <div class="readout-text"><b id="control-state">Checking…</b><span id="control-since"></span></div>
-      <span id="control-uptime" class="readout-time"></span>
-    </div>
     <p id="control-detail" class="control-detail"></p>
+    <p id="control-answer" class="control-answer" role="status" aria-live="polite"></p>
     <div class="control-buttons">
       <button id="control-power" class="big power">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.6a8 8 0 1 0 11.4 0"/></svg>
-        <b>Turn on</b><span>Start the bot</span>
+        <b>Turn on</b>
       </button>
       <button id="control-restart" class="big restart" title="Stop the bot, then start it again">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg>
-        <b>Restart</b><span>Stop, then start again</span>
+        <b>Restart</b>
       </button>
     </div>
     <button id="control-follow" class="switch" role="switch" aria-checked="true">
-      <span class="switch-text"><b>Follow people</b><span id="control-follow-note"></span></span>
+      <b class="switch-text">Follow people</b>
       <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
     </button>
-    <p id="control-answer" class="control-answer" role="status" aria-live="polite"></p>
-    <section class="control-status" aria-label="What works on the robot">
-      <h3>Status</h3>
-      <dl id="control-parts">
-        <dt>Cameras</dt><dd data-group="cameras"></dd>
-        <dt>Tracking</dt><dd data-group="ai"></dd>
-        <dt>Motors</dt><dd data-group="motors"></dd>
-        <dt>Sensors</dt><dd data-group="sensors"></dd>
-        <dt>Power</dt><dd data-group="power"></dd>
-      </dl>
-    </section>
-    <section id="control-error-box" class="control-error" aria-label="The bot's last error">
-      <h3>Last error <span id="control-error-age"></span></h3>
-      <p id="control-error">—</p>
-    </section>
+    <div id="control-parts" class="control-parts" role="group" aria-label="What works on the robot" hidden></div>
+    <p id="control-error" class="control-error" hidden></p>
   </aside>
   <div class="grip col" data-grip="control" role="separator" aria-orientation="vertical" aria-label="Width of the robot controls"></div>
   <section class="stage" aria-label="3D scene">
     <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
-    <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p><p id="stage-head" class="stage-note"></p><p id="stage-note" class="stage-note" hidden></p><p id="stage-limits" class="stage-note" hidden></p></div>
+    <div class="stage-head">
+      <button class="info" popovertarget="info-stage" aria-label="About the 3D scene">i</button>
+      <p id="stage-note" class="stage-note" hidden></p><p id="stage-limits" class="stage-note" hidden></p>
+    </div>
+    <div id="info-stage" class="info-note" popover>
+      <p>The skeleton moves by the motor commands sent, not by measured positions: the servos and the DC motors report none.</p>
+      <p id="stage-head"></p>
+      <p>Cloud and Mesh: the ZED's depth, on the head. Gaze: the OAK's view and its ray to the target. Drag to orbit, scroll to zoom.</p>
+    </div>
     <div class="stage-foot">
-      <div class="foot-left">
-        <div class="layers" role="group" aria-label="Depth layers" title="The ZED's depth on the skeleton's head">
-          <button data-layer="cloud" aria-pressed="true">Cloud</button><button data-layer="mesh" aria-pressed="false">Mesh</button><button data-layer="gaze" aria-pressed="true" title="The OAK's view and its ray to the target">Gaze</button>
-        </div>
-        <span class="hint">Drag to orbit · scroll to zoom</span>
+      <div class="layers" role="group" aria-label="Depth layers">
+        <button data-layer="cloud" aria-pressed="true">Cloud</button><button data-layer="mesh" aria-pressed="false">Mesh</button><button data-layer="gaze" aria-pressed="true">Gaze</button>
       </div>
       <div class="views" role="group" aria-label="Camera view">
         <button data-view="orbit" aria-pressed="true">Orbit</button><button data-view="behind">Behind head</button><button data-view="side">Side</button><button data-view="top">Top</button>
@@ -96,50 +87,58 @@
   <div class="grip col" data-grip="sensors" role="separator" aria-orientation="vertical" aria-label="Width of the camera column"></div>
   <div class="sensors">
     <section class="sensor oak" aria-label="Tracking camera">
-      <div class="sensor-title"><h2>Tracking camera <span id="tracking-name">OAK</span></h2><span id="oak-rate" class="rate">—</span></div>
+      <div class="sensor-title"><h2 id="tracking-name">OAK</h2><button class="info" popovertarget="info-oak" aria-label="About the tracking camera">i</button><span id="oak-rate" class="rate">—</span></div>
+      <div id="info-oak" class="info-note" popover>
+        <p>The tracking camera: its video with the poses found in each frame, the aim point, the jaw zone and the target the head follows. Click it to enlarge.</p>
+        <p>Under it: whether there is a target, its pixel, whether it is inside the jaw zone, the body's angle and the target's age.</p>
+      </div>
       <figure class="tile" data-camera="oak" data-label="Tracking camera (OAK)" title="Click to enlarge">
         <canvas width="640" height="480" aria-label="OAK video with the poses found in each frame"></canvas><p class="empty"><b>No OAK video yet</b><span></span></p>
       </figure>
       <div class="target-row">
         <span id="target-state" class="badge">No target</span>
         <span id="target-pixel">—</span>
-        <span id="target-face" title="The Pi's face locator: the target found in the ZED's depth, its distance from between the eyes"></span>
         <span id="target-lock"></span><span id="target-angle"></span><span id="target-age"></span>
       </div>
     </section>
     <div class="grip row" data-grip="oak" role="separator" aria-orientation="horizontal" aria-label="Height of the tracking camera"></div>
     <section class="sensor zed" aria-label="Eyes and depth">
-      <div class="sensor-title"><h2>Eyes and depth <span>ZED Mini</span></h2><span id="zed-rate" class="rate">—</span></div>
+      <div class="sensor-title"><h2>ZED</h2><button class="info" popovertarget="info-zed" aria-label="About the ZED Mini">i</button><span id="zed-rate" class="rate">—</span></div>
+      <div id="info-zed" class="info-note" popover>
+        <p>The ZED Mini: its left (L) and right (R) eyes, and its depth as a heat map, red near to blue far, aligned to the left eye. Hover the heat map for a distance; click a tile to enlarge it.</p>
+        <p>Face: the target's face in 3D from the Pi's face locator, the OAK's target pixel found in the ZED's depth: its distance from between the eyes, then forward, left and up in the head frame.</p>
+        <p>Depth: <span id="depth-info">none yet</span>. Face placed with the <span id="face-alignment">—</span> OAK-to-ZED alignment.</p>
+      </div>
       <div class="tiles">
-        <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>Left eye</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
-        <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>Right eye</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
-        <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption>Heat map</figcaption><p class="empty"><b>No depth yet</b><span></span></p></figure>
-        <section class="face-card" aria-label="The tracked face in 3D" title="The Pi's face locator: the OAK's target pixel found in the ZED's depth, in the head frame">
-          <div class="face-head"><span>Face</span><span id="face-alignment" title="Which OAK-to-ZED alignment placed it: nominal until measured"></span></div>
+        <figure class="tile" data-camera="zed_left" data-label="Left eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED left eye"></canvas><figcaption>L</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
+        <figure class="tile" data-camera="zed_right" data-label="Right eye (ZED)" title="Click to enlarge"><canvas aria-label="ZED right eye"></canvas><figcaption>R</figcaption><p class="empty"><b>No ZED video yet</b><span></span></p></figure>
+        <figure class="tile" data-camera="depth_heat" data-label="Depth heat map" title="Click to enlarge"><canvas aria-label="Depth heat map"></canvas><figcaption></figcaption><p class="empty"><b>No depth yet</b><span></span></p></figure>
+        <section class="face-card" aria-label="The tracked face in 3D">
+          <div class="face-head">Face</div>
           <div class="face-distance" id="face-distance">—</div>
-          <div class="face-position" id="face-position">No face located</div>
-          <div class="face-foot" id="face-foot"></div>
+          <div class="face-position" id="face-position">—</div>
         </section>
       </div>
-      <div class="depth-legend" title="Depth is aligned to the left eye. Hover a depth tile to read the distance.">
-        <span id="depth-near">near</span><i id="depth-ramp"></i><span id="depth-far">far</span><span id="depth-info">Depth aligned to the left eye</span>
-      </div>
+      <div class="depth-legend"><span id="depth-near"></span><i id="depth-ramp"></i><span id="depth-far"></span></div>
     </section>
   </div>
   <div class="strip">
     <section class="card series" aria-label="Time series of the last 30 seconds">
-      <div class="card-title"><h2>Time series <span>last 30 s</span></h2>
-        <span title="Motor values are the commands sent to the boards: the servos have no position feedback and the DC motors no encoders. The ZED's IMU is measured.">commands as sent · no motor reports its position · IMU measured</span></div>
+      <button class="info" popovertarget="info-series" aria-label="About the time series">i</button>
+      <div id="info-series" class="info-note" popover>
+        <p>The last 30 s, on the Pi's clock. Head and Drive (cmd) are the commands sent to the boards: the servos have no position feedback and the DC motors no encoders, so no motor reports where it is.</p>
+        <p>Target: its offset from the aim point, the controllers' input. Face: its distance, from the depth. Accel and Gyro: the ZED's IMU, measured, in the IMU's own axes, which are not the head's.</p>
+      </div>
       <canvas id="series" aria-label="Head and drive commands, target offset, face distance and the ZED IMU over the last 30 seconds"></canvas>
     </section>
-    <div class="grip col" data-grip="series-tests" role="separator" aria-orientation="vertical" aria-label="Widths of the time series and the motor tests"></div>
+    <div class="grip col" data-grip="tests" role="separator" aria-orientation="vertical" aria-label="Width of the motor tests"></div>
     <section class="card tests" aria-label="Motor tests: move one actuator at a time">
       <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds"></span></div>
       <div id="motor-test"><p class="tests-status">Waiting for the bot…</p></div>
     </section>
-    <div class="grip col" data-grip="tests-nodes" role="separator" aria-orientation="vertical" aria-label="Widths of the motor tests and the nodes"></div>
-    <section class="card nodes">
-      <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
+    <div class="grip col" data-grip="nodes" role="separator" aria-orientation="vertical" aria-label="Width of the nodes"></div>
+    <section class="card nodes" aria-label="Nodes and message rates">
+      <div class="card-title"><h2>Nodes</h2><span id="node-summary">—</span></div>
       <div id="health-lights" class="lamps" title="Hardware checks: click for details" hidden></div>
       <div id="nodes"></div>
       <dl id="rates"></dl>
