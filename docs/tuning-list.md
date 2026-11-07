@@ -16,10 +16,11 @@ strike items out with the commit that settles them.
    corrections, so the waist starts later or not at all. In `tests/test_bot_recovery.py`,
    any deadband under 0.39 kept it from ever starting. Count small corrections as still, or
    tie `head_settle` to the deadband.
-3. **Pan speed against lag.** Pan's servo is held to 30 degrees a second, about 8 of view.
-   The owner found pan "a bit delayed" before that, and the worst simulated settle grew from
-   2.05 s to 2.45 s. Re-tune `max_speed`, `max_acceleration`, `reach` and `smoothing` with
-   the waist on.
+3. **Pan speed against lag.** A 30 degree a second cap on pan's servo was "way too slow" and
+   came off the same day. The robot runs at full speed with a gentler acceleration, 25 degrees
+   a second squared instead of 34. In the simulator the cap hardly changed settling (median
+   1.56 s against 1.53). What makes the head slow is `reach` and `smoothing`, not top speed.
+   Re-tune them with the waist on.
 4. **Centring deadband.** 0.12 is checked only in the head battery. Watch the robot for
    hunting, small back-and-forth moves, from detection noise and pan's 2.5 degrees of slack.
 5. **The head's constant wobble.** The IMU shows about ±0.5 degrees at about 2 Hz,
@@ -71,18 +72,18 @@ strike items out with the commit that settles them.
   and roll off (`simulator/tuning.py`). The values: `reach` 0.30, `smoothing` 0.69, 15
   degrees a second, 34 degrees a second squared, deadband 0.39, servo lag 55 ms, jumps
   believed after 5 sightings. Roll levelling was fitted separately the same day.
-- **Changed since, not tuned:** pan held to 30 servo degrees a second; deadband 0.12; full
-  servo ranges, tilt to 180; waist on; roll on. Each was only re-checked against the head
-  battery.
+- **Changed since, not tuned:** acceleration 25 instead of 34 (after a short-lived pan speed
+  cap); deadband 0.12; full servo ranges, tilt to 180; waist on; roll on. Each was only
+  re-checked against the head battery.
 - **Never tuned:** the waist together with the head. The waist drive itself has not been
   re-tuned since its motor was measured.
 
 **Why it feels slow, pausing and jumpy** (from the code and the fitted plant):
 
-1. **Slow.** Pan's servo at 30 degrees a second turns the view 7.8 degrees a second, so a
-   20 degree step takes at least 2.6 s.
-2. **Slow to converge.** Each frame aims at only `reach` (30 %) of the face's offset, and
-   `smoothing` filters that again.
+1. **Slow to converge.** Each frame aims at only `reach` (30 %) of the face's offset, and
+   `smoothing` filters that again. In the simulator this, not the top speed, sets the settle
+   time.
+2. **Gentle starts.** Acceleration is 25 degrees a second squared.
 3. **Pauses.** A target more than 8 degrees from the goal must show up 5 frames in a row
    before the head moves.
 4. **Waist pauses.** The waist starts only once the head has held still for 0.3 s. Its
@@ -102,8 +103,8 @@ strike items out with the commit that settles them.
 
 1. **Measure today's robot:**
    - Step responses of pan, tilt (to 180) and roll.
-   - The waist both ways at several drives: breakaway, stall, speed, coast. Use the ZED
-     gyro for the body's yaw rate.
+   - The waist both ways at several drives: breakaway, stall, speed, coast, measured
+     from the image.
    - Update `simulator/plant.py`. Check fidelity (`simulator/fidelity.py`) against 3-5
      recorded following runs.
 2. **Measure the delay chain** from a run: frame captured, pose, command, IMU motion.
@@ -114,12 +115,15 @@ strike items out with the commit that settles them.
    - No reversals at rest.
    - No pause over 0.3 s once a person is believed.
    - Robust to gearing ±15 %, slack, and 50 ms more delay.
-4. **Measure the body's turn:** the ZED gyro's yaw rate less the head's pan rate, in place
-   of the dead-reckoned `body_turn`. The head then counter-rotates by what the body does.
+4. **Measure the body's turn with the camera, not a gyro** (the owner: the ZED's gyro is on
+   the head and too noisy). Use the image's global shift (phase correlation, as
+   `scripts/check_servo_travel.py` does) less the head's commanded pan, and a waist model
+   identified from that. The head then counter-rotates by what the body does.
 5. **Rebuild the waist as a graded speed loop:**
    - A wanted body speed proportional to the head's pan offset from centre: the head keeps
      the face centred, and the waist brings the head back to centre.
-   - A PI loop on the measured yaw rate, with a breakaway kick and a floor above stall.
+   - A loop on the body's speed as the image shows it, with a breakaway kick and a floor
+     above stall.
    - A gain per direction (50 against 21.5).
    - A stop that begins early enough for its measured stopping distance.
 6. **Tune the head**, waist off and then on: speed, acceleration, reach, smoothing,

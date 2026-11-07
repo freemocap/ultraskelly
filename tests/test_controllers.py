@@ -157,8 +157,9 @@ def test_the_robot_launches_with_the_calmer_tuning():
     launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
     # The owner, 2026-11-07: "decrease max pan servo speed" and "tighten that range" (the centring dead zone). The
     # head battery checks these launched values on the measured plant (tests/test_scenarios_tuning.py).
-    assert (head.aim.pan_servo_speed, head.aim.deadband) == (30.0, 0.12)
-    for key in ("pan_servo_speed", "deadband"):
+    assert (head.aim.max_acceleration, head.aim.deadband) == (25.0, 0.12)
+    assert head.aim.pan_servo_speed == head.aim.servo_speed  # A 30 degree a second cap on pan was "way too slow"
+    for key in ("max_acceleration", "deadband"):
         launched["aim"][key] = defaults["aim"][key]
     assert launched == defaults  # The defaults the closed-loop scenarios check
     # Tuned on the measured plant (simulator/tuning.py, 2026-11-06) to reach 0.30 and 15 deg/s, inside these

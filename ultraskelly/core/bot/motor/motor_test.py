@@ -171,18 +171,25 @@ class MotorTester:
             return False
 
     async def _sweep(self, servo, actuator: str, target: float) -> bool:
-        """Turn a head servo to `target` no faster than the head turns it when following (pan_servo_speed for pan,
-        servo_speed for tilt, the roll's own servo_speed for roll), not at the servo's own full speed: a whole-range
-        test then takes seconds, not a jerk. True if a stop came first; the servo holds where the sweep had got to."""
-        aim = self.orientation.params.aim
-        speed = {"pan": min(aim.servo_speed, aim.pan_servo_speed), "tilt": aim.servo_speed,
-                 "roll": self.orientation.params.roll.servo_speed}[actuator]
-        start = float(getattr(self.orientation, f"{actuator}_angle"))
-        steps = max(1, math.ceil(abs(target - start) / (speed * SWEEP_STEP)))
-        for step in range(1, steps + 1):
-            servo.angle = start + (target - start) * step / steps
+        """Turn a head servo to `target` as the head turns it when following: no faster than its top speed
+        (pan_servo_speed for pan, servo_speed for tilt, the roll's own servo_speed for roll), speeding up and slowing
+        down at its acceleration (max_acceleration over the axis's gearing, in servo degrees), not jumping to the
+        servo's own full speed. True if a stop came first; the servo holds where the sweep had got to."""
+        aim, roll = self.orientation.params.aim, self.orientation.params.roll
+        speed, acceleration = {
+            "pan": (min(aim.servo_speed, aim.pan_servo_speed), aim.max_acceleration / aim.pan_ratio),
+            "tilt": (aim.servo_speed, aim.max_acceleration / aim.tilt_ratio),
+            "roll": (roll.servo_speed, roll.max_acceleration / roll.ratio),
+        }[actuator]
+        position = float(getattr(self.orientation, f"{actuator}_angle"))
+        direction, rate = (1.0 if target >= position else -1.0), 0.0
+        while (remaining := abs(target - position)) > 1e-9:
+            # Up to speed at the acceleration, and down again in time to stop at the target
+            rate = min(rate + acceleration * SWEEP_STEP, speed, math.sqrt(2.0 * acceleration * remaining))
+            position = target if remaining <= max(rate * SWEEP_STEP, 0.05) else position + direction * rate * SWEEP_STEP
+            servo.angle = position
             setattr(self.orientation, f"{actuator}_angle", float(servo.angle))  # The dashboard shows the sweep
-            if step < steps and await self._interrupted(SWEEP_STEP):
+            if position != target and await self._interrupted(SWEEP_STEP):
                 return True
         return False
 
