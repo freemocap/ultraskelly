@@ -3,7 +3,7 @@
 // FreeMoCap `frame` messages carry camera JPEGs with the poses found in that very image. Everything the
 // page shows changes in one frame per tracking-camera frame (frameclock.js).
 import { TransportService } from '/vendor/freemocap-client.js';
-import { MotorTestPanel, down as boardDown } from '/motor-test.js';
+import { MotorTestPanel } from '/motor-test.js';
 import { createScene } from '/scene.js';
 import { CameraTiles } from '/tiles.js';
 import { DepthViews } from '/depth.js';
@@ -19,7 +19,6 @@ const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };
 const fixed = (value, digits, unit = '') => value == null ? '—' : `${value.toFixed(digits)}${unit}`;
 const ago = seconds => seconds == null ? '—' : seconds < 1 ? `${Math.round(seconds * 1000)} ms` : `${seconds.toFixed(1)} s`;
-const signed = value => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
 const hasTarget = state => state?.target && state.target.x != null && state.target.y != null;
 
 const clock = new FrameClock();
@@ -55,52 +54,11 @@ for (const figure of document.querySelectorAll('.tile[data-camera]')) {
 $('enlarged').querySelector('canvas').onclick = () => enlarge(null);
 $('enlarged-close').onclick = () => enlarge(null);
 
-// Motor tests: W1's panel opens in a drawer beside the skeleton; the card's Stop works while it is closed.
-const motorTest = new MotorTestPanel($('motor-test'), {load: !settings});  // The control column loads it once the bot runs
-function openTests(open) {
-  $('motor-drawer').hidden = !open;
-  $('tests-open').textContent = open ? 'Close' : 'Open';
-}
-$('tests-open').onclick = () => openTests($('motor-drawer').hidden);
-$('motor-drawer-close').onclick = () => openTests(false);
+// Motor tests: buttons right in the strip's card (motor-test.js); the control column loads them once the bot runs.
+const motorTest = new MotorTestPanel($('motor-test'), {travel: $('tests-travel'), load: !settings});
 addEventListener('keydown', event => {
-  if (event.key !== 'Escape') return;
-  if (tiles.enlargedId) enlarge(null);
-  else openTests(false);
+  if (event.key === 'Escape' && tiles.enlargedId) enlarge(null);
 });
-function showTestStatus(text, kind = '') {
-  setText($('tests-status'), text);
-  setProperty($('tests-status'), 'className', `tests-status ${kind}`);
-  setProperty($('tests-status'), 'title', text);  // The whole text where two lines cut it
-}
-let stopNotice = null;  // The Stop button's answer, shown for a few seconds over the test status
-$('tests-stop').onclick = async () => {
-  const notice = (text, kind = '') => { stopNotice = {text, kind, until: performance.now() + 3000}; showTestStatus(text, kind); };
-  try {
-    const reply = await fetch('/api/motor-test/stop', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
-    const body = await reply.json();
-    if (!reply.ok) notice(`Stop refused: ${body.error}`, 'refused');
-    else notice(body.stopped ? 'Stopped' : 'Nothing was running', body.stopped ? 'refused' : '');
-  } catch (problem) {
-    notice(`No answer from the robot: ${problem.message}`, 'refused');
-  }
-};
-function showTests(state, model) {
-  const test = state.motor_test;
-  setProperty($('tests-open'), 'hidden', !test); setProperty($('tests-stop'), 'hidden', !test);
-  if (!test) { setText($('tests-travel'), ''); showTestStatus('Not available in this run'); return; }
-  setText($('tests-travel'), `waist ${signed(test.waist_travel)}`);
-  // Not "Ready" while a board does not answer: the bot refuses that board's tests, so say why in its words.
-  const boards = ['servo_board', 'motor_board'].map(id => boardDown(model, id)).filter(Boolean);
-  if (stopNotice && performance.now() < stopNotice.until && !test.running) showTestStatus(stopNotice.text, stopNotice.kind);
-  else if (!test.enabled) showTestStatus('Turned off in the launch configuration');
-  else if (test.running) showTestStatus(`Running: ${test.running.description}`);
-  else if (boards.length) showTestStatus(boards.map(part => part.message || `${part.name}: ${part.word}`).join(' · '), 'refused');
-  else if (test.last) {
-    const outcome = test.last.outcome;
-    showTestStatus(`${outcome[0].toUpperCase()}${outcome.slice(1)}: ${test.last.description}`, outcome === 'done' ? 'done' : 'refused');
-  } else showTestStatus('Ready');
-}
 
 // Readouts, written in the page's frame and only where their text changes (dom.js). Motor values are commands;
 // the time series keeps the last 30 s of them, of the controllers' input, of the face distance and of the
@@ -303,7 +261,7 @@ clock.add(() => {
   tiles.showTargetWithoutVideo(state);
   health.update(healthOf(state, latestHealth));
   explainParts(health.model, state);
-  showMode(state); showTarget(state); showFace(state); showTests(state, health.model); showLimits(state);
+  showMode(state); showTarget(state); showFace(state); showLimits(state);
   motorTest.update(state, health.model);
   control?.update(state, health.model);
   return false;

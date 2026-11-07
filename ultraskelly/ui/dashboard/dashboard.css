@@ -18,7 +18,7 @@ body.dashboard{
 main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);grid-template-rows:minmax(0,1fr) var(--strip-h);
   grid-template-areas:"stage sensors" "strip sensors";gap:8px;padding:8px;min-height:0}
 
-/* 3D scene, with the enlarged camera view and the motor test drawer layered over the same grid area. */
+/* 3D scene, with the enlarged camera view and the hardware checks drawer layered over the same grid area. */
 .dashboard .stage{grid-area:stage;position:relative;padding:0;overflow:hidden;background:#111b21}
 .dashboard #viewport{position:absolute;inset:0}
 .dashboard #viewport canvas{display:block;touch-action:none}
@@ -76,12 +76,6 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .lamps{display:flex;flex-wrap:wrap;gap:3px 9px;font:10px ui-monospace,monospace;color:var(--muted);cursor:pointer;flex:none}
 .dashboard .lamp{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .dashboard .lamp i{width:7px;height:7px;border-radius:50%;background:#5d6f76}
-/* The motor tests' boards and a servo test's read-back. */
-.dashboard .motor-test-boards{display:flex;flex-wrap:wrap;gap:3px 12px;margin:0 0 8px;font-size:11px}
-.dashboard .motor-test-boards .lamp{white-space:normal}
-.dashboard .motor-test-readback{display:grid;gap:2px;margin:8px 0 0;padding:6px 8px;border:1px solid var(--line);border-radius:5px;font-size:11px;line-height:1.4}
-.dashboard .motor-test-readback.done{border-color:#2f5d3a}.dashboard .motor-test-readback.refused{border-color:#6b2a26}
-.dashboard .motor-test-readback .advice{color:#ffd58a}.dashboard .motor-test-readback .advice:empty{display:none}
 .dashboard .drawer-close{position:absolute;top:6px;right:8px;padding:1px 8px;font-size:15px;line-height:1.2}
 .dashboard [hidden]{display:none !important}
 
@@ -135,9 +129,6 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .tests-status{margin:0;font:12px ui-monospace,monospace;color:var(--muted);line-height:1.35;overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .dashboard .tests-status.done{color:var(--accent)}.dashboard .tests-status.refused{color:var(--orange)}
-.dashboard .tests-buttons{display:flex;gap:6px;margin-top:auto}
-.dashboard .tests-buttons button{padding:5px 12px}
-.dashboard button.stop,.motor-test-stop{border-color:#d68e82}
 .dashboard .card.nodes{container-type:inline-size}
 .dashboard #nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:3px;overflow-x:hidden;overflow-y:auto;min-height:22px;flex:1;align-content:start}
 .dashboard .node{display:flex;justify-content:space-between;gap:6px;padding:3px 7px;border:1px solid var(--line);border-radius:4px;font:11px ui-monospace,monospace;background:#10171b}
@@ -152,23 +143,25 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 @container (max-width:230px){.dashboard #rates{grid-template-columns:auto minmax(0,1fr)}}  /* A narrow card: one rate a row */
 .dashboard dd.stale,.dashboard span.stale{color:var(--orange)}
 
-/* The motor test panel (motor-test.js) inside the drawer. */
-.motor-test{width:100%;border-collapse:collapse;font-size:12px}
-.motor-test td{padding:4px 0;border-bottom:0;text-align:left}
-.motor-test td:first-child{color:#b9c5c8;padding-right:8px;white-space:nowrap}
-.motor-test-buttons{display:flex;gap:4px;justify-content:flex-start}
-.motor-test td.motor-test-buttons{text-align:left}
-.motor-test-buttons button{padding:4px 7px}
-.motor-test-inputs{text-align:left;font-size:11px;color:var(--muted)}
-.motor-test-inputs input[type=number]{display:inline-block;width:62px;height:24px;margin:0 4px}
-.motor-test-value{font:12px ui-monospace,monospace;color:var(--accent)}
-.motor-test-foot{display:flex;align-items:baseline;gap:8px;margin-top:8px}
-.motor-test-foot .motor-test-stop{flex:none}  /* A long refusal wraps beside it, never under it */
-.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.35;min-width:0}
+/* Motor tests (motor-test.js): the buttons in the strip's card, a row per actuator, then Stop and the status line.
+   A short strip scrolls the card. */
+.dashboard .card.tests{overflow-y:auto}
+.dashboard #motor-test{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
+.motor-test{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:4px 6px;align-items:center;font-size:11.5px}
+.motor-test-name{color:#b9c5c8;white-space:nowrap}
+.motor-test-buttons,.motor-test-drive{display:flex;align-items:center;gap:3px;white-space:nowrap}
+.motor-test-drive{grid-column:2 / -1;color:var(--muted);font-size:11px}
+.motor-test button{min-width:28px;padding:3px 6px;font:11px ui-monospace,monospace}
+.motor-test input[type=number]{width:44px;height:21px;padding:0 3px;font-size:11px}
+.motor-test-value{font:11.5px ui-monospace,monospace;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.motor-test-foot{display:flex;align-items:center;gap:8px;margin-top:auto}
+.motor-test-foot .motor-test-stop{flex:none;padding:3px 10px;border-color:#d68e82}  /* A long answer wraps beside it, never under it */
+.motor-test-result{font:11px ui-monospace,monospace;color:var(--muted);line-height:1.3;min-width:0;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .motor-test-result.done{color:var(--accent)}.motor-test-result.refused{color:var(--orange)}
+.motor-test-readback{margin:0;font:10.5px ui-monospace,monospace;color:var(--orange);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dashboard .drawer .section-title{margin:0 32px 6px 0}
 .dashboard .drawer .section-title>span{font-size:10px}
-.dashboard .drawer .note{font-size:11px;color:var(--muted);line-height:1.4;margin:8px 0 0}
 
 /* Narrow screens: one scrolling column; the motor test panel opens under its card. */
 @media (max-width:999px){

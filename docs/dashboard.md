@@ -13,8 +13,8 @@ browsers on other computers, and keep video at camera rate on the Pi 5.
 │ │ 3D scene, from motor commands                  │ │ Tracking camera (OAK)        │ │
 │ │  skeleton, gaze ray to the face point,         │ │  pose, aim, jaw zone, target │ │
 │ │  point cloud and mesh on the head              │ │                              │ │
-│ │                     (motor test panel docks    │ ├──────────────────────────────┤ │
-│ │                      here when opened)         │ │ target, face, jaw zone, age  │ │
+│ │                                                │ ├──────────────────────────────┤ │
+│ │                                                │ │ target, face, jaw zone, age  │ │
 │ │ layers             Orbit Behind-head Side Top  │ ├──────────────┬───────────────┤ │
 │ └────────────────────────────────────────────────┘ │ Left eye     │ Right eye     │ │
 │ ┌ Time series ┬ Motor tests ┬ Nodes, rates ──────┐ │ Heat map     │ Face          │ │
@@ -132,18 +132,18 @@ another command as the bot, which must serve the dashboard's `/stream` and
   poses, face meshes and hands measured a second, and in one row its two CPUs, LeonOS and
   LeonRT, and its temperature, with its memory and any frames sent before all their
   measurements came in the row's tooltip. A camera whose frames stop appears there too.
-- **Motor tests:** the strip card shows the running or last test and the net waist travel,
-  with Open and Stop; Stop works with the panel closed. Open docks the motor test panel
-  (`motor-test.js`) over the right of the 3D scene, so the skeleton stays in view. On a
-  phone the card opens in place. From the bot's checks the panel shows whether the servo
-  board (0x40) and the Motor HAT (0x60) answer, and after a servo test the command next to
-  the pulse the servo board reads back and the pulse that angle needs: when the chip has the
-  command and the servo did not move, look at the OE wire, the V+ servo power and the plug's
-  orientation; when it does not, the command never reached the chip. Angles stay commands:
-  the read-back is the chip's own register, not where the servo is. While a board is down
+- **Motor tests:** the buttons are in the strip card itself, no panel to open
+  (`motor-test.js`): Pan and Tilt −10, 90 and +10 degrees with the commanded angle beside
+  them; Waist − and + and Jaw Open, each sending the drive × seconds in its row; then Stop
+  and a status line. The line shows this page's answer for a few seconds, then what the bot
+  reports: a test running from any screen, the last test's outcome, or why tests cannot
+  run. The card title shows the net waist travel; the test limits are the buttons' tooltip.
+  A short strip scrolls the card. Angles stay commands, not where a servo is. After a servo
+  test, a line appears when the servo board's read-back shows a problem: the command did
+  not reach the chip, the chip is asleep, or its readings are stale. While a board is down
   the controllers still run and record their commands, but nothing reaches it, so the
   commands read "not sent" there and in the time series, the bot refuses that board's
-  tests with its message and fix, and the strip card shows the board's message, not "Ready".
+  tests with its message and fix, and the status line shows the board's message, not "Ready".
 
 Click a video tile to enlarge it over the 3D scene; click it again or press Esc to return.
 
@@ -173,7 +173,6 @@ At least 1000 px wide:
   px wide the column is 656 px, so the OAK's 640×480 frame draws without scaling.
 - Readout strip height: `clamp(140px, 22vh, 240px)`; the time series takes 2.4 parts of
   its width, the motor tests and the nodes 1 part each.
-- Motor test panel: `clamp(280px, 27%, 340px)` of the scene's width, up to 380 px tall.
 - Text 11 to 14 px.
 
 | Window | 3D scene | OAK video | Eye and depth tiles | Strip |

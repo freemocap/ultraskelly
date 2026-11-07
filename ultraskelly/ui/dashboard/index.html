@@ -92,10 +92,6 @@
     <ol id="health-rows" class="parts"></ol>
     <section class="diagnostics" hidden><h3>Live readings <span id="health-readings-age" hidden></span></h3><dl id="health-diagnostics"></dl></section>
   </aside>
-  <aside id="motor-drawer" class="drawer" aria-label="Motor tests" hidden>
-    <button id="motor-drawer-close" class="drawer-close" title="Close the motor tests" aria-label="Close the motor tests">×</button>
-    <section id="motor-test" aria-label="Move one actuator at a time"></section>
-  </aside>
   <div class="sensors">
     <section class="sensor oak" aria-label="Tracking camera">
       <div class="sensor-title"><h2>Tracking camera <span id="tracking-name">OAK</span></h2><span id="oak-rate" class="rate">—</span></div>
@@ -133,10 +129,9 @@
         <span title="Motor values are the commands sent to the boards: the servos have no position feedback and the DC motors no encoders. The ZED's IMU is measured.">commands as sent · no motor reports its position · IMU measured</span></div>
       <canvas id="series" aria-label="Head and drive commands, target offset, face distance and the ZED IMU over the last 30 seconds"></canvas>
     </section>
-    <section class="card tests">
-      <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds">—</span></div>
-      <p id="tests-status" class="tests-status">Checking…</p>
-      <div class="tests-buttons"><button id="tests-open">Open</button><button id="tests-stop" class="stop">■ Stop</button></div>
+    <section class="card tests" aria-label="Motor tests: move one actuator at a time">
+      <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds"></span></div>
+      <div id="motor-test"><p class="tests-status">Waiting for the bot…</p></div>
     </section>
     <section class="card nodes">
       <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
