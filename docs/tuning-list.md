@@ -52,6 +52,12 @@ strike items out with the commit that settles them.
 
 ## Roll
 
-12. **Face levelling.** Its ratio (0.11 picture degrees per servo degree), its slack
-    (16 servo degrees) and its reversed direction were measured on 2026-11-06. Check them
-    on the robot when levelling goes back on.
+12. **Face levelling has almost no reach.** Levelling went back on on 2026-11-07. The ZED's
+    accelerometer measured roll servo 60 to 120 tipping the head 4.0 degrees: 0.067 per servo
+    degree, as `RollLevelParams.ratio` (0.065) has it. Its ±25 `span` therefore straightens
+    a tilted face only about 1.5 degrees. At servo 90 the head read 4.5-5.8 degrees,
+    depending on the side it came from: about 1.3 degrees of play, some 19 servo degrees
+    (`slack` is 10). It also leans 5-6 degrees by gravity at 90, which does not matter for
+    levelling in the picture. A linkage giving 0.5 degrees or more per servo degree would
+    make levelling useful. Until then, measure roll's travel past ±30 (power cuts: item 8)
+    before raising `span` (at most 30 now).
