@@ -2,8 +2,7 @@
 
 When a board stops answering or the camera goes quiet, the bot must end promptly, with
 every motor it can still reach braked, and report itself unhealthy so the boot service's
-watchdog covers a stuck shutdown. Brief I2C faults must not end it. The launcher imports
-every camera node, so these run where the Pi's camera libraries are installed.
+watchdog covers a stuck shutdown. Brief I2C faults must not end it.
 """
 import asyncio
 import errno
@@ -11,21 +10,20 @@ import errno
 import numpy as np
 import pytest
 
-bot_launcher = pytest.importorskip("ultraskelly.bot_launcher", reason="the launcher imports the Pi's camera libraries")
-
-from ultraskelly.core.bot.base_abcs import Node, NodeParams  # noqa: E402
-from ultraskelly.core.bot.motor.mouth_node import MouthNode  # noqa: E402
-from ultraskelly.core.bot.motor.orientation_node import OrientationNode  # noqa: E402
-from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, record_hardware_commands  # noqa: E402
-from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams, StreamStalledError  # noqa: E402
-from ultraskelly.core.pubsub.bot_topics import (  # noqa: E402
+from ultraskelly import bot_launcher
+from ultraskelly.core.bot.base_abcs import Node, NodeParams
+from ultraskelly.core.bot.motor.mouth_node import MouthNode
+from ultraskelly.core.bot.motor.orientation_node import OrientationNode
+from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, record_hardware_commands
+from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams, StreamStalledError
+from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
     FrameTopic,
     ServoStateTopic,
     TargetLocationMessage,
     TargetLocationTopic,
 )
-from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager  # noqa: E402
+from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 
 
 class FakeBoard:

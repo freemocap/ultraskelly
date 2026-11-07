@@ -16,19 +16,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="UltraSkelly robot controller")
     parser.add_argument(
         "--hardware", action="store_true",
-        help="Start the Raspberry Pi camera and motors (physically moves the robot).",
+        help="Start the cameras and motors (physically moves the robot).",
     )
     parser.add_argument(
         "--simulate-motors", action="store_true",
         help="With --hardware: run the cameras but record motor commands instead of moving the motors.",
     )
-    parser.add_argument(
-        "--window", action="store_true",
-        help="With --hardware: also show the camera in an OpenCV window (needs a desktop session); "
-             "the dashboard runs either way.",
-    )
-    # The window used to be on unless this was given; still accepted, so older commands run unchanged.
-    parser.add_argument("--no-window", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--record", action="store_true",
         help="With --hardware: save the camera video, detections and motor commands under ~/ultraskelly-recordings/.",
@@ -73,12 +66,10 @@ def main() -> None:
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    hardware_options = (args.simulate_motors, args.window, args.record, args.zed, args.no_oak_models, args.follow is not None)
+    hardware_options = (args.simulate_motors, args.record, args.zed, args.no_oak_models, args.follow is not None)
     if any(hardware_options) and not args.hardware:
-        parser.error("--simulate-motors, --window, --record, --zed, --no-oak-models and --follow or --no-follow are used "
+        parser.error("--simulate-motors, --record, --zed, --no-oak-models and --follow or --no-follow are used "
                      "together with --hardware")
-    if args.window and args.no_window:
-        parser.error("--window and --no-window contradict each other")
     if args.microphone and not args.record:
         parser.error("--microphone is used together with --record")
     if args.zed_only and args.hardware:
@@ -106,7 +97,7 @@ def main() -> None:
         # hears READY only once the robot is up. Watchdog pings then follow while the event
         # loop runs, until the bot starts shutting down.
         launcher = BotLauncher.from_config(launch_config(
-            simulate_motors=args.simulate_motors, show_window=args.window,
+            simulate_motors=args.simulate_motors,
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
             port=args.port, oak_models=not args.no_oak_models, follow=args.follow is not False,

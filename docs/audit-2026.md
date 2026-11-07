@@ -100,6 +100,23 @@ Further deletion candidates: the older head/waist controllers after moving messa
 imports out of them, Hailo/ESP32 experiments after checking the physical setup,
 and tracked IDE metadata. They are not proven broken merely because inactive.
 
+**Removed 2026-11-07**, with the originals in git history at `d4fe10b`. The original
+camera's path, not fitted since 2026-11-02: the IMX500 pose detector
+(`sensory/pose_detection_node.py`), the Picamera2 frame source (`sensory/camera_node.py`),
+the bright-point detector that read it (`sensory/bright_point_detection_node.py`), their
+`DetectorType` choices and launch settings, and the shutdown step that closed Picamera2.
+The launcher now always builds the OAK camera and the Hailo-8 pose detector. The older
+head and waist controllers (`motor/head_node.py`, `motor/waist_node.py`), superseded by
+OrientationNode; nothing imported from them any more, and their messages already live in
+`core/pubsub/bot_topics.py`. The OpenCV desktop window (`ui/cv2_ui.py`, its skeleton
+drawing `ui/overlay.py`, the `show_window` setting and the `--window` and `--no-window`
+options): the browser dashboard replaced the OpenCV window. A command that still passes
+either option now stops with a usage error; `scripts/run-bot.sh` no longer passes
+`--no-window`. Also removed: the commented-out alternative configurations in
+`__main__bot.py` and `bot_launcher.py`, and the `FAIL_ON_IMPORTS` flag only the removed
+camera modules imported. `CocoKeypoint`, which `__main__bot.py` took from the IMX500
+detector's re-export, comes from `sensory/pose_common.py`, where it is defined.
+
 ## Reliability findings
 
 ### Reproduced and addressed on Windows
