@@ -126,9 +126,13 @@ def test_the_robot_launches_with_the_calmer_tuning():
     head = launch_config().orientation
     assert head.follow
     launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
-    # While the head is tuned alone (2026-11-06), roll and waist may be off; nothing else may differ
+    # While the head is tuned alone (2026-11-06), roll and waist may be off and the head's gain lower;
+    # nothing else may differ
     for part in ("roll", "waist"):
         launched[part]["enabled"] = defaults[part]["enabled"]
+    assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
+    for key in ("reach", "smoothing", "max_speed"):
+        launched["aim"][key] = defaults["aim"][key]
     assert launched == defaults  # The defaults the closed-loop scenarios check
     assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
     assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7

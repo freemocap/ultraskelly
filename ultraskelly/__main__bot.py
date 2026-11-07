@@ -8,6 +8,7 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
@@ -97,6 +98,13 @@ def launch_config(
     # work the waist back in): the waist stays braked and the roll upright, so only pan and tilt follow.
     config.orientation = OrientationNodeParams(
         follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
+        # Lower head gain (2026-11-06, the user: "Swings past me", "gain tooo high"). Recorded run
+        # 20261106-194104: one approach went from -297 px to +150 px past the middle; 447 px of image for
+        # 85 servo degrees is about 0.65 degrees of view per servo degree on large moves, twice pan_ratio,
+        # so g = 2 and each sample's error factor 1 - reach * g = -0.3 (an overshoot every sample). With
+        # reach 0.35 it stays >= 0 up to g = 2.86; the simulator then shows no overshoot even with 0.15 s of
+        # servo lag (tests/test_scenarios_tuning.py), at the cost of slower aiming.
+        aim=HeadAimParams(reach=0.35, smoothing=0.3, max_speed=15.0),
     )
     return config
 
