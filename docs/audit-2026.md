@@ -633,24 +633,36 @@ each way next to what the controller assumes. None of this has run on the robot'
 holding at 90. `motor/roll_level.py` takes the followed person's face from the OAK's own face
 detector (the face whose box holds the pose's nose), measures the line from its right eye to
 its left, and works as the head aim does: the camera's roll when the frame was captured plus
-60% of the eye line's tilt becomes the goal, smoothed (15% of each estimate, less for faces
-whose eyes are under 30 px apart, as their angle is noisier), and the roll turns toward it at
-most 15 degrees of picture a second, only once the goal is 2 degrees away, and no more than 25
-servo degrees from upright. Faces the detector doubts (score under 0.6), faces under 16 px
+80% of the eye line's tilt becomes the goal, smoothed (10% of each estimate, less for faces
+whose eyes are under 30 px apart, as their angle is noisier), and the roll turns toward it only
+once the goal is a degree away, its servo at most 60 degrees a second, never more than 25 servo
+degrees from upright, pushing half the linkage's slack ahead of it as the head does. Faces the detector doubts (score under 0.6), faces under 16 px
 between the eyes (beyond about 1.9 m), eye lines steeper than 40 degrees and faces turned more
 than 40 degrees away are not used; after a second without a usable face it eases back upright.
 Motor tests and `--no-follow` leave it alone, the servo state reports the commanded roll, and
 `ActuatorLimits` now clamps roll to 60-120. The pan and tilt errors are turned back upright by
 the roll before the head aims, as a rolled camera turns the whole picture. In the simulator a
 face's eye line tilts by the person's tilt less the roll, eyes scale with distance and have
-their own jitter, and five scenarios check that a tilted face is levelled without being turned
+their own jitter, and seven scenarios check that a tilted face is levelled without being turned
 past level, that the head straightens again, and that it stands upright once the person has
-gone; every other scenario checks that the roll does not move. The roll servo's direction and
-ratio are not measured: the controller assumes 0.3 degrees of picture per servo degree, the
-tests pass from 0.2 to 0.45, and a reversed roll is caught. `scripts/check_motor_directions.py`
-now turns roll 12 degrees each way and measures the picture's turn from matched features
-(`cv2.estimateAffinePartial2D`); its verdict says whether the controller's direction is right.
-Until then the roll may turn the wrong way: within 25 servo degrees, and only toward a face.
+gone; every other scenario checks that the roll does not move.
+`scripts/check_motor_directions.py` turns roll 12 degrees each way and measures the picture's
+turn from matched features (`cv2.estimateAffinePartial2D`). On the robot (2026-11-06, 19:16) the
+roll turned the picture's content clockwise for a larger angle, the opposite of the first
+guess: 12 degrees barely turned it (0.1-0.6 degrees), 25 turned it 2.1-2.9 degrees and moved it
+27-29 px up and down, and returning to 90 left 1.1-2.3 degrees of the turn. That fits 0.12
+degrees of picture per servo degree through 16-20 servo degrees of slack, with the camera
+nodding about 0.18 degrees per servo degree as it rolls (it sits off the roll's axis). The
+controller and the simulator now use those numbers (0.11, 16 compensated, clockwise), and the
+tests pass from 0.09 to 0.16 degrees per servo degree, 12 to 22 of slack and no nod to 0.3; the
+other way round is caught. Within 25 servo degrees the roll turns the picture only about 2
+degrees: it turns a tilted face toward level by that much, never past it, and so the scenarios
+ask for a face within 1.5 degrees of level or a degree nearer level than the person's own tilt.
+Levelling a fully tilted head would take a stiffer linkage or more travel than the 60-120 the
+hard limits allow; neither is changed here. The same evening tilt moved the picture only 0-4.5
+px for 25 servo degrees, against 9-10 px for 12 at 16:53: its travel is uncertain until the
+linkage is checked, and the tests check that the head stays calm, only failing to reach someone
+above or below, if tilt turns a fifth as far or has 20 degrees of slack.
 
 ## Recovering from lost connections (2026-11-02)
 

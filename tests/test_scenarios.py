@@ -27,8 +27,10 @@ PLANTS = [
     {"pan_backlash": 3.0}, {"pan_backlash": 8.0}, {"tilt_backlash": 0.0}, {"tilt_backlash": 4.0},
     {"waist_speed": 17.0}, {"waist_speed": 37.0}, {"servo_lag": 0.12},
     {"pan_ratio": 0.42, "waist_speed": 17.0},
-    # The roll servo's ratio is not measured yet: the roll is assumed to turn the picture 0.3 degrees per servo degree.
-    {"roll_ratio": 0.2}, {"roll_ratio": 0.45},
+    # The roll turned the picture clockwise 0.1-0.12 degrees per servo degree through 16-20 degrees of
+    # slack, and nodded the camera about 0.18 degrees per servo degree (2026-11-06).
+    {"roll_ratio": 0.09}, {"roll_ratio": 0.16}, {"roll_backlash": 12.0}, {"roll_backlash": 22.0},
+    {"roll_nod": 0.0}, {"roll_nod": 0.3},
 ]
 
 
@@ -50,8 +52,19 @@ def test_a_reversed_pan_servo_is_caught_before_any_motor_runs():
 
 
 def test_a_reversed_roll_servo_is_caught_before_any_motor_runs():
-    trace, verdict = run(replace(BY_NAME["tilt"], settings={"roll_sign": -1}))
+    trace, verdict = run(replace(BY_NAME["tilt"], settings={"roll_sign": 1}))  # The robot's turns the other way
     assert not verdict.passed and verdict.final_tilt > 7.0  # Rolled the face further off level
+
+
+@pytest.mark.parametrize("tilt", [{"tilt_ratio": 0.02}, {"tilt_backlash": 20.0}], ids=["barely-turns", "loose"])
+def test_the_head_stays_calm_when_its_tilt_barely_moves(tilt):
+    # On 2026-11-06 tilt went from 9-10 px per 12 servo degrees to 0-4.5 px per 25: its travel is uncertain
+    # until the linkage is checked. The head may then fail to reach someone above or below, but must stay calm.
+    failing = []
+    for scenario in SCENARIOS:
+        trace, verdict = run(replace(scenario, settings={**scenario.settings, **tilt}))
+        failing += [f"{scenario.name}: {failure}" for failure in verdict.failures if not failure.startswith("aim")]
+    assert not failing
 
 
 def test_reversals_count_turns_back_but_not_wobble():

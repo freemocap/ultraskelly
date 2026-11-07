@@ -66,9 +66,14 @@ class Settings(BaseModel):
     pan_backlash: float = Field(default=6.0, ge=0, le=30)  # Servo degrees
     tilt_backlash: float = Field(default=2.0, ge=0, le=30)
     # The roll servo turns the picture's content anticlockwise by roll_ratio degrees per servo
-    # degree (roll_sign -1: the other way). Neither is measured yet: check_motor_directions.py will.
-    roll_ratio: float = Field(default=0.3, gt=0, le=1)
-    roll_sign: Literal[1, -1] = 1
+    # degree (roll_sign -1: clockwise), once it has crossed roll_backlash servo degrees of slack,
+    # and nods the camera down roll_nod degrees per servo degree as it does (the OAK sits off the
+    # roll's axis). Measured on 2026-11-06: 25 servo degrees turned the picture 2.1-2.9 degrees
+    # clockwise and moved it 27-29 px up; returning to 90 left 1.1-2.3 degrees of the turn.
+    roll_ratio: float = Field(default=0.12, gt=0, le=1)
+    roll_sign: Literal[1, -1] = -1
+    roll_backlash: float = Field(default=18.0, ge=0, le=40)  # Servo degrees
+    roll_nod: float = Field(default=0.18, ge=-1, le=1)
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
     landmark_noise_px: float = Field(default=0.0, ge=0, le=20)  # The face detector's own jitter on eyes, nose, mouth
     dropout: float = Field(default=0.0, ge=0, lt=1)  # Share of samples in which the detector finds nobody
@@ -110,7 +115,7 @@ class Simulation:
         self.bus, self.head, self.mouth = create_controllers()
         self.tick = 0
         self.pan = self.tilt = self.roll = 90.0  # The servos' angles
-        self.linkage = [90.0, 90.0]  # Where the head's linkage sits, in servo degrees: pan, tilt
+        self.linkage = [90.0, 90.0, 90.0]  # Where the head's linkages sit, in servo degrees: pan, tilt, roll
         self.waist = self.jaw = 0.0
         self.waist_moving = False
         self.last_camera = {"x": None, "y": None, "visible": False, "time": None}
@@ -173,12 +178,12 @@ class Simulation:
 
     def picture_roll(self) -> float:
         """How far the roll servo has turned the picture's content anticlockwise, degrees."""
-        return self.settings.roll_sign * self.settings.roll_ratio * (self.roll - 90)
+        return self.settings.roll_sign * self.settings.roll_ratio * (self.linkage[2] - 90)
 
     def camera_pose(self) -> tuple[float, float]:
         """The camera's bearing from the base (yaw, pitch in degrees), from the servos' actual angles."""
         yaw, pitch = self.head_turn()
-        return self.waist + yaw, pitch
+        return self.waist + yaw, pitch - self.settings.roll_nod * (self.linkage[2] - 90)
 
     def project(self, person: Person) -> tuple[float, float] | None:
         """Where a person appears in the frame, in pixels, or None outside it."""
@@ -269,7 +274,8 @@ class Simulation:
             self.tilt = self.servo(self.tilt, self.head.tilt_angle)
             self.roll = self.servo(self.roll, self.head.roll_angle)
             self.linkage = [play(self.linkage[0], self.pan, self.settings.pan_backlash),
-                            play(self.linkage[1], self.tilt, self.settings.tilt_backlash)]
+                            play(self.linkage[1], self.tilt, self.settings.tilt_backlash),
+                            play(self.linkage[2], self.roll, self.settings.roll_backlash)]
             self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)

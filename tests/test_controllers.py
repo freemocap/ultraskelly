@@ -124,11 +124,7 @@ def test_the_robot_launches_with_the_calmer_tuning():
     from ultraskelly.__main__bot import launch_config
 
     head = launch_config().orientation
-    assert head.follow
-    launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
-    # The roll alone may hold upright (2026-11-06: its measured direction and ratio are not in its defaults yet)
-    assert launched.pop("roll")["enabled"] is False or head.roll == OrientationNodeParams().roll
-    defaults.pop("roll")
-    assert launched == defaults  # The defaults the closed-loop scenarios check
+    assert head.follow and head.roll.enabled
+    assert head.model_dump() == OrientationNodeParams().model_dump()  # The defaults the closed-loop scenarios check
     assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
     assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7

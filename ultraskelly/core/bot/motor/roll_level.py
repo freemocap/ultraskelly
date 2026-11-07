@@ -4,12 +4,16 @@ The OAK's face detector gives each face's eyes. The line between them tilts in t
 the face's own tilt less the camera's roll. RollLevel works as HeadAim does (head_aim.py): from
 each usable face it estimates the camera roll that would level the face (the roll when the frame
 was captured, as commanded a servo lag earlier, plus the eye line's angle), aims `reach` of the
-way there, smooths that goal, and rolls toward it no faster than `max_speed`, only once it is
-more than `deadband` away, and never more than `span` servo degrees from level. Without a usable
-face for `lost_after` seconds it eases back to level.
+way there, smooths that goal, and rolls toward it no faster than `max_speed` (and its servo no
+faster than `servo_speed`), only once it is more than `deadband` away, and never more than `span`
+servo degrees from level. It commands the servo half the linkage's `slack` past the roll in the
+way it turns, so a reversal takes the play up at once. Without a usable face for `lost_after`
+seconds it eases back to level.
 
-Angles are the picture's rotation in degrees, clockwise on screen (image y points down); the roll
-servo's direction and ratio are not measured yet (scripts/check_motor_directions.py measures them).
+Angles are the picture's rotation in degrees, clockwise on screen (image y points down). On
+2026-11-06 scripts/check_motor_directions.py found a larger roll angle turning the picture's
+content clockwise, about 0.1 degrees per servo degree, through about 17 servo degrees of slack:
+within its span the roll turns the picture only about 2 degrees either way.
 """
 import math
 from collections import deque
@@ -23,6 +27,7 @@ from ultraskelly.core.pubsub.bot_topics import FaceObservation
 
 LEVEL = 90.0  # Roll servo degrees at which the head stands upright
 HISTORY_SECONDS = 1.0  # How far back the roll remembers how the camera was turned
+SLACK_TURN = 1.5  # Servo degrees the roll must turn back before its servo takes up the slack the other way
 
 
 class RollLevelParams(NodeParams):
@@ -30,20 +35,32 @@ class RollLevelParams(NodeParams):
 
     enabled: bool = Field(default=True, description="Level the followed face with the roll servo; off, roll holds level")
     ratio: float = Field(
-        default=0.3, gt=0.0, le=1.0,
-        description="Degrees the picture turns per roll servo degree: not measured yet; pan's linkage gives 0.36",
+        default=0.11, gt=0.0, le=1.0,
+        description="Degrees the picture turns per roll servo degree, once the slack is taken up: "
+                    "25 servo degrees turned it 2.9 degrees on 2026-11-06",
     )
     direction: Literal[1, -1] = Field(
-        default=1, description="+1: a larger roll angle turns the picture's content anticlockwise; not measured yet",
+        default=-1, description="-1: a larger roll angle turns the picture's content clockwise, as measured on 2026-11-06",
+    )
+    slack: float = Field(
+        default=16.0, ge=0.0, le=30.0,
+        description="Servo degrees of play in the roll linkage, taken up at each reversal: returning from 65 to 90 left "
+                    "the picture turned 2.3 degrees on 2026-11-06, about 19; a little under, as too much makes the head jump",
     )
     span: float = Field(
         default=25.0, gt=0.0, le=30.0,
         description="Servo degrees the roll may move either side of level: 5 short of its hard limits (ActuatorLimits)",
     )
-    deadband: float = Field(default=2.0, ge=0.0, le=20.0, description="The roll turns only once its goal is further than this")
-    reach: float = Field(default=0.6, gt=0.0, le=1.0, description="Share of the face's tilt in the picture each frame aims for")
-    smoothing: float = Field(default=0.15, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
+    deadband: float = Field(default=1.0, ge=0.0, le=20.0, description="The roll turns only once its goal is further than this")
+    reach: float = Field(
+        default=0.8, gt=0.0, le=1.0,
+        description="Share of the face's tilt in the picture each frame aims for: near 1, as the roll reaches only a degree or two",
+    )
+    smoothing: float = Field(default=0.1, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
     max_speed: float = Field(default=15.0, gt=0.0, description="Top speed of the picture's rotation, degrees per second")
+    servo_speed: float = Field(
+        default=60.0, gt=0.0, description="Top roll servo speed, servo degrees per second: the servo itself stays calm",
+    )
     max_acceleration: float = Field(default=60.0, gt=0.0, description="Degrees per second squared, speeding up and slowing down")
     servo_lag: float = Field(default=0.08, ge=0.0, le=0.5, description="How far the roll servo trails its commands")
     assumed_latency: float = Field(default=0.06, ge=0.0, le=0.5, description="Delay assumed for faces without a capture time")
@@ -89,9 +106,11 @@ class RollLevel:
     def __init__(self, params: RollLevelParams, roll: float = LEVEL) -> None:
         self.params = params
         self.servo = roll  # The roll servo angle last commanded
-        self.view = self._view(roll)  # The picture's rotation that command makes, degrees
+        self.view = self._view(roll)  # The picture's rotation the linkage is meant to make, degrees
         self.rate = 0.0
         self.turning = False
+        self.pushing = 0  # Which way the servo last pushed its linkage, in servo degrees: +1, -1, or 0 not yet
+        self.extreme = roll  # The furthest servo angle (less the slack's push) reached since the last reversal
         self.goal = 0.0  # The rotation that levels the followed face; 0 keeps the head upright
         self.seen_at: float | None = None  # When a usable face was last observed
         self.tilt: float | None = None  # That face's eye line in the picture, degrees (measured)
@@ -102,8 +121,9 @@ class RollLevel:
         return self.params.direction * self.params.ratio * (servo - LEVEL)
 
     def span(self) -> float:
-        """The largest rotation the roll may command either way."""
-        return self.params.ratio * self.params.span
+        """The largest rotation the roll may command either way: its servo, pushing half the slack past it,
+        stays within `span` servo degrees of level."""
+        return self.params.ratio * max(0.0, self.params.span - self.params.slack / 2)
 
     def usable(self, face: FaceObservation) -> float | None:
         """The face's eye line in the picture, or None if the face is too doubtful to level the head by."""
@@ -143,6 +163,18 @@ class RollLevel:
         eyes = math.dist(face.landmarks[0], face.landmarks[1])
         self.goal += p.smoothing * min(1.0, (eyes / p.full_eye_distance) ** 2) * (estimate - self.goal)
 
+    def _command(self) -> None:
+        """The servo angle that puts the linkage at the view: past it by half the slack, the way the servo moves.
+        A turn back must exceed SLACK_TURN servo degrees to count, so the servo never chatters across the play."""
+        p = self.params
+        base = LEVEL + self.view / (p.direction * p.ratio)
+        moved = base - self.extreme
+        if (self.pushing >= 0 and moved < -SLACK_TURN) or (self.pushing <= 0 and moved > SLACK_TURN):
+            self.pushing, self.extreme = (1 if moved > 0 else -1), base
+        elif self.pushing * moved > 0:
+            self.extreme = base  # Still going the same way
+        self.servo = base + self.pushing * p.slack / 2
+
     def update(self, *, now: float) -> float:
         """This tick's roll servo command."""
         p = self.params
@@ -153,10 +185,11 @@ class RollLevel:
         if not self.turning and abs(self.goal - self.view) > p.deadband:
             self.turning = True
         if self.turning:
+            speed = min(p.max_speed, p.servo_speed * p.ratio)
             self.view, self.rate = s_curve_step(
-                self.view, self.rate, self.goal, up=p.max_speed, down=p.max_speed, jerk=p.max_acceleration, dt=dt,
+                self.view, self.rate, self.goal, up=speed, down=speed, jerk=p.max_acceleration, dt=dt,
             )
-            self.servo = LEVEL + self.view / (p.direction * p.ratio)
+            self._command()
             if self.view == self.goal and self.rate == 0.0:
                 self.turning = False
         self.history.append((now, self.view))

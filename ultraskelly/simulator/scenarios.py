@@ -10,8 +10,9 @@ controllers through the simulator's camera and servos (see engine.py). Its verdi
 - aim: still off a standing person by more than AIM_DEGREES at the end;
 - waist hunting: the waist turning one way and then back while the person stands still;
 - roll: the head's roll turning back and forth (in every scenario), and in those about a
-  tilted face, turning the face more than ROLL_OVERSHOOT past level, leaving it more than
-  ROLL_AIM off level at the end, or not standing upright again once the face has gone.
+  tilted face, turning the face more than ROLL_OVERSHOOT past level, ending neither within
+  ROLL_AIM of level nor ROLL_TOWARD closer to it than the person's own tilt (the robot's roll
+  reaches only a couple of degrees), or not standing upright again once the face has gone.
 
 Bearings are degrees from the robot's base: positive yaw to the robot's left as the
 simulator draws it, positive pitch up.
@@ -27,7 +28,9 @@ AIM_DEGREES = 2.5
 REVERSAL_DEGREES = 0.5  # A turn back counts once the command has come back this far
 LIMIT_MARGIN = 2.0  # Degrees from a servo's 0 or 180 that count as reaching its end stop
 ROLL_OVERSHOOT = 1.5  # Degrees the followed face may be turned past level in the picture
-ROLL_AIM = 3.0  # Degrees off level the face may stay at the end: within the roll's deadband
+ROLL_AIM = 1.5  # Degrees off level the face may stay at the end...
+ROLL_TOWARD = 1.0  # ...or at least this much closer to level than the person's own tilt
+ROLL_UPRIGHT = 0.5  # Degrees the head's actual roll may be off upright once nobody is left
 ROLL_LIMITS = (60.0, 120.0)  # The roll servo's hard limits (ActuatorLimits)
 
 
@@ -142,6 +145,8 @@ SCENARIOS = [
     Scenario("lost", "A person at 15 degrees leaves for 2 s; another appears at -15", 8.0,
              comes_and_goes(15.0, -15.0, (3.0, 5.0)), step=False, max_reversals=2, max_waist_moves=2),
     Scenario("tilt", "A person ahead tilts their head 7 degrees clockwise", 5.0, tilted(7.0), roll=True),
+    Scenario("tilt-slight", "A person ahead tilts their head 3 degrees: within the roll's reach", 5.0, tilted(3.0),
+             roll=True),
     Scenario("tilt-other-way", "A person ahead tilts their head 7 degrees anticlockwise", 5.0, tilted(-7.0), roll=True),
     Scenario("tilt-and-back", "A person tilts their head 7 degrees for 3 s, then straightens it", 7.0,
              tilted(7.0, until=3.0), roll=True),
@@ -189,10 +194,13 @@ def roll_judgement(scenario: Scenario, trace: Trace, verdict: Verdict) -> None:
                 verdict.failures.append(f"roll overshoot: the face turned {verdict.roll_overshoot:.1f} degrees past level")
         final = [abs(tilt) for tilt in trace.face_tilt[-10:] if tilt is not None]
         verdict.final_tilt = max(final) if final else None
-        if verdict.final_tilt is None or verdict.final_tilt > ROLL_AIM:
-            verdict.failures.append(f"roll aim: the face {verdict.final_tilt} degrees off level at the end")
-    if scenario.upright_at_end and abs(trace.roll_command[-1] - 90.0) > 0.1:
-        verdict.failures.append(f"roll: the head not upright again ({trace.roll_command[-1]:.1f})")
+        own = next((abs(roll) for roll in reversed(trace.person_roll) if roll is not None), 0.0)
+        allowed = max(ROLL_AIM, own - ROLL_TOWARD)
+        if verdict.final_tilt is None or verdict.final_tilt > allowed:
+            verdict.failures.append(f"roll aim: the face {verdict.final_tilt} degrees off level at the end "
+                                    f"(its own tilt {own:.1f}, allowed {allowed:.1f})")
+    if scenario.upright_at_end and abs(trace.picture_roll[-1]) > ROLL_UPRIGHT:
+        verdict.failures.append(f"roll: the head not upright again ({trace.picture_roll[-1]:.1f} degrees)")
 
 
 def followed(sim: Simulation) -> Person | None:
