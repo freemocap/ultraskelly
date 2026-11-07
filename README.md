@@ -137,7 +137,7 @@ or to center, a short waist pulse either way, or a jaw opening pulse. Tests are 
 commands (`POST /api/motor-test`, `POST /api/motor-test/stop`; see
 `ultraskelly/ui/motor_test_routes.py`): each is answered once it has finished or been
 stopped, or refused at once with the reason, never queued. The bot checks every test
-against `LaunchConfig.motor_tests` (servos within 30° of center, waist up to 0.7 for
+against `LaunchConfig.motor_tests` (servos anywhere in their 0-180°, waist up to 0.7 for
 0.5 s, jaw up to 0.3 s) as well as the hard limits, pauses tracking during it, and brakes
 the other DC motor. Set `motor_tests.enabled` to False to turn the panel off. With
 `--simulate-motors` the tests drive the simulated motors, and so does

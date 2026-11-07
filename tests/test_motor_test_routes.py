@@ -30,7 +30,7 @@ def serve(scenario, **options):
 def test_a_test_is_answered_with_how_it_ended():
     async def scenario(client, server, recorder):
         state = await (await client.get("/api/motor-test")).json()
-        assert state["enabled"] and state["limits"]["servo_range"] == 30.0 and state["running"] is None
+        assert state["enabled"] and state["limits"]["servo_windows"] == {"pan": [0.0, 180.0], "tilt": [0.0, 180.0]} and state["running"] is None
         reply = await client.post("/api/motor-test", json={"actuator": "pan", "angle": 100})
         body = await reply.json()
         assert reply.status == 200 and body["ok"] and body["test"]["outcome"] == "done" and body["test"]["sent"] == 100
@@ -43,7 +43,7 @@ def test_bad_or_disallowed_tests_are_refused_with_the_reason():
     async def scenario(client, server, recorder):
         before = len(recorder.history)
         for body, status, reason in [
-            ({"actuator": "pan", "angle": 150}, 400, "within 30 degrees"),
+            ({"actuator": "pan", "angle": 190}, 400, "less than or equal to 180"),
             ({"actuator": "waist", "throttle": 0.5}, 400, "a throttle and seconds"),
             ({"actuator": "arm", "angle": 90}, 400, "actuator"),
             ({"actuator": "pan", "angle": 90, "speed": 2}, 400, "speed"),

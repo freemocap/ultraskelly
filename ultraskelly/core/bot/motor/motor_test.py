@@ -23,14 +23,14 @@ from ultraskelly.core.bot.motor.waist_drive import WaistDrive
 
 logger = logging.getLogger(__name__)
 
-SERVO_CENTER = 90.0  # Degrees; where the bot starts and leaves both head servos
+SERVO_TRAVEL = (0.0, 180.0)  # Degrees: every angle the servo board's scale has (750-2250 µs)
 
 
 class MotorTestLimits(NodeParams):
-    """What dashboard tests may do. The actuator limits clamp every command as well."""
+    """What dashboard tests may do. A servo test may send any angle the servo takes, its whole 0-180 (the owner,
+    2026-11-07: "if the motor can make it there then do it"); the actuator limits clamp every command as well."""
 
     enabled: bool = Field(default=True, description="Accept motor tests from the dashboard")
-    servo_range: float = Field(default=30.0, ge=0.0, le=90.0, description="Test angles stay this close to center (degrees)")
     waist_max_throttle: float = Field(default=0.7, ge=0.0, le=1.0)
     waist_max_seconds: float = Field(default=0.5, gt=0.0, le=2.0)
     waist_max_travel: float = Field(
@@ -48,7 +48,7 @@ class MotorTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     actuator: Literal["pan", "tilt", "waist", "mouth"]
-    angle: float | None = Field(default=None, description="Servo angle in degrees")
+    angle: float | None = Field(default=None, ge=SERVO_TRAVEL[0], le=SERVO_TRAVEL[1], description="Servo angle in degrees, 0-180")
     throttle: float | None = Field(default=None, ge=-1.0, le=1.0, description="Motor drive; negative jaw drive opens it")
     seconds: float | None = Field(default=None, gt=0.0, description="How long to drive the motor")
 
@@ -97,7 +97,7 @@ class MotorTester:
         return {
             "enabled": self.limits.enabled,
             "simulated": self.simulated,
-            "limits": self.limits.model_dump(),
+            "limits": {**self.limits.model_dump(), "servo_windows": {name: list(SERVO_TRAVEL) for name in ("pan", "tilt")}},
             "running": self.current,
             "last": self.last,
             "waist_travel": round(self.waist_travel, 3),
@@ -116,10 +116,6 @@ class MotorTester:
         if request.actuator in ("pan", "tilt"):
             if request.angle is None or request.throttle is not None or request.seconds is not None:
                 raise MotorTestRefused("A servo test takes an angle and nothing else")
-            if abs(request.angle - SERVO_CENTER) > limits.servo_range:
-                raise MotorTestRefused(
-                    f"Servo tests stay within {limits.servo_range:.0f} degrees of {SERVO_CENTER:.0f}"
-                )
             return
         if request.throttle is None or request.seconds is None or request.angle is not None:
             raise MotorTestRefused("A motor test takes a throttle and seconds and nothing else")

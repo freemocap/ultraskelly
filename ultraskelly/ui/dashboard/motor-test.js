@@ -86,7 +86,7 @@ export class MotorTestPanel {
   }
 
   build(enabled) {
-    const limits = this.limits, low = CENTER - limits.servo_range, high = CENTER + limits.servo_range;
+    const limits = this.limits, windows = limits.servo_windows;  // {pan: [low, high], tilt: [low, high]}: the head's own
     this.buttons = [];
     const button = (label, title, action) => {
       const made = element('button', {textContent: label, title, onclick: action});
@@ -96,6 +96,7 @@ export class MotorTestPanel {
     const number = (value, max, label) => element('input', {type: 'number', value, min: .05, max, step: .05, title: label, ariaLabel: label});
     const name = text => element('span', {className: 'motor-test-name', textContent: text});
     const servo = (actuator, label) => {
+      const [low, high] = windows[actuator];
       // Whole degrees: a nudge starts from the head's commanded angle, which following leaves fractional.
       const move = angle => this.send({actuator, angle: Math.round(Math.min(high, Math.max(low, angle)))});
       const current = () => this.commands[actuator] ?? CENTER;
@@ -114,7 +115,7 @@ export class MotorTestPanel {
     const jawDrive = number(limits.mouth_max_throttle, limits.mouth_max_throttle, 'Jaw drive (throttle)');
     const jawSeconds = number(Math.min(.2, limits.mouth_max_seconds), limits.mouth_max_seconds, 'Jaw seconds');
     const grid = element('div', {className: 'motor-test', title:
-      `One at a time; tracking pauses during each test. Servos ${low}–${high}°; waist up to ${limits.waist_max_throttle.toFixed(2)} ` +
+      `One at a time; tracking pauses during each test. Pan ${windows.pan[0]}–${windows.pan[1]}°, tilt ${windows.tilt[0]}–${windows.tilt[1]}°; waist up to ${limits.waist_max_throttle.toFixed(2)} ` +
       `for ${limits.waist_max_seconds.toFixed(2)} s, at most ${limits.waist_max_travel.toFixed(2)} throttle-seconds one way; jaw up to ` +
       `${limits.mouth_max_throttle.toFixed(2)} for ${limits.mouth_max_seconds.toFixed(2)} s.`},
       ...servo('pan', 'Pan'), ...servo('tilt', 'Tilt'),

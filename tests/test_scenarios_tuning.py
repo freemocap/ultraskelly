@@ -62,7 +62,11 @@ def yaw_settle(trace: S.Trace) -> float | None:
 
 
 def test_a_face_low_in_the_picture_pans_as_one_at_eye_level():
-    low, _ = S.run(S.LOW_FACE, launched)
+    def tilt_as_in_that_run(sim):  # Run 20261106-222520's tilt window, 20-130, which kept this face in the bottom band.
+        launched(sim)  # Since 2026-11-07 tilt follows to 140 and lifts it about 8 px out of the band.
+        sim.head.params.aim.tilt_range = (20.0, 130.0)
+
+    low, _ = S.run(S.LOW_FACE, tilt_as_in_that_run)
     level, _ = S.run(S.HEAD_BY_NAME["step-left"], launched)
     assert min(row for row in low.target_y if row is not None) > 200  # Past where the edge gate once began at
     # the bottom (240 - edge_margin) from first to last

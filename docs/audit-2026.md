@@ -584,7 +584,8 @@ with the motor boards.
 contract (`motor/motor_test.py`, `ui/motor_test_routes.py`). Each test is answered once it
 has finished or been stopped; one that is malformed, outside the test limits or arrives
 while another runs is refused at once with the reason, never queued, merged or silently
-clamped. Test limits: servos within 30 degrees of center, waist up to 0.7 for 0.5 s and at
+clamped. Test limits: servos anywhere in their 0-180 (until 2026-11-07, 30 degrees of
+center), waist up to 0.7 for 0.5 s and at
 most 1.0 throttle-seconds net one way (there is no waist angle sensor), jaw up to 1.0 for
 0.3 s; the hard actuator limits still clamp every command. Tracking holds its commands
 during a test, the other DC motor is braked, and tracking resumes from where the test left
@@ -845,6 +846,20 @@ mechanism cannot point the camera at a standing person's face. The head rests ab
 90, and its whole 20 to 130 window gives about 9°. The fix is mechanical: rest level at 90, and a
 linkage giving at least 0.25° per servo degree. The `head` health check reports an axis held at the
 end of its range for 5 s while the person followed is still off the aim point beyond that end.
+
+### The head servos' full range (2026-11-07)
+
+The owner found the head's range from software "super limited (esp in tilt)" next to its range by
+hand with the bot off, when the servo board sleeps and every servo channel is released. Three
+limits stood in the way: motor tests held to 30 degrees of 90, hard limits of pan 20-160 and tilt
+20-130 on every command, and following windows of the same. At the owner's direction ("if the motor
+can make it there then do it") motor tests now take any angle in the servos' 0-180, the hard limits
+are 0-180, and following uses the whole travel `scripts/check_servo_travel.py` measured on
+2026-11-06: pan 10-170 and tilt 10-140. Beyond those, pan jammed after being held at 5, and tilt's
+linkage goes over centre past about 140, where more servo angle turns the head back and following
+would drive the wrong way. Motor tests can still go there. Tilt's measured 0.08 degrees of nod per
+servo degree is unchanged: the whole window nods the head about 10 degrees. If the head goes much
+further by hand, the linkage gives somewhere between servo and head.
 
 ### The ZED IMU's clock wrap blanked the dashboard's charts (2026-11-06)
 

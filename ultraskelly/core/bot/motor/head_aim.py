@@ -98,12 +98,14 @@ class HeadAimParams(NodeParams):
     tilt_direction: Literal[1, -1] = Field(default=1, description="+1: a target below the aim point needs a larger tilt angle")
     end_margin: float = Field(default=5.0, ge=0.0, le=45.0, description="Servo degrees the head keeps clear of each end stop")
     # Pan turns the view steadily from servo 10 to 170 but jammed after being held at 5; tilt's linkage goes
-    # over centre past about 140 (full sweeps, scripts/check_pan_travel.py, 2026-11-06).
+    # over centre past about 140, where more servo angle turns the head back (full sweeps,
+    # scripts/check_servo_travel.py, 2026-11-06). Following uses all of that travel (the owner, 2026-11-07:
+    # "head servos should move their FULL range of motion"); motor tests may send anything in 0-180.
     pan_range: tuple[float, float] = Field(
-        default=(20.0, 160.0), description="Servo degrees the pan may use: where its linkage turns the head steadily",
+        default=(10.0, 170.0), description="Servo degrees the pan may use: all the travel where its linkage turns the head",
     )
     tilt_range: tuple[float, float] = Field(
-        default=(20.0, 130.0), description="Servo degrees the tilt may use: short of its linkage's over-centre point",
+        default=(10.0, 140.0), description="Servo degrees the tilt may use: up to its linkage's over-centre point",
     )
     # The aim below was tuned on the measured plant (simulator/tuning.py, 2026-11-06: cost 64.4 against 2209 for
     # the stopgap it replaces; docs/audit-2026.md, "A simulator fitted to the robot").

@@ -35,6 +35,21 @@ def test_a_servo_test_moves_the_head_and_tracking_resumes_from_there():
     asyncio.run(scenario())
 
 
+def test_servo_tests_reach_every_angle_the_servo_takes():
+    # 2026-11-07, the owner: from software the range was "super limited (esp in tilt)" (tests were held to 60-120),
+    # and "DONT ... REFUSE SERVO ANGLES IF THE MOTOR CAN MAKE THERE THEN ... DO IT".
+    async def scenario():
+        tester, recorder, bus = build()
+        assert tester.state()["limits"]["servo_windows"] == {"pan": [0.0, 180.0], "tilt": [0.0, 180.0]}
+        for actuator, angle in (("tilt", 180.0), ("tilt", 0.0), ("pan", 180.0), ("pan", 0.0), ("tilt", 90.0)):
+            result = await tester.run(MotorTestRequest(actuator=actuator, angle=angle))
+            assert result["outcome"] == "done" and values(recorder, actuator)[-1] == angle
+        bus.close()
+    asyncio.run(scenario())
+    with pytest.raises(ValueError):  # Not an angle the servo board's scale has
+        MotorTestRequest(actuator="tilt", angle=181)
+
+
 def test_a_waist_pulse_runs_alone_for_its_time_then_brakes():
     async def scenario():
         tester, recorder, bus = build()
@@ -50,7 +65,6 @@ def test_a_waist_pulse_runs_alone_for_its_time_then_brakes():
 
 
 @pytest.mark.parametrize("request_fields, reason", [
-    (dict(actuator="pan", angle=150), "within 30 degrees"),
     (dict(actuator="tilt", angle=90, seconds=1), "an angle and nothing else"),
     (dict(actuator="waist", throttle=0.9, seconds=0.2), "at most 0.70"),
     (dict(actuator="waist", throttle=0.5, seconds=2), "at most 0.50 s"),

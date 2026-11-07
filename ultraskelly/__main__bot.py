@@ -7,7 +7,6 @@ Tracks people with an OAK USB camera and YOLOv8 pose on the Hailo-8 AI HAT+.
 import asyncio
 import logging
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
-from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
@@ -63,15 +62,13 @@ def launch_config(
     config.tracking = not zed_only
     config.runtime_server.port = port
     # The head runs its defaults: its aim tuned on the simulated robot fitted to the motors recorded on
-    # 2026-11-06 (simulator/tuning.py) inside the servo windows measured that evening (pan 20-160, tilt
-    # 20-130), and checked by the closed-loop scenarios (tests/test_scenarios_tuning.py), which run what
-    # launches here. Head first, then the waist (the user, 2026-11-06): the waist stays braked and the roll
+    # 2026-11-06 (simulator/tuning.py), and checked by the closed-loop scenarios (tests/test_scenarios_tuning.py),
+    # which run what launches here. It follows over the servos' whole measured travel (pan 10-170, tilt 10-140;
+    # the owner, 2026-11-07: "head servos should move their FULL range of motion"), and the hard limits are the
+    # servos' own 0-180, so motor tests reach every angle. Head first, then the waist (the user, 2026-11-06): the waist stays braked and the roll
     # upright, so only pan and tilt follow.
     config.orientation = OrientationNodeParams(
         follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
-    )
-    config.limits = ActuatorLimits(  # The same windows as hard limits on every command, motor tests included
-        pan_min_degrees=20.0, pan_max_degrees=160.0, tilt_min_degrees=20.0, tilt_max_degrees=130.0,
     )
     return config
 

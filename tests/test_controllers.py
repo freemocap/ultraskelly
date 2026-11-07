@@ -161,10 +161,12 @@ def test_the_robot_launches_with_the_calmer_tuning():
     # Tuned on the measured plant (simulator/tuning.py, 2026-11-06) to reach 0.30 and 15 deg/s, inside these
     # bounds: the head battery passes calm with pan geared 1.5 and 2 times the fit (worst overshoot 0.51 degrees).
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
-    assert head.aim.pan_range == (20.0, 160.0) and head.aim.tilt_range == (20.0, 130.0)  # Measured 2026-11-06
+    # Following uses the servos' whole measured travel (scripts/check_servo_travel.py, 2026-11-06), as the owner asked
+    # on 2026-11-07; the hard limits are the servos' own 0-180, so motor tests reach every angle.
+    assert head.aim.pan_range == (10.0, 170.0) and head.aim.tilt_range == (10.0, 140.0)
     limits = launch_config().limits
     assert (limits.pan_min_degrees, limits.pan_max_degrees, limits.tilt_min_degrees, limits.tilt_max_degrees) == (
-        20.0, 160.0, 20.0, 130.0)
+        0.0, 180.0, 0.0, 180.0)
     assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7
 
 
