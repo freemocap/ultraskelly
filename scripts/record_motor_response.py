@@ -1,177 +1,542 @@
-"""Record how each head motor's commands turn the camera: for building a simulated head that matches the robot.
+"""Record how each motor turns the camera, with nothing in the loop: the data the simulated robot is fitted to.
 
-Runs a fixed script on the pan, tilt and roll servos and the waist motor, while a thread keeps every
-OAK frame (grey, 320x240, with its capture time on time.monotonic()'s clock) and the main thread logs
-every command with its time. Per servo: steps of several sizes from the middle and back, a staircase
-up and down (gearing each way, slack at reversals), ramps at several speeds (lag, top speed) and big
-steps (delay, rise, overshoot, settling). Then short waist pulses each way. Servos stay inside the
-windows where their linkages turn steadily (pan 20-160, tilt 20-130, roll 60-120; check_servo_travel.py).
+An open-loop, scripted session, short (about seven minutes of motion), with the bot off and under the
+robot lock. The camera's exposure, focus and white balance are locked (exposure 4 ms or less where the
+room's light allows, so fast turns blur little), and every frame is kept as the OAK's own JPEG with its
+stamp, exposure, sensitivity and lens position; the device's calibration is saved beside them. Then:
 
-Saves to ~/ultraskelly-recordings/motor-response-<time>/: frames.npz (frames, captured, received),
-commands.csv (time, actuator, value) and segments.json (each part's name and start and end time).
+- 20 s with everything still: the measurement's noise floor;
+- pan, tilt and roll, each: a staircase with reversals (gain each way, slack at every reversal), a
+  ladder of steps of several sizes in random order with 0-40 ms of random wait before each (dead time
+  and slew, sampled finer than a frame), small steps all one way (the head's ringing mode, its gears
+  kept in contact), and a random staircase kept back to validate the fit;
+- the waist, the head still at its middle: triangle ramps of drive up and down each way (breakaway and
+  stall), holds at constant drives each way after a short kick (speed against drive), each ended once
+  by coasting and once by braking (stopping distance against speed), and kick-and-hold moves to
+  validate the fit.
 
-The robot moves. Stop the bot, have the scene still (a person may stand in view), and run under the lock:
+Servos stay inside WINDOWS, well clear of where their linkages end (tilt never past 130, never held at
+an end: holding tilt at its end preceded the robot's power cuts). The waist's turn is measured online
+from the camera (simulator/camera_rotation.py, features only, five times a second): after each waist
+part it is driven back toward where it started, and any waist motion past WAIST_LIMIT degrees is
+braked at once. Without that measurement for a second, the waist stops and its parts are skipped.
 
-    flock -w 60 /run/lock/ultraskelly-robot.lock .venv/bin/python -m scripts.record_motor_response
+Saves to ~/ultraskelly-recordings/motor-response-<time>/: oak.avi (the OAK's Motion JPEG, 640x480),
+oak_frames.csv (per frame: index, sequence number, stamp and device stamp in seconds, exposure in
+seconds, ISO, lens position, colour temperature, arrival time), commands.csv (time, actuator, value:
+each command as its write to the board returned), segments.json (each part's name, start, end and
+settings), monitor.csv (the online waist turn) and session.json (camera settings and calibration,
+windows, motor settings). scripts/analyze_motor_response.py measures the camera's turn in each frame.
+
+The robot moves. With the bot stopped and the robot clear:
+
+    flock -n /run/lock/ultraskelly-robot.lock .venv/bin/python -m scripts.record_motor_response
 """
+import argparse
 import csv
 import json
+import math
+import random
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-
-import numpy as np
-
-from ultraskelly.core.bot.sensory.oak_models import without_telemetry
+from typing import Callable
 
 MIDDLE = 90.0
-WINDOWS = {"pan": (20.0, 160.0), "tilt": (20.0, 130.0), "roll": (60.0, 120.0)}
-STEP_HOLD = 1.2  # Seconds a step is held: the head settles well within this
-TICK = 0.01  # Seconds between ramp commands
+WINDOWS = {"pan": (30.0, 150.0), "tilt": (30.0, 130.0), "roll": (60.0, 120.0)}
+SIZE = (640, 480)
+JPEG_QUALITY = 95
+NOISE_FLOOR = 20.0  # Seconds everything is still, first
+JITTER = 0.04  # Seconds of random wait before each ladder step: the 20 ms PWM period and the 33 ms frame
+LONGEST_EXPOSURE = 0.004  # Seconds; ISO rises to 1600 before exposure grows past this
+WAIST_LIMIT = 60.0  # Degrees from the start the waist may be seen turned; past it, the waist brakes
+RECENTRE_WITHIN = 8.0  # Degrees: close enough to the start to begin the next waist part
+WAIST_KICK = (0.8, 0.06)  # Drive and seconds that break the waist loose before a hold
+MONITOR_STALE = 1.0  # Seconds without a measured waist turn that stop the waist
+
+LADDERS = {"pan": [2, 5, 10, 20, 40], "tilt": [5, 10, 20, 40], "roll": [10, 20, 30, 45]}  # Step sizes, servo degrees
+
+Step = tuple[float, float, float]  # (seconds of wait before, servo degrees, seconds held after)
 
 
-class Recorder:
-    """Keeps every frame the OAK sends, grey and halved, with its capture and arrival times."""
+def staircase(levels: list[float], hold: float) -> list[Step]:
+    return [(0.0, level, hold) for level in levels]
 
-    def __init__(self, cv2, frames) -> None:
-        self.cv2, self.frames = cv2, frames
-        self.images, self.captured, self.received = [], [], []
-        self.stop = threading.Event()
+
+def ladder(start: float, sizes: list[float], repeats: int, window: tuple[float, float], hold: float,
+           rng: random.Random) -> list[Step]:
+    """Each size each way `repeats` times in random order from `start`, a random 0-JITTER s wait before
+    each. A step that would leave `window` waits until the walk has room for it."""
+    waiting = [(size, way) for size in sizes for way in (1, -1) for _ in range(repeats)]
+    rng.shuffle(waiting)
+    steps, at, stuck = [], start, 0
+    while waiting:
+        size, way = waiting.pop(0)
+        if window[0] <= at + way * size <= window[1]:
+            at += way * size
+            steps.append((rng.uniform(0.0, JITTER), at, hold))
+            stuck = 0
+            continue
+        waiting.append((size, way))
+        stuck += 1
+        if stuck >= len(waiting):  # No step fits from here: move to the end the next one needs
+            size, way = waiting[0]
+            at = window[0] if way > 0 else window[1]
+            steps.append((rng.uniform(0.0, JITTER), at, hold))
+            stuck = 0
+    return steps
+
+
+def one_way_steps(low: float, high: float, size: float, hold: float) -> list[Step]:
+    """Small steps up from `low` to `high`, then down again: within each run the gears stay in contact."""
+    count = int((high - low) // size)
+    ups = [low + size * k for k in range(count + 1)]
+    return [(0.0, level, hold) for level in ups + ups[-2::-1]]
+
+
+def random_staircase(window: tuple[float, float], count: int, dwell: tuple[float, float], rng: random.Random) -> list[Step]:
+    return [(0.0, round(rng.uniform(*window), 1), rng.uniform(*dwell)) for _ in range(count)]
+
+
+def head_plan(rng: random.Random) -> list[tuple[str, str, list[Step]]]:
+    """(servo, part, steps) for the three head servos, in order."""
+    pan = [90, 100, 110, 100, 110, 120, 130, 120, 130, 140, 130, 120, 110, 120, 110, 100, 90, 80, 70, 80, 70, 60, 50,
+           60, 50, 40, 50, 40, 50, 60, 70, 80, 90]
+    tilt = [90, 100, 110, 100, 110, 120, 125, 120, 125, 115, 105, 95, 90, 80, 70, 80, 70, 60, 50, 60, 50, 40, 50, 40, 50,
+            60, 70, 80, 90]
+    roll = [90, 100, 110, 120, 110, 100, 90, 80, 70, 60, 70, 80, 90, 100, 110, 100, 90, 80, 70, 80, 90]
+    return [
+        ("pan", "staircase", staircase(pan, 1.0)),
+        ("pan", "ladder", ladder(90.0, LADDERS["pan"], 4, (45.0, 135.0), 1.0, rng)),
+        ("pan", "one way", one_way_steps(66.0, 114.0, 4.0, 0.8)),
+        ("pan", "validation", random_staircase((50.0, 130.0), 20, (0.1, 1.0), rng)),
+        ("tilt", "staircase", staircase(tilt, 1.0)),
+        ("tilt", "ladder", ladder(90.0, LADDERS["tilt"], 4, (40.0, 128.0), 0.8, rng)),
+        ("tilt", "one way", one_way_steps(60.0, 120.0, 5.0, 0.6)),
+        ("tilt", "validation", random_staircase((45.0, 125.0), 15, (0.1, 0.8), rng)),
+        ("roll", "staircase", staircase(roll, 1.0)),
+        ("roll", "ladder", ladder(90.0, LADDERS["roll"], 3, (62.0, 118.0), 0.8, rng)),
+        ("roll", "one way", one_way_steps(65.0, 115.0, 5.0, 0.5)),
+        ("roll", "validation", random_staircase((62.0, 118.0), 10, (0.1, 0.8), rng)),
+    ]
+
+
+@dataclass
+class WaistPart:
+    name: str
+    way: int  # 1: positive drive, -1: negative
+    profile: list[tuple[float, float | None]]  # (seconds, drive magnitude; None coasts, 0 brakes)
+
+
+def waist_plan(top: float) -> list[WaistPart]:
+    """Ramps, holds with their stops, and validation moves, alternating ways."""
+    parts = []
+    for repeat in range(3):
+        for way in (-1, 1):
+            rise = [(0.1, 0.3 + 0.025 * k) for k in range(1, int((top - 0.3) / 0.025) + 1)]  # 0.25 drive a second
+            parts.append(WaistPart(f"waist ramp {way:+d} #{repeat + 1}", way, rise + rise[-2::-1] + [(1.5, 0.0)]))
+    levels = [round(0.5 + 0.1 * k, 1) for k in range(int(round((top - 0.5) / 0.1)) + 1)]
+    for level in levels:
+        for way in (-1, 1):
+            for stop, after in (("coast", None), ("brake", 0.0)):
+                hold = 1.2 if way < 0 else 2.0  # Negative drive turns faster
+                parts.append(WaistPart(f"waist hold {way * level:+.1f} then {stop}", way,
+                                       [(WAIST_KICK[1], WAIST_KICK[0]), (hold, level), (1.5, after), (0.1, 0.0)]))
+    for repeat in range(2):
+        for way in (-1, 1):
+            parts.append(WaistPart(f"waist validation {way:+d} #{repeat + 1}", way,
+                                   [(0.08, 0.8), (1.0, 0.55), (1.5, 0.0)]))
+    return parts
+
+
+class Clock:
+    """Real time; tests give a fake one that advances as it sleeps."""
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        if seconds > 0:
+            time.sleep(seconds)
+
+
+@dataclass
+class Session:
+    """Runs the plan through `send(actuator, value)`, marking its parts; `turn()` gives the waist's measured
+    turn from the start (degrees, positive the view's right) or None, and its age in seconds."""
+    send: Callable[[str, float | None], None]
+    turn: Callable[[], tuple[float | None, float]]
+    clock: Clock = field(default_factory=Clock)
+    segments: list[dict] = field(default_factory=list)
+    waist_way: int = 1  # The drive sign that turns the view toward smaller yaw, learned from the first waist part
+    waist_ok: bool = True
+
+    def part(self, name: str, **settings):
+        session = self
+
+        class Mark:
+            def __enter__(self):
+                session.segments.append({"name": name, "start": session.clock.now(), **settings})
+
+            def __exit__(self, *exc):
+                session.segments[-1]["end"] = session.clock.now()
+
+        return Mark()
+
+    def head(self, plan) -> None:
+        for name in WINDOWS:
+            self.send(name, MIDDLE)
+        for servo, part, steps in plan:
+            with self.part(f"{servo} {part}", servo=servo):
+                for wait, angle, hold in steps:
+                    self.clock.sleep(wait)
+                    self.send(servo, angle)
+                    self.clock.sleep(hold)
+            self.send(servo, MIDDLE)
+            self.clock.sleep(1.0)
+
+    def _waist_guard(self) -> bool:
+        """False, having braked, once the waist is past WAIST_LIMIT or its turn has not been seen lately."""
+        seen, age = self.turn()
+        if seen is None or age > MONITOR_STALE:
+            self.send("waist", 0.0)
+            return False
+        if abs(seen) > WAIST_LIMIT:
+            self.send("waist", 0.0)
+            return False
+        return True
+
+    def _drive(self, value: float | None, seconds: float) -> bool:
+        self.send("waist", value)
+        end = self.clock.now() + seconds
+        while end - self.clock.now() > 1e-4:
+            self.clock.sleep(min(0.02, end - self.clock.now()))
+            if value not in (None, 0.0) and not self._waist_guard():
+                return False
+        return True
+
+    def _fresh_turn(self, patience: float = 3.0) -> float | None:
+        """The waist's measured turn, waiting up to `patience` seconds for a fresh one; None ends the waist's parts."""
+        waited = 0.0
+        while True:
+            seen, age = self.turn()
+            if seen is not None and age <= MONITOR_STALE:
+                return seen
+            if waited >= patience:
+                self.waist_ok = False
+                return None
+            self.clock.sleep(0.1)
+            waited += 0.1
+
+    def recentre(self, timeout: float = 4.0) -> None:
+        """Drive the waist back toward where it started, braking within RECENTRE_WITHIN degrees. A turn that
+        grows instead (the drive's sign not what the first part showed) brakes and ends the waist's parts."""
+        seen = self._fresh_turn()
+        if seen is None or abs(seen) <= RECENTRE_WITHIN:
+            return
+        began, worst = self.clock.now(), abs(seen)
+        way = self.waist_way if seen > 0 else -self.waist_way
+        self.send("waist", way * WAIST_KICK[0])
+        self.clock.sleep(WAIST_KICK[1])
+        self.send("waist", way * 0.65)
+        while self.clock.now() - began < timeout:
+            self.clock.sleep(0.02)
+            now, age = self.turn()
+            if now is None or age > MONITOR_STALE:
+                self.waist_ok = False
+                break
+            if abs(now) <= RECENTRE_WITHIN or (now > 0) != (seen > 0):
+                break  # Close enough, or across the start
+            if self.clock.now() - began < 0.6:  # The reading lags and the waist spins up: wait for it
+                worst = max(worst, abs(now))
+            elif abs(now) > worst + 5.0:
+                self.waist_ok = False  # Going the wrong way
+                break
+        self.send("waist", 0.0)
+        self.clock.sleep(1.0)
+
+    def waist(self, plan: list[WaistPart]) -> None:
+        learned = False
+        for part in plan:
+            if not self.waist_ok:
+                break
+            self.recentre()
+            before = self._fresh_turn()
+            if before is None:
+                break
+            with self.part(part.name, way=part.way, profile=part.profile):
+                for seconds, drive in part.profile:
+                    if not self._drive(None if drive is None else part.way * drive, seconds):
+                        self.segments[-1]["stopped"] = "waist past its limit or unseen"
+                        break
+            self.send("waist", 0.0)
+            after = self._fresh_turn()
+            if after is None:
+                break
+            if not learned and abs(after - before) > 5.0:  # Which way the drive turns the view, from a clear move
+                self.waist_way = part.way if after < before else -part.way
+                learned = True
+        self.send("waist", 0.0)
+        if self.waist_ok:
+            self.recentre()
+        self.send("waist", 0.0)
+
+
+def plan_seconds(head, waist_parts) -> float:
+    """Seconds of scripted motion, without recentring."""
+    head_time = sum(wait + hold for _, _, steps in head for wait, _, hold in steps) + len(head) * 1.0
+    return head_time + sum(seconds for part in waist_parts for seconds, _ in part.profile)
+
+
+class FrameKeeper:
+    """Keeps every frame's JPEG in an AVI and its metadata in rows; the newest JPEG for the waist monitor."""
+
+    def __init__(self, queue, folder: Path) -> None:
+        from ultraskelly.core.bot.recording.mjpeg_avi import MjpegAviWriter
+
+        self.queue, self.stop = queue, threading.Event()
+        self.video = MjpegAviWriter(folder / "oak.avi", SIZE, 30.0)
+        self.rows: list[tuple] = []
+        self.latest: tuple[float, bytes] | None = None
+        self.calibration: dict = {}
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self) -> None:
         while not self.stop.is_set():
-            group = self.frames.get()
-            rgb = group["rgb"]
-            grey = self.cv2.cvtColor(rgb.getFrame(), self.cv2.COLOR_RGB2GRAY)
-            self.images.append(self.cv2.resize(grey, (320, 240), interpolation=self.cv2.INTER_AREA))
-            self.captured.append(rgb.getTimestamp().total_seconds())
-            self.received.append(time.monotonic())
+            group = self.queue.tryGet()
+            if group is None:
+                time.sleep(0.002)
+                continue
+            arrived = time.monotonic()
+            rgb, jpeg = group["rgb"], bytes(group["jpeg"].getData())
+            self.video.write(jpeg)
+            self.rows.append((len(self.rows), rgb.getSequenceNum(), rgb.getTimestamp().total_seconds(),
+                              rgb.getTimestampDevice().total_seconds(), rgb.getExposureTime().total_seconds(),
+                              rgb.getSensitivity(), rgb.getLensPosition(), rgb.getColorTemperature(), arrived))
+            self.latest = (rgb.getTimestamp().total_seconds(), jpeg)
+            if not self.calibration:
+                self.calibration = frame_transformation(rgb)
 
 
-class Script:
-    """Sends commands and logs them, and marks the parts of the run."""
-
-    def __init__(self, servos, channels: dict[str, int], waist) -> None:
-        self.servos, self.channels, self.waist = servos, channels, waist
-        self.angles = {name: MIDDLE for name in channels}
-        self.commands: list[tuple[float, str, float]] = []
-        self.segments: list[dict] = []
-
-    def send(self, name: str, value: float) -> None:
-        if name == "waist":
-            self.waist.throttle = value
-        else:
-            low, high = WINDOWS[name]
-            value = min(max(value, low), high)
-            self.servos.servo[self.channels[name]].angle = value
-            self.angles[name] = value
-        self.commands.append((time.monotonic(), name, float(value)))
-
-    def segment(self, name: str):
-        script = self
-
-        class Mark:
-            def __enter__(self):
-                script.segments.append({"name": name, "start": time.monotonic()})
-
-            def __exit__(self, *exc):
-                script.segments[-1]["end"] = time.monotonic()
-
-        return Mark()
-
-    def step(self, name: str, angle: float, hold: float = STEP_HOLD) -> None:
-        self.send(name, angle)
-        time.sleep(hold)
-
-    def ramp(self, name: str, angle: float, speed: float) -> None:
-        start, distance = self.angles[name], angle - self.angles[name]
-        moves = max(1, int(abs(distance) / speed / TICK))
-        for tick in range(1, moves + 1):
-            self.send(name, start + distance * tick / moves)
-            time.sleep(TICK)
+def frame_transformation(frame) -> dict:
+    """What the frame says of its own geometry: its intrinsics and the sensor area it came from."""
+    out = {}
+    try:
+        transformation = frame.getTransformation()
+        out["matrix"] = [list(map(float, row)) for row in transformation.getIntrinsicMatrix()]
+        out["distortion"] = list(map(float, transformation.getDistortionCoefficients()))
+        out["size"] = list(transformation.getSize())
+        out["source_size"] = list(transformation.getSourceSize())
+        out["source_matrix"] = [list(map(float, row)) for row in transformation.getSourceIntrinsicMatrix()]
+        out["horizontal_fov"] = float(transformation.getHFov())
+        out["crops"] = repr(transformation.getSrcCrops())
+    except Exception as error:  # Older depthai, or no calibration on the device
+        out["error"] = repr(error)
+    return out
 
 
-def servo_script(script: Script, name: str, amplitudes: list[float], stairs: list[float], ramp_path: list[float],
-                 big_steps: list[float]) -> None:
-    with script.segment(f"{name} settle"):
-        script.step(name, MIDDLE, 1.5)
-    for amplitude in amplitudes:
-        for sign in (1, -1):
-            with script.segment(f"{name} step {sign * amplitude:+g}"):
-                script.step(name, MIDDLE + sign * amplitude)
-                script.step(name, MIDDLE)
-    with script.segment(f"{name} staircase"):
-        for angle in stairs:
-            script.step(name, angle, 1.0)
-    for speed in (20.0, 60.0, 150.0):
-        with script.segment(f"{name} ramp {speed:g} deg/s"):
-            for angle in ramp_path:
-                script.ramp(name, angle, speed)
-                time.sleep(0.6)
-    with script.segment(f"{name} big steps"):
-        for angle in big_steps:
-            script.step(name, angle, 1.5)
+class WaistMonitor:
+    """The waist's turn from the start, measured five times a second from the newest frame, features only."""
+
+    def __init__(self, keeper: FrameKeeper, camera) -> None:
+        self.keeper, self.camera = keeper, camera.scaled((SIZE[0] // 2, SIZE[1] // 2))
+        self.tracker, self.reading = None, (None, math.inf)
+        self.rows: list[tuple] = []
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def turn(self) -> tuple[float | None, float]:
+        seen, at = self.reading
+        return seen, time.monotonic() - at
+
+    def _run(self) -> None:
+        import cv2
+        import numpy as np
+
+        from ultraskelly.simulator.camera_rotation import RotationTracker
+
+        while not self.stop.is_set():
+            time.sleep(0.2)
+            if self.keeper.latest is None:
+                continue
+            stamp, jpeg = self.keeper.latest
+            grey = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_2)
+            if self.tracker is None:
+                self.tracker = RotationTracker(self.camera, grey, refine=False, new_keyframe_beyond=12.0, features=800)
+                self.reading = (0.0, time.monotonic())
+                continue
+            found = self.tracker.measure(grey)
+            self.rows.append((stamp, found.yaw, found.pitch, found.roll, found.inliers, found.ok, len(self.tracker.keyframes)))
+            if found.ok:
+                self.reading = (found.yaw, time.monotonic())
+
+
+def camera_settings(rows: list[tuple]) -> dict:
+    """Manual settings from auto-exposure's recent frames (FrameKeeper rows): the same brightness with the
+    exposure at most LONGEST_EXPOSURE, ISO raised to 1600 before the exposure grows (to 10 ms at most)."""
+    middle = sorted(rows, key=lambda row: row[4])[len(rows) // 2]
+    exposure, iso = middle[4], middle[5]
+    light = exposure * iso
+    short = min(exposure, LONGEST_EXPOSURE)
+    needed = light / short
+    if needed > 1600:
+        needed, short = 1600, min(light / 1600, 0.010)
+    return {"auto_exposure": exposure, "auto_iso": iso, "exposure": short, "iso": int(round(max(100, needed))),
+            "lens_position": int(middle[6]), "colour_temperature": int(middle[7])}
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--waist-top", type=float, default=0.8, help="Largest waist drive held (the limits allow 0.8)")
+    parser.add_argument("--seed", type=int, default=20261107)
+    parser.add_argument("--dry-run", action="store_true", help="Print the plan's length and exit")
+    parser.add_argument("--camera-only", action="store_true",
+                        help="Lock the camera and record 5 s still, without opening the motor boards")
+    args = parser.parse_args()
+    rng = random.Random(args.seed)
+    head, waist_parts = head_plan(rng), waist_plan(args.waist_top)
+    print(f"plan: {plan_seconds(head, waist_parts) / 60:.1f} min of scripted motion, "
+          f"{sum(len(s) for _, _, s in head)} head steps, {len(waist_parts)} waist parts")
+    if args.dry_run:
+        return
+
+    from ultraskelly.core.bot.sensory.oak_models import without_telemetry
+
     without_telemetry()
-    import cv2
+    import depthai as dai
+    import numpy as np
 
     from ultraskelly.bot_launcher import LaunchConfig
-    from ultraskelly.core.bot.motor.bridge_motor import BridgeMotor
+    from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
+    from ultraskelly.core.bot.motor.bridge_motor import SLOW_DECAY, BridgeMotor
     from ultraskelly.core.bot.motor.motor_boards import open_motor_board, open_servo_board
     from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+    from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder, RecordingMotor, RecordingServoKit
     from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
     from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+    from ultraskelly.simulator.camera_rotation import Camera
 
-    head = OrientationNodeParams()
-    channels = {"pan": head.pan_channel, "tilt": head.tilt_channel, "roll": head.roll_channel}
-    servos = open_servo_board()
-    waist = BridgeMotor.from_motorkit(open_motor_board(LaunchConfig.model_fields["motor_pwm_hz"].default),
-                                      head.waist_motor_channel)
-    camera = OakCameraNode.create(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(flip_camera=True))
-    script = Script(servos, channels, waist)
-    folder = Path.home() / "ultraskelly-recordings" / time.strftime("motor-response-%Y%m%d-%H%M%S")
-    recorder = None
+    params = OrientationNodeParams()
+    limits = ActuatorLimits(pan_min_degrees=WINDOWS["pan"][0], pan_max_degrees=WINDOWS["pan"][1],
+                            tilt_min_degrees=WINDOWS["tilt"][0], tilt_max_degrees=WINDOWS["tilt"][1],
+                            roll_min_degrees=WINDOWS["roll"][0], roll_max_degrees=WINDOWS["roll"][1])
+    recorder = CommandRecorder()
+    pwm_hz = LaunchConfig.model_fields["motor_pwm_hz"].default
+    if args.camera_only:
+        def send(name: str, value: float | None) -> None:
+            recorder.record(name, value)  # Nothing moves
+    else:
+        servos = RecordingServoKit(kit=open_servo_board(), recorder=recorder, names=params.servo_names, limits=limits)
+        bridge = BridgeMotor.from_motorkit(open_motor_board(pwm_hz), params.waist_motor_channel)
+        bridge.decay_mode = SLOW_DECAY  # As the bot drives it
+        waist = RecordingMotor(motor=bridge, name="waist", recorder=recorder, max_throttle=limits.waist_max_throttle)
+        channels = {name: channel for channel, name in params.servo_names.items()}
+
+        def send(name: str, value: float | None) -> None:
+            if name == "waist":
+                waist.throttle = value
+            else:
+                servos.servo[channels[name]].angle = value
+
+    camera_node = OakCameraNode.create(pubsub=PubSubTopicManager.create(), params=OakCameraNodeParams(
+        width=SIZE[0], height=SIZE[1], fps=30.0, flip_camera=True, jpeg_quality=JPEG_QUALITY, models=None))
+    pipeline = camera_node.pipeline
+    sensor = next(node for node in pipeline.getAllNodes() if isinstance(node, dai.node.Camera))
+    controls = sensor.inputControl.createInputQueue()
+    kind = "camera-check" if args.camera_only else "motor-response"
+    folder = Path.home() / "ultraskelly-recordings" / time.strftime(f"{kind}-%Y%m%d-%H%M%S")
+    folder.mkdir(parents=True)
+    keeper = FrameKeeper(camera_node.queues["frames"], folder)
+    session_info = {"windows": WINDOWS, "waist_limit": WAIST_LIMIT, "waist_top": args.waist_top, "seed": args.seed,
+                    "motor_pwm_hz": pwm_hz, "waist_decay": "slow", "servo_names": params.servo_names,
+                    "jpeg_quality": JPEG_QUALITY, "size": SIZE}
+    session = None
+    monitor = None
     try:
-        for name in channels:
-            script.send(name, MIDDLE)
-        camera.pipeline.start()
-        recorder = Recorder(cv2, camera.queues["frames"])
-        recorder.thread.start()
-        time.sleep(3.0)  # Exposure settles
-        servo_script(script, "pan", [5, 10, 20, 40, 60], [70, 50, 30, 50, 70, 90, 110, 130, 150, 130, 110, 90],
-                     [150, 30, 90], [140, 40, 90])
-        servo_script(script, "tilt", [5, 10, 20, 35], [60, 30, 60, 90, 110, 125, 110, 90], [125, 30, 90], [125, 40, 90])
-        servo_script(script, "roll", [5, 10, 20, 30], [75, 60, 75, 90, 105, 120, 105, 90], [120, 60, 90], [120, 60, 90])
-        for drive, seconds in ((-0.6, 0.25), (0.6, 0.25), (-0.6, 0.5), (0.6, 0.5), (-0.7, 0.5), (0.7, 0.5)):
-            with script.segment(f"waist {drive:+g} for {seconds:g} s"):
-                script.send("waist", drive)
-                time.sleep(seconds)
-                script.send("waist", 0.0)
-                time.sleep(1.5)
-    finally:
-        script.send("waist", 0.0)
-        for name in channels:
-            script.send(name, MIDDLE)
+        for name in WINDOWS:
+            send(name, MIDDLE)
+        send("waist", 0.0)
+        pipeline.start()
+        keeper.thread.start()
+        device = pipeline.getDefaultDevice()
+        try:
+            calibration = device.readCalibration()
+            socket = dai.CameraBoardSocket.CAM_A
+            session_info["device_calibration"] = {
+                "matrix": [list(map(float, row)) for row in calibration.getCameraIntrinsics(socket, *SIZE)],
+                "distortion": list(map(float, calibration.getDistortionCoefficients(socket))),
+                "model": str(calibration.getDistortionModel(socket)), "fov": float(calibration.getFov(socket)),
+            }
+        except Exception as error:
+            session_info["device_calibration"] = {"error": repr(error)}
+        time.sleep(4.0)  # Auto-exposure, focus and white balance settle
+        settings = camera_settings(keeper.rows[-15:])
+        control = dai.CameraControl()
+        control.setManualExposure(int(settings["exposure"] * 1e6), settings["iso"])
+        if settings["lens_position"] > 0:  # A lens position the frames report: hold it
+            control.setAutoFocusMode(dai.CameraControl.AutoFocusMode.OFF)
+            control.setManualFocus(settings["lens_position"])
+        if settings["colour_temperature"] > 0:
+            control.setManualWhiteBalance(settings["colour_temperature"])
+        controls.send(control)
+        time.sleep(1.5)
+        settings["applied"] = {"exposure": keeper.rows[-1][4], "iso": keeper.rows[-1][5], "lens_position": keeper.rows[-1][6]}
+        session_info["camera"] = settings
+        session_info["frame_transformation"] = keeper.calibration
+        print("camera:", settings)
+        matrix = keeper.calibration.get("matrix") or session_info["device_calibration"].get("matrix")
+        lens = Camera(np.array(matrix), SIZE) if matrix else Camera.from_field_of_view(SIZE, 67.0)
+        monitor = WaistMonitor(keeper, lens)
+        session = Session(send=send, turn=monitor.turn)
+        with session.part("still", seconds=5.0 if args.camera_only else NOISE_FLOOR):
+            time.sleep(5.0 if args.camera_only else NOISE_FLOOR)
+        if args.camera_only:
+            return
+        monitor.thread.start()
+        session.head(head)
+        for name in ("pan", "tilt", "roll"):  # Settle the head's slack one way before the waist turns it
+            send(name, MIDDLE - 5.0)
         time.sleep(0.5)
-        if recorder is not None:
-            recorder.stop.set()
-            recorder.thread.join(timeout=2.0)
-        camera.pipeline.stop()
-        camera.pipeline.getDefaultDevice().close()
-    folder.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(folder / "frames.npz", frames=np.array(recorder.images), captured=np.array(recorder.captured),
-                        received=np.array(recorder.received))
-    with open(folder / "commands.csv", "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["time", "actuator", "value"])
-        writer.writerows(script.commands)
-    (folder / "segments.json").write_text(json.dumps(script.segments, indent=1))
-    span = recorder.captured[-1] - recorder.captured[0] if recorder.captured else 0.0
-    print(f"saved {folder}: {len(recorder.images)} frames over {span:.0f} s "
-          f"({len(recorder.images) / max(span, 1e-9):.1f} fps), {len(script.commands)} commands, {len(script.segments)} parts")
+        for name in ("pan", "tilt", "roll"):
+            send(name, MIDDLE)
+        time.sleep(1.0)
+        session.waist(waist_parts)
+    finally:
+        send("waist", 0.0)
+        for name in WINDOWS:
+            send(name, MIDDLE)
+        time.sleep(0.5)
+        if monitor is not None:
+            monitor.stop.set()
+        keeper.stop.set()
+        keeper.thread.join(timeout=2.0)
+        keeper.video.release()
+        pipeline.stop()
+        pipeline.getDefaultDevice().close()
+        with open(folder / "oak_frames.csv", "w", newline="") as file:
+            rows = csv.writer(file)
+            rows.writerow(["index", "sequence", "stamp", "device_stamp", "exposure", "iso", "lens_position",
+                           "colour_temperature", "arrived"])
+            rows.writerows(keeper.rows)
+        with open(folder / "commands.csv", "w", newline="") as file:
+            rows = csv.writer(file)
+            rows.writerow(["time", "actuator", "value"])
+            rows.writerows((c.at, c.actuator, "" if c.value is None else c.value) for c in recorder.history)
+        if monitor is not None:
+            with open(folder / "monitor.csv", "w", newline="") as file:
+                rows = csv.writer(file)
+                rows.writerow(["stamp", "yaw", "pitch", "roll", "inliers", "ok", "keyframes"])
+                rows.writerows(monitor.rows)
+        session_info["segments"] = len(session.segments) if session else 0
+        session_info["waist_way"] = session.waist_way if session else None
+        session_info["waist_completed"] = session.waist_ok if session else False
+        (folder / "segments.json").write_text(json.dumps(session.segments if session else [], indent=1))
+        (folder / "session.json").write_text(json.dumps(session_info, indent=1, default=str))
+        sequence = [row[1] for row in keeper.rows]
+        missed = sum(b - a - 1 for a, b in zip(sequence, sequence[1:]) if b - a > 1)
+        print(f"saved {folder}: {len(keeper.rows)} frames ({missed} missed), {len(recorder.history)} commands, "
+              f"{len(session.segments) if session else 0} parts")
 
 
 if __name__ == "__main__":
