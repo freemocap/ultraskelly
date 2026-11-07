@@ -11,7 +11,7 @@ from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, Brid
 from ultraskelly.core.bot.motor.head_aim import HeadAim, HeadAimParams
 from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.roll_level import LEVEL, RollLevel, RollLevelParams, choose_face
-from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, WaistDrive, WaistDriveParams, WaistState
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistState
 from ultraskelly.core.pubsub.bot_topics import (
     OakResultsMessage,
     OakResultsTopic,
@@ -102,9 +102,6 @@ class OrientationNode(Node):
     roll_level: SkipValidation[RollLevel] = Field(default=None, exclude=True)
     latest_faces: OakResultsMessage | None = Field(default=None, exclude=True)
     head_aim: SkipValidation[HeadAim] = Field(default=None, exclude=True)
-    head_still_since: float | None = Field(default=None, exclude=True)
-    body_turn: float = Field(default=0.0, exclude=True, description="How far the waist has turned, estimated from its drive")
-    last_step: float | None = Field(default=None, exclude=True)
     
     # Waist motor state
     waist_drive: SkipValidation[WaistDrive] = Field(default=None, exclude=True)
@@ -166,7 +163,6 @@ class OrientationNode(Node):
         if not on and not self.manual:
             self.waist_motor.throttle = 0.0
         self.waist_drive = WaistDrive(self.params.waist)  # No stale move resumes
-        self.head_still_since = None
         self.following = on
 
     @classmethod
@@ -279,30 +275,32 @@ class OrientationNode(Node):
                     self.roll_level.observe(now=now, face=face, captured=self.latest_faces.timestamp)
             locked_x, locked_y = abs(error_x) <= self.params.head_deadzone, abs(error_y) <= self.params.head_deadzone
             self.last_target_x, self.last_target_y = msg.x, msg.y
-        # Estimate the body's turn from the drive sent since the last step (no sensor measures it), so the
-        # head can counter-rotate at once. Negative drive turns the torso toward positive pan.
-        dt = 0.0 if self.last_step is None else min(max(now - self.last_step, 0.0), MAX_STEP)
-        self.last_step = now
-        body_rate = -(self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second
-        self.body_turn += body_rate * dt
-        self._command_head(*self.head_aim.update(now=now, body=self.body_turn, body_rate=body_rate))
+        # The body's turn from the waist's model, run on the drive sent (no sensor measures it), so the head
+        # counter-rotates at once, and each frame is placed where the camera was then. Negative drive turns
+        # the torso toward positive pan.
+        drive = self.waist_drive
+        drive.advance(now)
+        self._command_head(*self.head_aim.update(
+            now=now, body=drive.model.angle, body_at=lambda when: drive.ahead(when).angle, body_steady=drive.steady(),
+        ))
         self._track_pinned(now, errors)
         self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
-        if not all(self.head_aim.settled):
-            self.head_still_since = None
-        elif self.head_still_since is None:
-            self.head_still_since = now
-        # Turn the torso toward the target, once the head has finished turning: by its bearing from
-        # the body, which reaches past the geared head's few degrees of pan. The head counter-rotates
-        # back toward the middle meanwhile; without a target the waist ramps to a stop.
+        # The waist takes up the head's offset from the middle of its reach (mid-ranging), in planned moves;
+        # without a person it brakes.
         if self.params.waist.enabled:
-            self.waist_motor.throttle = self.waist_drive.update(
-                now=now, pan_offset=self.head_aim.demand() if valid else None,
-                head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
+            track = self.head_aim.tracks[0] if self.head_aim.tracks is not None else None
+            idle = drive.phase is WaistState.IDLE
+            self.waist_motor.throttle = drive.update(
+                now=now, demand=self.head_aim.demand() if valid else None, offset=self.head_aim.pan_offset(),
+                settled=self.head_aim.settled[0], planning=self.head_aim.planning(),
+                person_speed=0.0 if track is None else track.velocity,
             )
+            if idle and drive.phase is not WaistState.IDLE:
+                self.head_aim.replan()  # A move starts: the head plans the rest of the way to the person
         else:
             self.waist_motor.throttle = 0.0  # Off: braked, so only motor tests turn the waist
-        self.waist_mode = self.waist_drive.state
+        drive.sent(self.waist_motor.throttle)  # As it reached the motor, after the actuator limits
+        self.waist_mode = drive.state
         # Publish explicit loss as well as valid lock state so the jaw can release. Angles as commanded.
         await self.pubsub.publish(ServoStateTopic, ServoStateMessage(
             pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=self.roll_angle,
@@ -311,11 +309,11 @@ class OrientationNode(Node):
 
     async def run(self) -> None:
         """Main control loop."""
-        waist = self.params.waist
+        waist, aim = self.params.waist, self.params.aim
         logger.info(
-            f"Starting OrientationNode [pan up to {self.params.aim.pan_speed:.0f} deg/s at {self.params.aim.pan_acceleration:.0f} deg/s^2, "
-            f"waist {waist.min_throttle:.2f}-{waist.max_throttle:.2f} from {waist.start_throttle:.2f}, "
-            f"ramps +{waist.ramp_up:.1f}/-{waist.ramp_down:.1f} per s]"
+            f"Starting OrientationNode [pan up to {aim.pan_speed:.0f} deg/s at {aim.pan_acceleration:.0f} deg/s^2, "
+            f"waist moves from {waist.start_offset:.0f} deg held {waist.start_hold:.1f} s (at once past {waist.start_now:.0f}), "
+            f"kick {waist.kick_throttle:.2f}, running {waist.run_throttle:.2f}-{waist.max_throttle:.2f}]"
         )
         
         try:

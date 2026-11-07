@@ -97,10 +97,11 @@ def test_the_waist_drive_starts_over_after_a_stall():
     params = WaistDriveParams()
     drive = WaistDrive(params)
     for tick in range(50):
-        drive.update(now=tick * 0.01, pan_offset=30.0)
-    assert drive.phase is WaistState.TURNING and drive.level > params.start_throttle
-    command = drive.update(now=2.0, pan_offset=30.0)  # 1.5 s without an update: the watchdog braked it
-    assert command == -params.start_throttle  # A new move, from rest, not the old drive
+        drive.advance(tick * 0.01)
+        drive.sent(drive.update(now=tick * 0.01, demand=40.0))
+    assert drive.phase is WaistState.TURNING and drive.queue  # Turning, with commands decided ahead
+    command = drive.update(now=2.0, demand=40.0)  # 1.5 s without an update: the watchdog braked it
+    assert command == 0.0 and drive.phase is WaistState.KICK  # A new move, from rest: no stale command resumes
 
 
 def test_the_orientation_loop_ticks_the_watchdog_and_disarms_it_when_stopped():

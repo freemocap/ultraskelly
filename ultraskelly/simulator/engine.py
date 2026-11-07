@@ -43,7 +43,8 @@ class Settings(BaseModel):
     # Pan's top turning speed, degrees of view per second; None keeps the controller's own (HeadAimParams.pan_speed)
     head_speed: float | None = Field(default=None, gt=0, le=150)
     head_deadzone: int = Field(default=100, ge=0, le=240)
-    waist_gain: float = Field(default=0.008, gt=0, le=0.05)
+    # The head's settled pan offset that starts a waist move, degrees of view (WaistDriveParams.start_offset)
+    waist_start: float = Field(default=10.0, ge=0, le=60)
     # The waist as measured on 2026-11-06 (plant.WAIST): it needs more than 0.6 drive to break loose
     # and turns 50 deg/s at full negative drive but 21.5 at full positive drive.
     waist_speed: float = Field(default=plant.WAIST.speed_negative, ge=0, le=180)  # At full negative drive
@@ -168,7 +169,7 @@ class Simulation:
         if settings.head_speed is not None:
             self.head.params.aim.pan_speed = settings.head_speed
         self.head.params.head_deadzone = settings.head_deadzone
-        self.head.params.waist.gain = settings.waist_gain
+        self.head.params.waist.start_offset = settings.waist_start
         if hasattr(self, "axes"):  # Plant settings take effect from here on, the axes where they stand
             for name, axis in self.build_axes().items():
                 self.axes[name].model = axis.model

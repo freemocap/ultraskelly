@@ -18,7 +18,7 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
         await sim.step(2000)
         assert sim.waist * yaw > 0
         assert abs(sim.waist) > 20
-        assert abs(sim.head_turn()[0]) <= sim.head.params.waist.start_angle  # The head, not its geared servo
+        assert abs(sim.head_turn()[0]) <= sim.head.params.waist.start_offset  # The head, not its geared servo
         assert sim.head.waist_motor.throttle == 0
         assert abs(sim.camera()["x"] - 320) <= settled_pixels(sim)
         assert abs(sim.camera()["y"] - 240) <= settled_pixels(sim)
@@ -29,7 +29,7 @@ def test_waist_turns_toward_target_and_head_returns_near_neutral(yaw):
     asyncio.run(scenario())
 
 
-def test_waist_turns_in_one_ramped_move_without_braking():
+def test_waist_turns_in_one_planned_move_kick_run_brake():
     async def scenario():
         sim = Simulation(Settings(scenario="manual", yaw=30, pitch=5))
         drive = sim.head.params.waist
@@ -39,20 +39,20 @@ def test_waist_turns_in_one_ramped_move_without_braking():
             commands.append(sim.head.waist_motor.throttle)
         moving = [index for index, command in enumerate(commands) if command not in (None, 0.0)]
         move = commands[moving[0]:moving[-1] + 1]
-        assert all(command not in (None, 0.0) for command in move)  # One continuous move: no pulses
-        steps = [abs(b - a) for a, b in zip(move[1:], move[2:])]
-        assert max(steps) <= max(drive.ramp_up, drive.ramp_down) * sim.dt + 1e-9
-        assert abs(move[0]) == drive.start_throttle
+        assert all(command not in (None, 0.0) for command in move)  # One continuous move: no pulses, no coasting
+        kick = round(drive.kick_seconds / sim.dt)
+        assert move[:kick] == [-drive.kick_throttle] * kick  # Breaking loose at once, not ramping up to it
+        assert all(drive.run_throttle <= abs(command) <= drive.max_throttle for command in move[kick:])
         after = commands[moving[-1] + 1:]
-        assert after[0] is None and after[-1] == 0.0  # Released to coast, then braked at rest
+        assert all(command == 0.0 for command in after)  # Braked from its slowest speed, and held
         sim.close()
     asyncio.run(scenario())
 
 
 def test_a_sticky_waist_still_breaks_loose_and_recenters_in_one_move():
     async def scenario():
-        # Breaking loose takes more drive than the running drive at 25 degrees (0.58); turning needs 0.35.
-        sim = Simulation(Settings(scenario="manual", yaw=25, pitch=5, waist_breakaway=0.6, waist_stall=0.35))
+        # Breaking loose takes more than the running drive (0.55 would never start it); the kick does it.
+        sim = Simulation(Settings(scenario="manual", yaw=25, pitch=5, waist_breakaway=0.72, waist_stall=0.5))
         drive = sim.head.params.waist
         commands = []
         for _ in range(1500):
@@ -61,9 +61,8 @@ def test_a_sticky_waist_still_breaks_loose_and_recenters_in_one_move():
         moving = [index for index, command in enumerate(commands) if command not in (None, 0.0)]
         move = commands[moving[0]:moving[-1] + 1]
         assert all(command not in (None, 0.0) for command in move)  # One continuous move
-        assert max(abs(command) for command in move) >= 0.6  # The breakaway extra got it going
-        assert max(abs(command) for command in move) <= drive.breakaway_throttle
-        assert sim.waist > 10 and abs(sim.head_turn()[0]) <= drive.start_angle
+        assert max(abs(command) for command in move) == drive.kick_throttle  # The kick got it going
+        assert sim.waist > 10 and abs(sim.head_turn()[0]) <= drive.start_offset
         assert commands[-1] == 0.0
         sim.close()
     asyncio.run(scenario())

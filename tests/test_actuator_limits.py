@@ -79,8 +79,10 @@ def test_default_limits_match_the_controllers_existing_travel():
     limits = ActuatorLimits()
 
     assert limits.servo_range("pan") == limits.servo_range("tilt") == (0.0, 180.0)
-    # The waist drive's ceiling stays within the hard limit (gentler since 2026-11-06: 0.7 of the limit's 0.8).
-    assert OrientationNodeParams().waist.breakaway_throttle <= limits.waist_max_throttle == 0.8
+    # The waist drive's kick and running ceiling stay within the hard limit, 0.8, so the waist's model runs on
+    # what the motor really gets.
+    waist = OrientationNodeParams().waist
+    assert max(waist.kick_throttle, waist.max_throttle) <= limits.waist_max_throttle == 0.8
     assert limits.mouth_max_throttle == 1.0
     assert limits.servo_range("servo5") is None and limits.max_throttle("motor3") is None
 

@@ -24,7 +24,7 @@ from typing import Literal, Sequence
 from pydantic import Field
 
 from ultraskelly.core.bot.base_abcs import NodeParams
-from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, s_curve_step
+from ultraskelly.core.bot.motor.waist_drive import MAX_STEP
 from ultraskelly.core.pubsub.bot_topics import FaceObservation
 
 LEVEL = 90.0  # Roll servo degrees at which the head stands upright
@@ -78,6 +78,25 @@ class RollLevelParams(NodeParams):
     )
     max_tilt: float = Field(default=40.0, gt=0.0, le=90.0, description="Eye lines steeper than this in the picture are not trusted")
     max_yaw: float = Field(default=40.0, gt=0.0, le=90.0, description="Faces turned further than this from the camera are not used")
+
+
+def s_curve_step(level: float, rate: float, target: float, *, up: float, down: float, jerk: float, dt: float) -> tuple[float, float]:
+    """One tick of a jerk-limited ramp: move `level` toward `target`, its rate of change at most `up`
+    (rising) or `down` (falling) per second, that rate changing at most `jerk` per second squared.
+    Returns the new level and rate."""
+    error = target - level
+    if error == 0.0 and rate == 0.0:
+        return level, rate
+    limit = up if error > 0 else down
+    # The fastest rate that can still ease to zero, at `jerk` in steps of `dt`, by the time the
+    # target is reached: it covers rate**2 / (2 * jerk) + rate * dt / 2 while easing off.
+    half_step = jerk * dt / 2.0
+    wanted = math.copysign(min(limit, math.sqrt(half_step**2 + 2.0 * jerk * abs(error)) - half_step), error)
+    rate += max(-jerk * dt, min(jerk * dt, wanted - rate))
+    moved = level + rate * dt
+    if (target - moved) * error <= 0.0 and abs(rate) <= jerk * dt:  # Arrived slowly enough to stop: settle
+        return target, 0.0
+    return moved, rate  # Otherwise ease through and back, as a target that moved toward the ramp needs
 
 
 def eye_line(face: FaceObservation) -> float:

@@ -16,9 +16,9 @@ delays the response without feeding back; only the model's errors feed back.
 
 **Where they will be.** An alpha-beta tracker follows each axis's direction in the base's frame and predicts
 it forward across the head's own delay (`prediction_lead`). It is reset whenever someone new is believed, is
-never fed detections older than `stale_after`, and learns the person's speed only while they are within
-`follow_offset` of the picture's middle (while the head still catches up, the estimate drifts with the
-model's errors). That speed counts only above `min_target_speed`, for at most `max_lead` degrees and `coast`
+never fed detections older than `stale_after`, and learns the person's speed only within `follow_offset`
+of the picture's middle and never during a planned move or while the waist breaks loose or stops (then the
+estimate drifts with the models' errors). That speed counts only above `min_target_speed`, for at most `max_lead` degrees and `coast`
 seconds after the last sighting, scaled by `prediction_gain` (a walker who stops is overshot by about the
 lead).
 
@@ -49,7 +49,7 @@ commanded (the plan, the feedback, the shaped command) or modelled (the internal
 """
 import math
 from collections import deque
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import Field, model_validator
 
@@ -64,6 +64,8 @@ SERVO_ENDS = (0.0, 180.0)  # The servo's own ends, where its angle scale stops
 STILL_RATE = 1.0  # Degrees of view per second below which a feedback within its settle band may stop at once
 FRAME_PERIOD = 1 / 30  # Seconds between the camera's frames until they show it: the OAK runs at 30 a second
 FRAMES_KEPT = 8  # Recent capture times the frame period is learned from
+BODY_JUMP = 5.0  # Degrees the modelled body cannot turn in one tick: a jump is a new model, not a turn
+OFFSET_BASELINE = 0.2  # Seconds over which the person's offset in the picture must hold for their speed to be learned
 
 
 def zero_vibration(frequency: float, damping: float) -> tuple[float, float, float]:
@@ -229,9 +231,14 @@ class HeadAimParams(NodeParams):
                     "2 x damping / frequency of its mode, 0.058 s",
     )
     follow_offset: float = Field(
-        default=3.0, ge=0.0, le=30.0,
-        description="Degrees from the picture's middle within which a sighting teaches the tracker the person's speed: "
-                    "further off the head is still catching up, and the estimate drifts with the model's errors",
+        default=10.0, ge=0.0, le=40.0,
+        description="Degrees from the picture's middle within which a sighting teaches the tracker the person's speed "
+                    "(never during a planned move, when the estimate drifts with the model's errors)",
+    )
+    steady_offset_rate: float = Field(
+        default=4.0, ge=0.0, le=50.0,
+        description="Degrees per second the person's angle in the picture may change over 0.2 s while the tracker "
+                    "learns their speed: a person the head follows holds their place; one it still turns to closes in",
     )
     min_target_speed: float = Field(
         default=6.0, ge=0.0, le=30.0,
@@ -244,6 +251,12 @@ class HeadAimParams(NodeParams):
     coast: float = Field(
         default=0.3, ge=0.0, le=2.0,
         description="Seconds after the last sighting for which the head still leads where the person was going; then it holds",
+    )
+    counter_rotation: float = Field(
+        default=1.0, ge=0.0, le=1.5,
+        description="Share of the body's planned turn over prediction_lead that the head counter-rotates against "
+                    "ahead of time, as its own commands take that long to reach the camera; 0 counters only the "
+                    "turn so far",
     )
 
     # The settled band: hysteresis around the linkages' play, so jitter never moves a settled head
@@ -406,25 +419,34 @@ class HeadAim:
         """Something else moved the head here (a motor test): hold it here and forget the person."""
         self.servos = [pan, tilt]  # The servo angles last commanded
         views = [self._view(0, pan), self._view(1, tilt)]
-        self.plan, self.plan_rate, self.plan_end = list(views), [0.0, 0.0], list(views)  # The planned moves
-        self.correction, self.correction_rate = [0.0, 0.0], [0.0, 0.0]  # The feedback's part
-        self.view = list(views)  # Plan plus feedback, before shaping: where each axis is commanded to go
+        # The planned moves and the feedback's part, pan's in the base's frame: the views less the body's turn
+        self.plan, self.plan_rate, self.plan_end = list(views), [0.0, 0.0], list(views)
+        self.plan_target = list(views)  # Where each plan heads now: its end, or the span's end before it
+        self.correction, self.correction_rate = [0.0, 0.0], [0.0, 0.0]
+        self.shift = [0.0, 0.0]  # The body's turn, as the commands meet it, that pan's commands take off
+        self.shifted, self.span_rate = [0.0, 0.0], [0.0, 0.0]  # The last shift, and how fast it moves
+        self.view = list(views)  # Plan plus feedback less the shift, before shaping: where each axis is commanded to go
         self.shaped = list(views)  # The views the servos are commanded to, after shaping
         self.settled = [True, True]
         self.retarget = [False, False]  # Someone new was believed: plan a move at the next update
+        self.replanning = False  # The waist starts a move: plan pan's rest of the way at the next update
         self.pushing = [0, 0]  # Which way each servo last pushed its linkage: +1, -1, or 0 not yet
         self.extreme = list(views)  # The furthest shaped view reached since the last reversal
-        self.body = self.body_rate = 0.0  # The body's modelled turn and turning speed at the last update
+        self.body = 0.0  # The body's modelled turn now
+        self.body_at: Callable[[float], float] | None = None  # Where the waist's model and plan put it ahead
+        self.shaped_shift = 0.0  # The body's turn the shaped counter-rotation takes off
         for model, servo in zip(self.models, self.servos):
             model.place(servo)
         self.tracks: list[Track] | None = None  # The person followed: pan (base frame) and tilt
         self.candidate: tuple[float, float] | None = None  # Someone new, not believed yet
         self.sightings: deque[float] = deque()  # The capture times the candidate was seen at
-        self.history: deque[tuple[float, float, float, float]] = deque()  # (time, modelled pan view, tilt view, body)
+        # (time, modelled pan view, tilt view, body turn, whether the body turned steadily then), each control tick
+        self.history: deque[tuple[float, float, float, float, bool]] = deque()
         self.planned: deque[tuple[float, float, float]] = deque()  # (time, pan, tilt planned move) before shaping
         self.last_update: float | None = None
         self.last_frame: float | None = None  # The capture time of the newest frame counted
         self.frames: deque[float] = deque(maxlen=FRAMES_KEPT)  # Recent capture times, to learn the frame period
+        self.offsets: deque[tuple[float, float, float]] = deque()  # (capture time, the person's angle across and down)
 
     @property
     def candidate_count(self) -> int:
@@ -437,22 +459,35 @@ class HeadAim:
         return None if self.tracks is None else self.tracks[0].position - self.body
 
     def pan_offset(self) -> float:
-        """The pan view the head is commanded toward (plan plus feedback, before shaping): its offset from the
-        body's front. Commanded, not measured."""
+        """The pan view the head is commanded toward (plan plus feedback less the body's turn, before shaping):
+        its offset from the body's front. Commanded, not measured."""
         return self.view[0]
 
-    def _pointing(self, when: float) -> tuple[float, float, float]:
-        """Where the internal model says the camera pointed at `when` (pan and tilt views), and the body's
-        turn then, interpolated between control ticks."""
+    def replan(self) -> None:
+        """The waist starts a move: if pan holds at an end of its span with a still person beyond, plan the rest
+        of the way to them in the base's frame now. The planned move then follows the span's end as the body
+        turns, no faster than it can still stop on the person, so the camera lands on them while the waist
+        turns, rather than finishing the approach after it stops."""
+        self.replanning = True
+
+    def planning(self, axis: int = 0) -> bool:
+        """Whether an axis's planned move is still under way (pan's by default): not yet at its end, or at the
+        span's end where its own lies beyond."""
+        return self.plan_rate[axis] != 0.0 or self.plan[axis] != self.plan_target[axis]
+
+    def _pointing(self, when: float) -> tuple[float, float, float, bool]:
+        """Where the internal model says the camera pointed at `when` (pan and tilt views) and the body's turn
+        then, interpolated between control ticks, and whether the body was turning steadily (or not at all)."""
         if not self.history:
-            return self.models[0].view, self.models[1].view, self.body
+            return self.models[0].view, self.models[1].view, self.body, True
         before = self.history[0]
         if when <= before[0]:
             return before[1:]
         for entry in self.history:
             if entry[0] >= when:
                 share = (when - before[0]) / (entry[0] - before[0]) if entry[0] > before[0] else 1.0
-                return tuple(a + share * (b - a) for a, b in zip(before[1:], entry[1:]))
+                pan, tilt, body = (a + share * (b - a) for a, b in zip(before[1:4], entry[1:4]))
+                return pan, tilt, body, before[4] and entry[4]
             before = entry
         return before[1:]
 
@@ -485,13 +520,20 @@ class HeadAim:
         seen = captured if captured is not None else now - p.assumed_latency
         if now - seen > p.stale_after or not self._count_frame(seen):
             return  # Too old to steer by, or a frame already counted
-        pan_then, tilt_then, body_then = self._pointing(seen)
+        pan_then, tilt_then, body_then, steady = self._pointing(seen)
         focal = p.px_per_degree * 180.0 / math.pi  # The pinhole's focal length in pixels
         seen_x, seen_y = math.degrees(math.atan(error_x / focal)), math.degrees(math.atan(error_y / focal))
         estimate = (body_then + pan_then + p.pan_direction * seen_x, tilt_then + p.tilt_direction * seen_y)
-        # Only a person the camera follows shows how fast they go: while the head catches up, the estimate
-        # drifts with the model's errors (the gearing and pixel scale's, and the parallax) as the head turns.
-        following = math.hypot(seen_x, seen_y) <= p.follow_offset
+        # Only a person the camera follows shows how fast they go: one it follows holds their place in the
+        # picture, while one it is still turning to closes in, and then the estimate drifts with the model's
+        # errors (the gearing and pixel scale's, and the parallax) as the head turns; so it does while the waist
+        # breaks loose or stops, with the waist model's.
+        self.offsets.append((seen, seen_x, seen_y))
+        while len(self.offsets) > 2 and self.offsets[1][0] <= seen - OFFSET_BASELINE:
+            self.offsets.popleft()
+        then, then_x, then_y = self.offsets[0]
+        holding = seen - then >= OFFSET_BASELINE / 2 and math.hypot(seen_x - then_x, seen_y - then_y) <= p.steady_offset_rate * (seen - then)
+        following = math.hypot(seen_x, seen_y) <= p.follow_offset and holding and steady and not self.planning(0)
         at_edge = abs(error_x) > FRAME[0] / 2 - p.edge_margin  # Left or right only: see edge_margin
         if self.tracks is not None and not at_edge:
             tracked = tuple(track.position + track.velocity * (seen - track.time) for track in self.tracks)
@@ -509,59 +551,97 @@ class HeadAim:
             self.candidate, self.sightings = None, deque()
             self.retarget = [True, True]
 
-    def _aim(self, axis: int, now: float) -> tuple[float, float]:
-        """Where this axis should point now, and how fast that moves: the person's predicted direction across
-        the head's own delay, less the body's predicted turn for pan; it may lie beyond the axis's span."""
+    def _rebase(self, jump: float) -> None:
+        """Move everything held in the base's frame by `jump`, so the head holds still when the body's model
+        starts again from another angle."""
+        self.plan[0] += jump
+        self.plan_end[0] += jump
+        self.plan_target[0] += jump
+        if self.tracks is not None:
+            self.tracks[0].position += jump
+        if self.candidate is not None:
+            self.candidate = (self.candidate[0] + jump, self.candidate[1])
+        self.history = deque((t, pan, tilt, body + jump, steady) for t, pan, tilt, body, steady in self.history)
+
+    def shaper_lead(self) -> float:
+        """Seconds the pan shaper delays a planned path on average (A2 x its delay), 0 without the shaper."""
         p = self.params
-        aim, rate = self.tracks[axis].lead(now + p.prediction_lead, p)
-        if axis == 0:
-            aim -= self.body + self.body_rate * p.prediction_lead
-            rate -= self.body_rate
-        low, high = self.span(axis)
-        return aim, (0.0 if aim <= low or aim >= high else rate)
+        if not p.shaper:
+            return 0.0
+        _, second, delay = zero_vibration(p.pan_frequency, (p.pan_damping + p.pan_damping_down) / 2)
+        return second * delay
+
+    def _shift(self, lead: float) -> float:
+        """How far the body will have turned `lead` seconds from now, by the waist's model and plan (the share
+        counter_rotation of the turn still to come): pan is planned in the base's frame and commanded less
+        this, so it counter-rotates against the body's turn as its commands reach the camera."""
+        ahead = self.body if self.body_at is None else self.body_at(self.last_update + lead)
+        return self.body + self.params.counter_rotation * (ahead - self.body)
 
     def _turn(self, axis: int, now: float, dt: float) -> None:
-        """Move this axis's plan and feedback on by one tick."""
+        """Move this axis's plan and feedback on by one tick, in the base's frame for pan."""
         p = self.params
         gain, speed, acceleration, settle, resume = (
             (p.pan_gain, p.pan_speed, p.pan_acceleration, p.pan_settle, p.pan_resume) if axis == 0
             else (p.tilt_gain, p.tilt_speed, p.tilt_acceleration, p.tilt_settle, p.tilt_resume))
-        aim, wanted_rate = self._aim(axis, now)
-        low, high = self.span(axis)
+        # Where the person will be across the head's own delay, and how fast they go
+        aim, wanted_rate = self.tracks[axis].lead(now + p.prediction_lead, p)
+        low, high = (end + self.shift[axis] for end in self.span(axis))  # The span as the body will have it
+        if dt:
+            self.span_rate[axis] = (self.shift[axis] - self.shifted[axis]) / dt  # How fast the body moves the span
+        self.shifted[axis] = self.shift[axis]
+        if aim <= low or aim >= high:
+            wanted_rate = 0.0
         wanted = min(max(aim, low), high)  # Beyond its reach an axis goes to the end of its span and holds there
-        if self.retarget[axis]:  # Someone new: a planned move, reach of the way there, from where the plan stands
+        if self.retarget[axis]:  # Someone new: a planned move, reach of the way there, within the span
             self.retarget[axis] = False
-            self.plan_end[axis] = min(max(self.plan[axis] + p.reach * (wanted - self.view[axis]), low), high)
+            self.plan_end[axis] = min(max(self.plan[axis] + p.reach * (wanted - self.plan[axis] - self.correction[axis]), low), high)
             self.settled[axis] = False
+        if self.replanning and axis == 0:  # The waist is about to bring a still person beyond reach within it
+            self.replanning = False
+            if wanted_rate == 0.0 and (aim > high or aim < low):
+                self.plan_end[0] = self.plan[0] + p.reach * (aim - self.plan[0] - self.correction[0])
+                self.settled[0] = False
+        # The planned move heads for its end, or for the span's end while its own lies beyond: it stops there
+        # without hitting it, and as the body turns the span, it follows no faster than it can still stop on
+        # its own end, which the body's turn then brings within reach.
+        target = self.plan_target[axis] = min(max(self.plan_end[axis], low - self.correction[axis]), high - self.correction[axis])
+        blocked = 0 if target == self.plan_end[axis] else (1 if target < self.plan_end[axis] else -1)
         self.plan[axis], self.plan_rate[axis] = move_step(
-            self.plan[axis], self.plan_rate[axis], self.plan_end[axis], speed=speed, acceleration=acceleration, dt=dt,
+            self.plan[axis], self.plan_rate[axis], target, speed=speed, acceleration=acceleration, dt=dt,
         )
-        off = wanted - self.plan_end[axis] - self.correction[axis]  # What the plan leaves the feedback
+        off = wanted - target - self.correction[axis]  # What the plan leaves the feedback, within reach
         if self.settled[axis] and (abs(off) > resume or wanted_rate != 0.0):
-            self.settled[axis] = False  # Out of the band, or following someone moving (or the body turning)
+            self.settled[axis] = False  # Out of the band, or following someone moving
         if not self.settled[axis]:
             # Toward the person, but beyond the span only a settle band past its end: the feedback reaches the
-            # end, slowly enough not to ring the head when the span stops it, rather than easing short of it
+            # end, slowly enough not to ring the head when the span stops it, rather than easing short of it.
+            # Proportional, but never faster than it can still stop from at its acceleration.
             goal = min(max(aim, low - settle), high + settle)
-            rate = min(max(gain * (goal - self.plan_end[axis] - self.correction[axis]) + wanted_rate, -speed), speed)
+            error = goal - target - self.correction[axis]
+            if blocked and error * blocked > 0:
+                error = 0.0  # The plan already presses on the span's end that way: the feedback leaves it to the plan
+            closing = math.copysign(min(gain * abs(error), math.sqrt(2.0 * acceleration * abs(error))), error)
+            rate = min(max(closing + wanted_rate, -speed), speed)
             self.correction_rate[axis] += max(-acceleration * dt, min(acceleration * dt, rate - self.correction_rate[axis]))
             self.correction[axis] += self.correction_rate[axis] * dt
-            moving = self.plan_rate[axis] != 0.0 or self.plan[axis] != self.plan_end[axis]
-            if abs(off) <= settle and wanted_rate == 0.0 and abs(self.correction_rate[axis]) <= STILL_RATE and not moving:
+            if abs(off) <= settle and wanted_rate == 0.0 and abs(self.correction_rate[axis]) <= STILL_RATE and not self.planning(axis):
                 self.settled[axis], self.correction_rate[axis] = True, 0.0
-        # The span is the feedback's only limit, and its anti-windup: it stops at the end and turns back at once
+        # The span is the feedback's only limit, and its anti-windup: it stops at the end, and turns back at once.
+        # Held there, it keeps the end's own speed as the body turns, so it leaves the end smoothly once it must
+        # slow down to stop on the person.
         total = self.plan[axis] + self.correction[axis]
         if total > high or total < low:
             self.correction[axis] = min(max(total, low), high) - self.plan[axis]
-            self.correction_rate[axis] = 0.0
-        self.view[axis] = self.plan[axis] + self.correction[axis]
+            self.correction_rate[axis] = (self.span_rate[axis] if dt else 0.0) - self.plan_rate[axis]
+        self.view[axis] = self.plan[axis] + self.correction[axis] - self.shift[axis]
 
     def _shape(self, now: float) -> None:
-        """The views to command now: each axis's planned move split by its zero-vibration shaper, A1 of it now
-        and A2 of what was planned half a ringing period ago, so the ringing the first part starts, the second
-        cancels; plus the feedback's part, unshaped."""
+        """The views to command now: each axis's planned move, pan's less the body's planned turn, split by its
+        zero-vibration shaper, A1 of it now and A2 of what was planned half a ringing period ago, so the ringing
+        the first part starts, the second cancels; plus the feedback's part, unshaped."""
         p = self.params
-        self.planned.append((now, self.plan[0], self.plan[1]))
+        self.planned.append((now, self.plan[0] - self.shaped_shift, self.plan[1]))  # Pan's in the body's frame
         modes = ((p.pan_frequency, (p.pan_damping + p.pan_damping_down) / 2),
                  (p.tilt_frequency, (p.tilt_damping + p.tilt_damping_down) / 2))
         longest = 0.0
@@ -571,7 +651,7 @@ class HeadAim:
                 continue
             first, second, delay = zero_vibration(*mode)
             longest = max(longest, delay)
-            shaped_plan = first * self.plan[axis] + second * self._planned_at(now - delay, axis)
+            shaped_plan = first * self.planned[-1][axis + 1] + second * self._planned_at(now - delay, axis)
             self.shaped[axis] = shaped_plan + self.correction[axis]
         while len(self.planned) > 2 and self.planned[1][0] <= now - longest - MAX_STEP:
             self.planned.popleft()
@@ -606,20 +686,30 @@ class HeadAim:
         low, high = self._range(axis)
         self.servos[axis] = min(max(servo, low), high)
 
-    def update(self, *, now: float, body: float = 0.0, body_rate: float = 0.0) -> tuple[float, float]:
-        """This tick's pan and tilt servo commands, for a body turned `body` degrees and turning `body_rate`
-        degrees per second (both from the waist's model)."""
+    def update(self, *, now: float, body: float = 0.0, body_at: Callable[[float], float] | None = None,
+               body_steady: bool = True) -> tuple[float, float]:
+        """This tick's pan and tilt servo commands, for a body turned `body` degrees now by the waist's model;
+        `body_at(time)` says where the waist's model and plan put it a little ahead (None: still);
+        `body_steady`: whether it turns steadily or not at all, rather than breaking loose or stopping, where
+        its model is least sure."""
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
-        self.body, self.body_rate = body, body_rate
+        if abs(body - self.body) > BODY_JUMP:
+            self._rebase(body - self.body)  # A new waist model (following switched, a motor test): not a turn
+        self.body, self.body_at = body, body_at
         for model in self.models:  # Where the commands sent so far have taken the camera by now
             model.advance(now, dt)
-        self.history.append((now, self.models[0].view, self.models[1].view, body))
+        self.history.append((now, self.models[0].view, self.models[1].view, body, body_steady))
         while len(self.history) > 2 and self.history[1][0] < now - HISTORY_SECONDS:
             self.history.popleft()
+        self.shift = [self._shift(self.params.prediction_lead), 0.0]
+        # The shaper delays the counter-rotation on average by its lead, so it takes the body's turn that much later
+        self.shaped_shift = self._shift(self.params.prediction_lead + self.shaper_lead())
         if self.tracks is not None:
             for axis in (0, 1):
                 self._turn(axis, now, dt)
+        else:
+            self.view[0] = self.plan[0] + self.correction[0] - self.shift[0]
         self._shape(now)
         for axis, model in enumerate(self.models):
             self._command(axis)

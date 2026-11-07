@@ -114,22 +114,22 @@ class Profile:
         return level
 
 
-def drive_profile(params: WaistDriveParams, angle: float = 30.0, closing_dps: float = 20.0) -> Profile:
-    """One recentering move of the bot's own waist drive, replayed open loop.
-
-    The drive sees a head `angle` degrees off center coming back at `closing_dps`, as the camera
-    loop would bring it back while the waist turns, until the drive has stopped and braked.
-    """
+def drive_profile(params: WaistDriveParams, angle: float = 30.0) -> Profile:
+    """One planned move of the bot's own waist drive toward a still person `angle` degrees off (negative pan,
+    so positive drive), replayed open loop: the drive sees the person come round as its own model of the
+    waist turns, as a perfect picture would show, until it has braked. The leading zeros are its plan_ahead."""
     drive, steps = WaistDrive(params), []
     while len(steps) * CONTROL_PERIOD < MAX_MOVE_SECONDS:
         t = len(steps) * CONTROL_PERIOD
-        value = drive.update(now=t, pan_offset=-max(0.0, angle - closing_dps * t))  # Negative pan: positive drive
+        drive.advance(t)
+        value = drive.update(now=t, demand=-angle - drive.model.angle)
+        drive.sent(value)
         steps.append(value)
-        if value == 0.0 and t > 0:
+        if value == 0.0 and any(steps) and drive.model.speed == 0.0:
             break
     return Profile(
-        f"the bot's drive for a {angle:.0f} degree recentering (head back at {closing_dps:.0f} deg/s)",
-        seconds=len(steps) * CONTROL_PERIOD, steps=tuple(steps), slow_decay=params.slow_decay,
+        f"the bot's planned move toward someone {angle:.0f} degrees off", seconds=len(steps) * CONTROL_PERIOD,
+        steps=tuple(steps), slow_decay=params.slow_decay,
     )
 
 

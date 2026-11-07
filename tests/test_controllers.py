@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
+from ultraskelly.core.bot.motor.waist_drive import WaistState
 from ultraskelly.core.pubsub.bot_topics import ServoStateTopic, TargetLocationMessage, TargetLocationTopic
 from ultraskelly.replay import create_controllers, replay
 
@@ -34,6 +35,7 @@ def test_a_target_held_at_the_frame_corner_turns_the_head_to_the_edge_of_its_ran
     async def scenario():
         bus, node, _ = create_controllers()
         aim = node.params.aim  # The head keeps end_margin inside its servo windows
+        node.params.waist.enabled = False  # A target glued to the corner would run away from a turning body
         await follow(bus, node, 640, 0, 6.0)
         assert node.pan_angle == pytest.approx(aim.pan_range[1] - aim.end_margin)
         assert node.tilt_angle == pytest.approx(aim.tilt_range[0] + aim.end_margin, abs=1e-3)  # The goal halves its way down
@@ -42,27 +44,27 @@ def test_a_target_held_at_the_frame_corner_turns_the_head_to_the_edge_of_its_ran
     asyncio.run(scenario())
 
 
-def test_waist_drives_continuously_while_the_head_is_turned():
+def test_a_person_beyond_the_heads_reach_starts_one_planned_waist_move():
     async def scenario():
         bus, node, _ = create_controllers()
-        node.params.waist.degrees_per_second = 0.0  # The head holds still instead of counter-rotating
         now = [100.0]
         node.clock = lambda: now[0]
-        node.pan_angle = 152  # 16 degrees of view, inside pan's window: the target ahead is past where the waist starts
+        node.pan_angle = 164.0  # The end of pan's span (19.2 degrees): the person 10 px further right is beyond its reach
         commands = []
-        for tick in range(300):  # Three seconds; the old controller braked after half of one
-            if tick % 10 == 0:
-                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320, y=240))
+        for tick in range(150):
+            if tick % 3 == 0:
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=330, y=240, captured=now[0]))
             await node.step()
             commands.append(node.waist_motor.throttle)
             now[0] += 0.01
         moving = [index for index, command in enumerate(commands) if command]
-        assert moving[0] <= 10 * node.params.aim.jump_samples  # Once the target has shown up that many times in a row
-        move = commands[moving[0]:]
-        assert all(-0.8 <= command < 0 for command in move)  # One continuous move
-        assert move[0] == -node.params.waist.start_throttle
-        # The head never comes back here, so the drive rises to its breakaway ceiling.
-        assert move[-1] == pytest.approx(-node.params.waist.breakaway_throttle)
+        waist = node.params.waist
+        # Believed after 4 frames (0.1 s), the move is decided at once and sent plan_ahead later
+        assert moving[0] * 0.01 <= 0.1 + 0.05 + waist.plan_ahead + 0.02
+        kick = round(waist.kick_seconds / 0.01)
+        assert commands[moving[0]:moving[0] + kick] == [-waist.kick_throttle] * kick  # Positive pan: negative drive
+        assert all(-waist.max_throttle <= command <= 0.0 for command in commands)  # Never coasting, never the other way
+        assert node.waist_mode is not WaistState.IDLE or commands[-1] == 0.0
         bus.close()
     asyncio.run(scenario())
 
@@ -99,6 +101,7 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
     bus, node, _ = create_controllers()
     assert node.params.servo_names == {3: "pan", 11: "tilt", 7: "roll"}
     assert node.servo_kit.servo[7].angle == 90.0
+    node.params.waist.enabled = False  # A target glued to the corner would run away from a turning body
     asyncio.run(follow(bus, node, 640, 0, 6.0))
     aim = node.params.aim
     angles = (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle)

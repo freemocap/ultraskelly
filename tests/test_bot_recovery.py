@@ -91,7 +91,7 @@ class Bot:
             waist_motor=self.waist,
             target_subscription=pubsub.get_subscription(TargetLocationTopic),
             # Head at the end of its reach, and the fake camera's person always 10 px further: the waist turns at once
-            pan_angle=165.0,
+            pan_angle=164.0,
         )
         mouth = MouthNode(
             pubsub=pubsub,

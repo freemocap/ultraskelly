@@ -56,9 +56,14 @@ def test_onset_reports_where_the_waist_breaks_loose_and_stalls():
 
 def test_drive_profile_replays_the_bots_waist_drive():
     params, profile = WaistDriveParams(), PROFILES["drive"]
-    drive = WaistDrive(params)
-    bot = [drive.update(now=tick * 0.01, pan_offset=-max(0.0, 30.0 - 20.0 * (tick * 0.01))) for tick in range(len(profile.steps))]
+    drive, bot = WaistDrive(params), []
+    for tick in range(len(profile.steps)):
+        drive.advance(tick * 0.01)
+        bot.append(drive.update(now=tick * 0.01, demand=-30.0 - drive.model.angle))
+        drive.sent(bot[-1])
     bench = [profile.throttle(tick * 0.01) for tick in range(len(profile.steps))]
     assert bench == bot and profile.slow_decay == params.slow_decay
-    assert bench[0] == params.start_throttle and None in bench and bench[-1] == 0.0  # Starts low, coasts, then brakes
+    moving = [value for value in bench if value]
+    assert moving[0] == params.kick_throttle and None not in bench and bench[-1] == 0.0  # Kicks, runs, then brakes
+    assert all(params.run_throttle <= value <= params.max_throttle for value in moving[round(params.kick_seconds / 0.01):])
     assert profile.throttle(profile.seconds + 1) == 0.0 and profile.seconds < 3.0

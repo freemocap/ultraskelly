@@ -1,117 +1,118 @@
+"""The waist's planned moves and its model, on their own: no head, no camera."""
 import pytest
 
-from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistState, s_curve_step
+from ultraskelly.core.bot.motor.waist_drive import WaistDrive, WaistDriveParams, WaistModel, WaistState
 
 TICK = 0.01  # The orientation controller's period
 PARAMS = WaistDriveParams()
 
 
-def run(drive: WaistDrive, offsets: list, start: float = 0.0) -> list:
-    """Feed one head pan offset per tick; return the commands."""
-    return [drive.update(now=start + index * TICK, pan_offset=offset) for index, offset in enumerate(offsets)]
+def follow(drive: WaistDrive, person: float, ticks: int, start: float = 0.0, **head) -> list:
+    """Tick the drive with a still person `person` degrees off the body's front as the waist's own model turns it,
+    as a perfect picture would show; `head` passes the head's offset and settled state. Returns the commands."""
+    commands = []
+    for tick in range(ticks):
+        now = start + tick * TICK
+        drive.advance(now)
+        command = drive.update(now=now, demand=person - drive.model.angle, **head)
+        drive.sent(command)
+        commands.append(command)
+    return commands
 
 
-def closing(start: float, speed: float, ticks: int, floor: float = 0.0) -> list:
-    """Head offsets of a head coming back toward neutral at `speed` degrees per second."""
-    return [max(floor, start - speed * index * TICK) for index in range(ticks)]
+def test_the_model_breaks_loose_only_past_breakaway_and_turns_its_own_speed_each_way():
+    for drive, moved in ((-0.6, False), (-0.7, True), (0.7, True)):
+        model = WaistModel(PARAMS)
+        for _ in range(100):
+            model.advance(drive, TICK)
+        assert (abs(model.angle) > 1.0) is moved
+    fast, slow = WaistModel(PARAMS), WaistModel(PARAMS)
+    for _ in range(200):
+        fast.advance(-0.8, TICK)
+        slow.advance(0.8, TICK)
+    assert fast.speed == pytest.approx(0.8 * PARAMS.speed_negative, rel=0.01)  # Negative drive: toward positive pan
+    assert slow.speed == pytest.approx(-0.8 * PARAMS.speed_positive, rel=0.01)
+    assert fast.stopping_distance() == pytest.approx(fast.speed * 0.02, rel=0.2)  # Braked, it stops within a degree
 
 
-def steps(values: list) -> list:
-    return [b - a for a, b in zip(values, values[1:])]
-
-
-def test_s_curve_ramps_limit_rate_and_jerk_and_settle_exactly():
-    level, rate, levels = 0.15, 0.0, [0.15]
-    for _ in range(100):
-        level, rate = s_curve_step(level, rate, 0.6, up=1.5, down=2.0, jerk=10.0, dt=TICK)
-        levels.append(level)
-    rates = [step / TICK for step in steps(levels)]
-    assert levels[-1] == 0.6 and max(rates) <= 1.5 + 1e-9 and min(rates) >= 0  # Never overshoots
-    assert max(abs(r) for r in steps(rates[:-1])) <= 10.0 * TICK + 1e-9  # Rate changes no faster than the jerk limit
-    assert rates[0] <= 10.0 * TICK + 1e-9  # Starts gently
-
-
-def test_a_move_starts_low_and_eases_up_without_pulses():
+def test_a_move_kicks_runs_through_the_model_and_brakes_where_it_leaves_the_head_its_share():
     drive = WaistDrive(PARAMS)
-    commands = run(drive, closing(30.0, 4.0, 150))  # The head comes back slowly: the waist is moving
-    assert commands[0] == -PARAMS.start_throttle  # Positive pan turns the torso with negative drive
-    assert all(command < 0 for command in commands)  # One move, never braked or released
-    assert max(abs(step) for step in steps(commands)) <= PARAMS.ramp_up * TICK + 1e-9
-    assert max(abs(c) for c in commands) <= drive.running_throttle(30.0) + 1e-9  # No breakaway extra: it moved
-    assert drive.state is WaistState.TURNING
+    commands = follow(drive, 30.0, 300)  # Beyond the head's reach: a move starts at once
+    moving = [index for index, command in enumerate(commands) if command]
+    assert moving[0] == round(PARAMS.plan_ahead / TICK)  # Decided at once, sent plan_ahead later
+    kick = commands[moving[0]:moving[0] + round(PARAMS.kick_seconds / TICK)]
+    assert all(command == -PARAMS.kick_throttle for command in kick)  # Positive offset: negative drive
+    running = commands[moving[0] + len(kick):moving[-1] + 1]
+    assert all(-PARAMS.max_throttle <= command <= -PARAMS.run_throttle for command in running)  # One move, never coasting
+    assert commands[-1] == 0.0 and drive.model.speed == 0.0
+    assert 30.0 - drive.model.angle == pytest.approx(PARAMS.leave, abs=1.0)  # Stopped by the model, not overshooting
 
 
-def test_polarity_follows_the_head():
-    assert run(WaistDrive(PARAMS), [-30.0])[0] == PARAMS.start_throttle
-    assert run(WaistDrive(PARAMS), [30.0])[0] == -PARAMS.start_throttle
+def test_polarity_follows_the_person():
+    for person, sign in ((30.0, -1), (-30.0, 1)):
+        drive = WaistDrive(PARAMS)
+        commands = follow(drive, person, 40)
+        assert next(command for command in commands if command) == sign * PARAMS.kick_throttle
 
 
-def test_hysteresis_starts_past_start_angle_and_a_stopping_move_does_not_resume():
-    assert run(WaistDrive(PARAMS), [10.0] * 50) == [0.0] * 50  # Inside start_angle: never starts
+def test_mid_ranging_starts_on_a_held_settled_head_offset_or_at_once_past_its_reach():
+    hold = round(PARAMS.start_hold / TICK)
+    def started(person, ticks, **head):
+        drive = WaistDrive(PARAMS)
+        follow(drive, person, ticks, **head)
+        return drive.phase is not WaistState.IDLE
+    assert not started(12.0, 2 * hold, offset=12.0, settled=False)  # The head is still turning: wait
+    assert not started(8.0, 2 * hold, offset=8.0, settled=True)  # Inside the band: the head keeps it
+    assert not started(12.0, hold - 2, offset=12.0, settled=True)  # Not held long enough yet
+    assert started(12.0, hold + 2, offset=12.0, settled=True)
+    assert started(25.0, 2, offset=19.0, settled=False)  # Beyond the head's reach: at once
+    assert not started(25.0, 50, offset=19.0, settled=False, planning=True)  # But only once the head has turned
+
+
+def test_no_move_smaller_than_min_move_and_a_rest_between_moves():
+    small = PARAMS.leave + PARAMS.min_move - 0.5
+    drive = WaistDrive(PARAMS.model_copy(update={"start_offset": 2.0}))
+    assert not any(follow(drive, small, 100, offset=small, settled=True))
     drive = WaistDrive(PARAMS)
-    commands = run(drive, closing(16.0, 10.0, 100, floor=10.0))
-    assert all(command < 0 for command in commands)  # Keeps turning between the two angles
-    later = run(drive, [4.0] * 5 + [10.0] * 95, start=1.0)  # Centered, then the head drifts back out a little
-    assert later[0] < 0  # Eases down rather than stopping at once
-    assert None in later and later[-1] == 0.0  # Still stops: no hunting between 5 and 15 degrees
-    assert all(command in (None, 0.0) or abs(command) <= abs(later[0]) + 0.02 for command in later)
-
-
-def test_stopping_ramps_down_then_coasts_then_brakes():
+    commands = follow(drive, 30.0, 300)
+    ended = max(index for index, command in enumerate(commands) if command) * TICK  # The last drive sent
     drive = WaistDrive(PARAMS)
-    run(drive, closing(40.0, 10.0, 100))
-    commands = run(drive, [None] * 100, start=1.0)  # Target lost
-    ramp = [command for command in commands if command not in (None, 0.0)]
-    assert ramp and max(abs(step) for step in steps(ramp)) <= PARAMS.ramp_down * TICK + 1e-9
-    first_coast = commands.index(None)
-    coast = commands[first_coast:].index(0.0)
-    assert coast * TICK == pytest.approx(PARAMS.coast_duration, abs=1.5 * TICK)
-    assert all(command == 0.0 for command in commands[first_coast + coast:])
-    assert drive.state is WaistState.IDLE
+    follow(drive, 30.0, round(ended / TICK) + 1)
+    stopped, start = drive.model.angle, ended + TICK
+    later = follow(drive, stopped + 25.0, round(0.5 * PARAMS.rest / TICK), start=start)  # Someone new, further on
+    assert not any(later)  # Resting, though the person is now well beyond the head's reach
+    assert any(follow(drive, stopped + 25.0, 200, start=start + 0.5 * PARAMS.rest))
 
 
-def test_a_stuck_waist_gets_breakaway_drive_that_eases_off_once_it_moves():
+def test_a_lost_person_brakes_a_move():
     drive = WaistDrive(PARAMS)
-    stuck = run(drive, [20.0] * 150)  # The head shows no progress: the waist is not turning
-    running = drive.running_throttle(20.0)
-    assert abs(stuck[-1]) > running + 0.1  # Drive rose past the running level
-    assert abs(stuck[-1]) <= PARAMS.breakaway_throttle
-    moving = run(drive, closing(20.0, 15.0, 80, floor=6.0), start=1.5)  # It broke loose; the head comes back
-    assert abs(moving[-1]) < abs(stuck[-1]) - 0.1  # The extra eases off again
+    follow(drive, 40.0, 40)
+    assert drive.phase is WaistState.TURNING
+    commands = []
+    for tick in range(60):
+        now = 0.4 + tick * TICK
+        drive.advance(now)
+        commands.append(drive.update(now=now, demand=None))
+        drive.sent(commands[-1])
+    assert commands[-1] == 0.0 and drive.model.speed == 0.0 and drive.phase is WaistState.IDLE
 
 
-def test_reversing_stops_and_coasts_before_turning_the_other_way():
+def test_the_plan_ahead_shows_where_the_body_will_be():
     drive = WaistDrive(PARAMS)
-    commands = run(drive, closing(30.0, 4.0, 50) + [-30.0] * 150)
-    signs = [None if command is None else command > 0 for command in commands if command != 0.0]
-    first_positive = signs.index(True)
-    assert None in signs[:first_positive]  # Released and coasting between the two directions
-    assert PARAMS.start_throttle in commands  # The new direction starts low again
-
-
-def test_a_long_move_rests_then_resumes():
-    drive = WaistDrive(PARAMS)
-    limit = int(round(PARAMS.max_move_duration / TICK))
-    resume = limit + int(round(PARAMS.rest_duration / TICK))
-    commands = run(drive, [30.0] * (resume + 10))
-    assert all(command < 0 for command in commands[:limit])
-    assert drive.state is WaistState.TURNING
-    assert commands[resume - 1] == 0.0  # Braked while resting
-    assert commands[resume] == -PARAMS.start_throttle
-
-
-def test_resting_is_reported():
-    drive = WaistDrive(PARAMS)
-    run(drive, [30.0] * int(round((PARAMS.max_move_duration + 1.0) / TICK)))
-    assert drive.state is WaistState.RESTING
+    follow(drive, 30.0, 30)  # A move has started
+    now = 29 * TICK
+    ahead = drive.ahead(now + PARAMS.plan_ahead)
+    later = follow(drive, 30.0, round(PARAMS.plan_ahead / TICK), start=now + TICK)
+    assert ahead.angle == pytest.approx(drive.model.angle, abs=0.3)  # The commands queued were the ones sent
+    assert any(later)
 
 
 def test_inconsistent_settings_are_rejected():
     with pytest.raises(ValueError):
-        WaistDriveParams(start_angle=5.0, stop_angle=10.0)
+        WaistDriveParams(stall=0.7, breakaway=0.65)
     with pytest.raises(ValueError):
-        WaistDriveParams(release_throttle=0.6, min_throttle=0.5)
+        WaistDriveParams(run_throttle=0.4)  # At or below the stall
     with pytest.raises(ValueError):
-        WaistDriveParams(max_throttle=0.9)  # Above the breakaway ceiling
+        WaistDriveParams(run_throttle=0.7, max_throttle=0.6)
     with pytest.raises(ValueError):
-        WaistDriveParams(start_throttle=0.0)
+        WaistDriveParams(kick_throttle=0.5)  # Under breakaway

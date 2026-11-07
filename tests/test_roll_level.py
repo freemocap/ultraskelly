@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from ultraskelly.core.bot.motor.roll_level import LEVEL, RollLevel, RollLevelParams, choose_face, eye_line
+from ultraskelly.core.bot.motor.roll_level import LEVEL, RollLevel, RollLevelParams, choose_face, eye_line, s_curve_step
 from ultraskelly.core.pubsub.bot_topics import (
     FaceObservation,
     OakResultsMessage,
@@ -190,3 +190,16 @@ def test_a_target_seen_through_a_rolled_camera_is_turned_back_upright():
     x, y = node._upright(0.0, -100.0, captured=0.2, now=0.3)  # Seen straight above the middle...
     assert (x, y) == pytest.approx((100.0, 0.0), abs=1e-9)  # ...it was to the right of it
     bus.close()
+
+
+def test_s_curve_ramps_limit_rate_and_jerk_and_settle_exactly():
+    tick = 0.01  # The orientation controller's period
+    level, rate, levels = 0.15, 0.0, [0.15]
+    for _ in range(100):
+        level, rate = s_curve_step(level, rate, 0.6, up=1.5, down=2.0, jerk=10.0, dt=tick)
+        levels.append(level)
+    steps = lambda values: [b - a for a, b in zip(values, values[1:])]
+    rates = [step / tick for step in steps(levels)]
+    assert levels[-1] == 0.6 and max(rates) <= 1.5 + 1e-9 and min(rates) >= 0  # Never overshoots
+    assert max(abs(r) for r in steps(rates[:-1])) <= 10.0 * tick + 1e-9  # Rate changes no faster than the jerk limit
+    assert rates[0] <= 10.0 * tick + 1e-9  # Starts gently

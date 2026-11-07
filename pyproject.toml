@@ -16,7 +16,10 @@ hardware = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "cma>=4.5.0",
+    "pytest>=8.0",
+]
 
 [tool.uv.sources]
 # FreeMoCap's stream encoder, from the branch that adapts FreeMoCap's transport for other apps.

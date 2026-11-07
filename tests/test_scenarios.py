@@ -7,15 +7,15 @@ import pytest
 
 from ultraskelly.simulator.scenarios import BY_NAME, SCENARIOS, Scenario, reversals, run, still
 
-# The waist and roll are not tuned on the measured plant yet, and both are off on the robot: the head
-# first, then the waist. Until they are tuned these fail; strictly, so that a pass shows. The waist starts
-# turning only above 0.65 of full drive, at 50 deg/s one way and 21.5 the other, and a person 20 degrees
-# off is beyond the head's reach inside its servo window (about 16.6 degrees). The roll reaches about
-# 1.3 degrees of picture and stops within its 1-degree deadband of where it aims, so a noisy face can end
-# just short of the degree nearer level the judge asks for.
-WAIST_UNTUNED = "beyond the head's reach, and the waist is not tuned on the measured plant yet"
+# The roll is not tuned on the measured plant yet: it reaches about 1.3 degrees of picture and stops within its
+# 1-degree deadband of where it aims, so a noisy face can end just short of the degree nearer level the judge asks for.
+# The waist cannot run slower than about 25 degrees a second toward positive pan (its stall drive, 0.45, at 50.4
+# degrees a second at full drive), so it follows a person walking off that way at 15 degrees a second in moves, and
+# each move turns the head back and then out again after them. Until either is fixed these fail; strictly, so that
+# a pass shows.
 ROLL_UNTUNED = "the roll is not tuned on the measured plant yet: it stops just short of a degree nearer level"
-FAILING_NOW = {"left": WAIST_UNTUNED, "right": WAIST_UNTUNED, "far": WAIST_UNTUNED, "tilt-noisy": ROLL_UNTUNED}
+WAIST_STEPS = "the waist cannot follow a 15 deg/s walker continuously that way: each of its moves turns the head twice"
+FAILING_NOW = {"tilt-noisy": ROLL_UNTUNED, "walk-away": WAIST_STEPS}
 
 
 def marked(scenario: Scenario):
