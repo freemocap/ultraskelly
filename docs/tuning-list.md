@@ -29,9 +29,10 @@ strike items out with the commit that settles them.
 
 6. **Tilt does not reach a face below.** Under servo power the head stops nodding down at
    about servo 100: tilt stepped from 100 to 170 moved it under 0.3 degrees (IMU, run
-   20261107-115052). Tracking still drives tilt to 135, its window's end, and strains the
-   servo. Fix the mechanism first; then set `tilt_range` to the travel the head really has,
-   and re-measure `tilt_ratio` (0.08 so far).
+   20261107-115052). The owner later saw the head go lower at 180 than at 140, so since
+   2026-11-07 following tilts down to the servo's own end, 180. With a face low in the
+   picture it holds there and strains the servo (item 8). Fix the mechanism first; then set
+   `tilt_range` to the travel the head really has, and re-measure `tilt_ratio` (0.08 so far).
 7. **Tilt's sweep speed in tests.** Tilt tests sweep at `servo_speed` (150 servo degrees a
    second). Slow it like pan if the head jerks.
 

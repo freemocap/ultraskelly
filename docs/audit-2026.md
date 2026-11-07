@@ -857,7 +857,9 @@ can make it there then do it") motor tests now take any angle in the servos' 0-1
 are 0-180, and following uses the whole travel `scripts/check_servo_travel.py` measured on
 2026-11-06: pan 10-170 and tilt 10-140. Beyond those, pan jammed after being held at 5, and tilt's
 linkage goes over centre past about 140, where more servo angle turns the head back and following
-would drive the wrong way. Motor tests can still go there. Tilt's measured 0.08 degrees of nod per
+would drive the wrong way. Motor tests can still go there. Later that day the owner saw the head
+go lower at 180 than at 140 ("the face track doesnt go ALL the way down"), so following's tilt now
+runs to the servo's own end, 180. No margin is kept at the servo's own ends (`SERVO_ENDS`). Tilt's measured 0.08 degrees of nod per
 servo degree is unchanged: the whole window nods the head about 10 degrees. If the head goes much
 further by hand, the linkage gives somewhere between servo and head.
 
