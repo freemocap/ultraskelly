@@ -66,6 +66,7 @@
       <p id="control-error">—</p>
     </section>
   </aside>
+  <div class="grip col" data-grip="control" role="separator" aria-orientation="vertical" aria-label="Width of the robot controls"></div>
   <section class="stage" aria-label="3D scene">
     <div id="viewport" aria-label="3D skeleton driven by the live motor commands"></div>
     <div class="stage-head"><h2>3D scene</h2><p>From motor commands, not measured positions</p><p id="stage-head" class="stage-note"></p><p id="stage-note" class="stage-note" hidden></p><p id="stage-limits" class="stage-note" hidden></p></div>
@@ -91,6 +92,8 @@
     <ol id="health-rows" class="parts"></ol>
     <section class="diagnostics" hidden><h3>Live readings <span id="health-readings-age" hidden></span></h3><dl id="health-diagnostics"></dl></section>
   </aside>
+  <div class="grip row" data-grip="strip" role="separator" aria-orientation="horizontal" aria-label="Height of the readout strip"></div>
+  <div class="grip col" data-grip="sensors" role="separator" aria-orientation="vertical" aria-label="Width of the camera column"></div>
   <div class="sensors">
     <section class="sensor oak" aria-label="Tracking camera">
       <div class="sensor-title"><h2>Tracking camera <span id="tracking-name">OAK</span></h2><span id="oak-rate" class="rate">—</span></div>
@@ -104,6 +107,7 @@
         <span id="target-lock"></span><span id="target-angle"></span><span id="target-age"></span>
       </div>
     </section>
+    <div class="grip row" data-grip="oak" role="separator" aria-orientation="horizontal" aria-label="Height of the tracking camera"></div>
     <section class="sensor zed" aria-label="Eyes and depth">
       <div class="sensor-title"><h2>Eyes and depth <span>ZED Mini</span></h2><span id="zed-rate" class="rate">—</span></div>
       <div class="tiles">
@@ -128,10 +132,12 @@
         <span title="Motor values are the commands sent to the boards: the servos have no position feedback and the DC motors no encoders. The ZED's IMU is measured.">commands as sent · no motor reports its position · IMU measured</span></div>
       <canvas id="series" aria-label="Head and drive commands, target offset, face distance and the ZED IMU over the last 30 seconds"></canvas>
     </section>
+    <div class="grip col" data-grip="series-tests" role="separator" aria-orientation="vertical" aria-label="Widths of the time series and the motor tests"></div>
     <section class="card tests" aria-label="Motor tests: move one actuator at a time">
       <div class="card-title"><h2>Motor tests</h2><span id="tests-travel" title="Net waist test drive, throttle-seconds"></span></div>
       <div id="motor-test"><p class="tests-status">Waiting for the bot…</p></div>
     </section>
+    <div class="grip col" data-grip="tests-nodes" role="separator" aria-orientation="vertical" aria-label="Widths of the motor tests and the nodes"></div>
     <section class="card nodes">
       <div class="card-title"><h2>Nodes and rates</h2><span id="node-summary">—</span></div>
       <div id="health-lights" class="lamps" title="Hardware checks: click for details" hidden></div>

@@ -3,21 +3,25 @@
    travel and a switch for following, kept compact. ‹ folds the column to a strip that keeps the beacon. Local
    fonts only: the page stays offline. */
 body.dashboard.control{
-  --control-w:clamp(240px,15vw,300px);
+  /* The usual widths, or those dragged with the handles (resize.js). */
+  --control-w:var(--control-size,clamp(240px,15vw,300px));
   /* The live views share what the column leaves: the sensor column narrower than the dashboard's own. */
-  --sensor-w:clamp(300px,min(28vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),720px);
+  --sensor-w:var(--sensor-size,clamp(300px,min(28vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),720px));
   --on:#3fb950;--on-glow:rgba(63,185,80,.35);--fail:#f85149;--warn:#d29922;--key:#222d33;--key-edge:#3c4c54;
   --console:ui-monospace,"Cascadia Mono","DejaVu Sans Mono",Consolas,monospace;
 }
-body.dashboard.control.control-folded{--control-w:44px}
-body.dashboard.control main.layout{grid-template-columns:var(--control-w) minmax(0,1fr) var(--sensor-w);
-  grid-template-areas:"control stage sensors" "control strip sensors"}
+body.dashboard.control.control-folded{--control-w:44px}  /* Folded wins over a dragged width, which comes back on opening */
+body.dashboard.control main.layout{grid-template-columns:var(--control-w) 8px minmax(0,1fr) 8px var(--sensor-w);
+  grid-template-areas:"control control-grip stage sensors-grip sensors" "control control-grip strip-grip sensors-grip sensors"
+                      "control control-grip strip sensors-grip sensors"}
+.dashboard [data-grip=control]{grid-area:control-grip}
+@media (min-width:1000px){body.dashboard.control:not(.control-folded) [data-grip=control]{display:block}}
 body.dashboard.control .sensors{overflow-x:hidden}
 /* Below 1600 px the strip keeps the time series and the motor tests; the open column's status lamps stand for the
    nodes card. Folded, the strip is the dashboard's own again. */
 @media (min-width:1000px) and (max-width:1599px){
-  body.dashboard.control:not(.control-folded) .strip{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}
-  body.dashboard.control:not(.control-folded) .card.nodes{display:none}
+  body.dashboard.control:not(.control-folded) .strip{grid-template-columns:minmax(0,var(--series-fr,1.7fr)) 8px minmax(0,var(--tests-fr,1fr))}
+  body.dashboard.control:not(.control-folded) :is(.card.nodes,[data-grip=tests-nodes]){display:none}
 }
 
 /* The column: a rack panel, screwed on at its corners. */

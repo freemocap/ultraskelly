@@ -469,6 +469,14 @@ owner had it removed the same day, and the column made smaller and foldable. Tur
 the stop: the bot's service brakes the DC motors as it stops
 (`scripts/stop-motors-after-bot.sh`).
 
+The owner then asked for every panel to be resizable. The 8 px between two panels is now a
+handle (`ultraskelly/ui/dashboard/resize.js`); the browser keeps the sizes, and a
+double-click puts the usual size back ([docs/dashboard.md](dashboard.md#sizing)).
+Checked in headless Chrome against the stand-in bot at 1920×1080 and 1280×720: with
+nothing dragged every panel sits where it did, to the pixel. A reload keeps the dragged
+sizes. The folded column stays 44 px over a dragged width and gets that width back when
+opened. Dragged to every limit, nothing overflows the window. Not yet seen on the Pi.
+
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
 **Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most

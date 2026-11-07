@@ -58,9 +58,10 @@ bot's own server on port 8080 serves the same page without the column.
   it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
   bot is off, the switch says which way its next start goes.
 - **‹ (fold):** folds the column to a 44 px strip that keeps the bot's lamp and state
-  word; a click on the strip opens it again. The browser keeps the choice
-  (`localStorage`), so the Pi's window stays folded across reloads and reboots. Turn off
-  is the way to stop every motor: the bot's service brakes the DC motors as it stops.
+  word; a click on the strip opens it again, at the width it was dragged to, if any (see
+  Sizing). The browser keeps the choice (`localStorage`), so the Pi's window stays
+  folded across reloads and reboots. Turn off is the way to stop every motor: the bot's
+  service brakes the DC motors as it stops.
 - **Answer line:** what the last command did, the same on every page showing the panel.
 - **Status:** the bot's own health checks (see Health) as lamps in five rows: Cameras
   (OAK, ZED Mini), Tracking (OAK models, Hailo-8, Depth), Motors (Servo board, Motor HAT,
@@ -193,6 +194,28 @@ At least 1000 px wide:
 
 Every window at least 562 px tall fits without scrolling. Narrower than 1000 px, the
 page is one scrolling column: 3D scene, OAK, ZED tiles, then the cards.
+
+Every panel can be resized (`resize.js`). The 8 px between two panels is a handle:
+control column and 3D scene, 3D scene and camera column, 3D scene and strip, between the
+strip's cards, and between the tracking camera and the ZED's tiles. Drag it; a line
+shows under the pointer. A double-click puts the usual size back; either handle between
+the cards gives all three their usual widths. The browser keeps the sizes
+(`localStorage` `ultraskelly.sizes`), so the Pi's window opens as it was left, across
+reloads and reboots. The control panel on port 80 and the bot's own dashboard on 8080
+keep separate sizes. The phone layout has no handles.
+
+- Limits: the control column 220 px to 35 % of the window wide; the camera column from
+  260 px to what leaves the 3D scene 480 px; the strip from 90 px to what leaves the
+  scene 220 px tall. While dragged, each card keeps at least 200 px (time series), 236 px
+  (motor tests, whose button labels stay whole) or 160 px (nodes). A dragged size keeps
+  its limits as the window changes, so a smaller window narrows it rather than overflow.
+- The tracking camera's video stays 4:3, at most the column's width, and at most as tall
+  as leaves the ZED's tiles 60 px. The ZED's four 16:9 tiles share what is left. To make
+  both bigger, widen the column first, then share its height out with the handle between
+  them. Each tile still tells the bot the size it is drawn at, so the Pi encodes no more.
+- A folded control column stays 44 px wide; opening it brings back its dragged width.
+- The time series puts its six lanes in one column when its card is narrow and tall,
+  and three abreast when it is wide and short.
 
 ## Frame rate on the Pi
 

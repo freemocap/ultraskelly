@@ -1,9 +1,10 @@
 /* Live dashboard: the approved layout in docs/dashboard.md, over the simulator's instrument-panel style. */
 body.dashboard{
   --header-h:44px;
-  /* The OAK video (4:3) and two rows of 16:9 tiles fit the window height; 656 px at 1920 wide draws the OAK 1:1. */
-  --sensor-w:clamp(300px,min(34.1667vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),900px);
-  --strip-h:clamp(140px,22vh,240px);
+  /* The OAK video (4:3) and two rows of 16:9 tiles fit the window height; 656 px at 1920 wide draws the OAK 1:1.
+     A size dragged with a handle (resize.js: --sensor-size and so on) comes first, within its own limits. */
+  --sensor-w:var(--sensor-size,clamp(300px,min(34.1667vw,calc((100vh - var(--header-h) - 142px) / 1.3125)),900px));
+  --strip-h:var(--strip-size,clamp(140px,22vh,240px));
   grid-template-rows:var(--header-h) minmax(0,1fr);font-size:13px;
 }
 @media (max-height:699px){body.dashboard{--header-h:36px}}
@@ -15,8 +16,25 @@ body.dashboard{
 .dashboard button{font-size:12px}
 .mono{font-family:ui-monospace,monospace}
 
-main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);grid-template-rows:minmax(0,1fr) var(--strip-h);
-  grid-template-areas:"stage sensors" "strip sensors";gap:8px;padding:8px;min-height:0}
+/* The panels, with a handle in the 8 px between each two (resize.js) instead of a gap. */
+main.layout{display:grid;grid-template-columns:minmax(0,1fr) 8px var(--sensor-w);grid-template-rows:minmax(0,1fr) 8px var(--strip-h);
+  grid-template-areas:"stage sensors-grip sensors" "strip-grip sensors-grip sensors" "strip sensors-grip sensors";gap:0;padding:8px;min-height:0}
+
+/* Handles (resize.js): drag one to resize the panels on each side, double-click it for the usual size. A line shows
+   under the pointer. The phone layout has none. */
+.dashboard .grip{display:none;position:relative;touch-action:none}
+.dashboard .grip::after{content:"";position:absolute;inset:0;margin:auto}
+.dashboard .grip.col{cursor:col-resize}.dashboard .grip.col::after{width:2px}
+.dashboard .grip.row{cursor:row-resize}.dashboard .grip.row::after{height:2px}
+.dashboard .grip:hover::after,.dashboard .grip.dragging::after{background:var(--accent)}
+.dashboard [data-grip=sensors]{grid-area:sensors-grip}.dashboard [data-grip=strip]{grid-area:strip-grip}
+.dashboard .sensors>.grip{flex:none;height:8px}
+body.dashboard.resizing{user-select:none}
+body.dashboard.resizing-col *{cursor:col-resize !important}body.dashboard.resizing-row *{cursor:row-resize !important}
+@media (min-width:1000px){
+  .dashboard .grip{display:block}
+  .dashboard [data-grip=control]{display:none}  /* Shown beside the open control column (panel.css) */
+}
 
 /* 3D scene, with the enlarged camera view and the hardware checks drawer layered over the same grid area. */
 .dashboard .stage{grid-area:stage;position:relative;padding:0;overflow:hidden;background:#111b21}
@@ -80,7 +98,7 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard [hidden]{display:none !important}
 
 /* Sensor column: 7 px padding plus the shared 1 px section border keeps the OAK canvas at exactly 640x480. */
-.dashboard .sensors{grid-area:sensors;display:flex;flex-direction:column;gap:8px;min-height:0;overflow-y:auto}
+.dashboard .sensors{grid-area:sensors;display:flex;flex-direction:column;min-height:0;overflow-y:auto}
 .dashboard .sensor{padding:7px;flex:none}
 .dashboard .sensor-title{height:24px;display:flex;align-items:center;justify-content:space-between;gap:6px}
 .dashboard .sensor-title h2{margin:0;font-size:13px}
@@ -116,9 +134,21 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
 .dashboard .depth-legend{height:22px;display:flex;align-items:center;gap:6px;font:11px ui-monospace,monospace;color:var(--muted);white-space:nowrap}
 .dashboard .depth-legend i{flex:0 1 150px;height:7px;border-radius:4px;background:#243138}
 .dashboard #depth-info{margin-left:auto;font-family:system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis}
+/* Beside the 3D scene the column's height is shared out, after the rules above. The tracking camera's video: 4:3
+   across the column, or the height dragged (resize.js --oak-size), with room left below for the ZED's tiles at 60 px
+   tall; a column with no height to spare gives it 4/7 of what there is. The ZED's four 16:9 tiles share the rest, with
+   4 px to spare against rounding. 64 px are the OAK section's title, target row, padding and border, 62 px the ZED's
+   title, legend, padding and border, 8 px the handle between them. */
+@media (min-width:1000px){
+  .dashboard .sensors{container-type:size;
+    --oak-h:clamp(90px,min(var(--oak-size,(100cqh - 140px) * 4 / 7),(100cqw - 16px) * 3 / 4),100cqh - 260px)}
+  .dashboard .oak .tile{aspect-ratio:auto;height:var(--oak-h);width:min(100%,var(--oak-h) * 4 / 3);margin-inline:auto}
+  .dashboard .tiles{grid-template-columns:repeat(2,min((100cqw - 22px) / 2,(100cqh - var(--oak-h) - 144px) * 8 / 9));justify-content:center}
+}
 
-/* Readout strip. */
-.dashboard .strip{grid-area:strip;display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1fr);gap:8px;min-height:0}
+/* Readout strip: the cards' shares of its width, or those dragged (resize.js), with a handle between each two. */
+.dashboard .strip{grid-area:strip;display:grid;min-height:0;
+  grid-template-columns:minmax(0,var(--series-fr,2.4fr)) 8px minmax(0,var(--tests-fr,1fr)) 8px minmax(0,var(--nodes-fr,1fr))}
 .dashboard .series{gap:4px}
 .dashboard .series h2 span{font-weight:400;color:var(--muted);margin-left:3px}
 .dashboard #series{flex:1;min-height:0;width:100%;display:block}
@@ -169,10 +199,10 @@ main.layout{display:grid;grid-template-columns:minmax(0,1fr) var(--sensor-w);gri
   html:has(body.dashboard),body.dashboard{overflow:auto;height:auto}
   body.dashboard{display:block}
   .dashboard header{height:40px;position:sticky;top:0;background:var(--bg);z-index:5}
-  main.layout{display:flex;flex-direction:column}
+  main.layout{display:flex;flex-direction:column;gap:8px}
   .dashboard .stage{aspect-ratio:5/4;flex:none;order:1}
   .dashboard .enlarged{position:fixed;inset:0;z-index:10;border-radius:0}
-  .dashboard .sensors{overflow:visible;order:2}
+  .dashboard .sensors{overflow:visible;order:2;gap:8px}
   .dashboard .strip{display:contents}
   .dashboard .card{overflow:visible}
   .dashboard .series{order:3;height:300px}.dashboard .tests{order:4}.dashboard .drawer{order:5}.dashboard .nodes{order:6}

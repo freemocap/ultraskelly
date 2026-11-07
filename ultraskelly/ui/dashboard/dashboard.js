@@ -14,6 +14,10 @@ import { HealthView, STALE_S, healthOf, readingsStale, reasonOf } from '/health.
 import { headNote, limitNote } from '/headpose.js';
 import { placeKeyed, setProperty, setText } from '/dom.js';
 import { ControlPanel, panelSettings, streamUrl } from '/panel.js';
+import { resizable } from '/resize.js';
+
+// The panels at the sizes they were left at, each handle between them working (resize.js).
+resizable(document);
 
 const $ = id => document.getElementById(id);
 const error = message => { $('error').textContent = message; $('error').hidden = !message; };

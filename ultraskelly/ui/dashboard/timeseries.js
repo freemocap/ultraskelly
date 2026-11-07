@@ -23,6 +23,17 @@ export const LANES = [
    waiting: 'Waiting for the ZED IMU'},
 ];
 
+const GAP = 8;  // px between lanes
+// Lanes in columns: two of three, unless the card is too narrow for two lanes side by side (then one column of six)
+// or too short for three rows (then three of two). A lane's header needs about 180 px, its plot 25 px under it.
+export function laneColumns(width, height) {
+  const laneW = columns => (width - GAP * (columns - 1)) / columns;
+  const laneH = columns => { const rows = Math.ceil(LANES.length / columns); return (height - GAP * (rows - 1)) / rows; };
+  if (laneW(2) < 180 && laneH(1) >= 40) return 1;
+  if (laneH(2) < 40 && laneW(3) >= 180) return 3;
+  return 2;
+}
+
 class Ring {
   constructor() { this.t = new Float64Array(CAPACITY); this.v = new Float32Array(CAPACITY); this.n = 0; this.next = 0; this.newest = NaN; }
   push(t, v, newest = v) {
@@ -116,9 +127,14 @@ export class TimeSeries {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const w = canvas.clientWidth, h = canvas.clientHeight, columns = 2, rows = Math.ceil(LANES.length / columns), gap = 8;
-    const laneW = (w - gap * (columns - 1)) / columns, laneH = (h - gap * (rows - 1)) / rows;
-    LANES.forEach((lane, i) => this.drawLane(ctx, lane, Math.floor(i / rows) * (laneW + gap), (i % rows) * (laneH + gap), laneW, laneH));
+    const w = canvas.clientWidth, h = canvas.clientHeight, columns = laneColumns(w, h), rows = Math.ceil(LANES.length / columns);
+    const laneW = (w - GAP * (columns - 1)) / columns, laneH = (h - GAP * (rows - 1)) / rows;
+    LANES.forEach((lane, i) => {
+      const x = Math.floor(i / rows) * (laneW + GAP), y = (i % rows) * (laneH + GAP);
+      ctx.save(); ctx.beginPath(); ctx.rect(x, y, laneW, laneH); ctx.clip();  // A long title stops at its lane's edge
+      this.drawLane(ctx, lane, x, y, laneW, laneH);
+      ctx.restore();
+    });
   }
 
   drawLane(ctx, lane, x, y, w, h) {
