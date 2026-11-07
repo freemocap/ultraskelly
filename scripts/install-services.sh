@@ -2,9 +2,11 @@
 # Install the boot services for this checkout: the robot as a system service
 # (ultraskelly-bot), the control panel that turns it on and off (ultraskelly-control,
 # a system service on port 80) and the dashboard window as the desktop user's
-# service (ultraskelly-dashboard). Run it on the Pi as the user the robot runs as.
+# service (ultraskelly-dashboard), and put the UltraSkelly icon on the desktop: a click
+# starts the bot unless it runs and opens the dashboard (scripts/start-ultraskelly.sh).
+# Run it on the Pi as the user the robot runs as.
 #
-#   scripts/install-services.sh             install or update all three; the bot and the window keep their start-at-boot
+#   scripts/install-services.sh             install or update all three and the icon; the bot and the window keep their start-at-boot
 #   scripts/install-services.sh --enable    also start the bot and the window now and at every boot
 #   scripts/install-services.sh --disable   stop the bot and the window and keep them from starting at boot
 #   scripts/install-services.sh --check     report whether all three are installed for this checkout; change nothing
@@ -40,9 +42,14 @@ control_unit=/etc/systemd/system/ultraskelly-control.service
 control_rule=/etc/polkit-1/rules.d/50-ultraskelly-control.rules
 panel_options=/var/lib/ultraskelly-control/bot-options
 dashboard_unit=$HOME/.config/systemd/user/ultraskelly-dashboard.service
+desktop_entry="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")/ultraskelly.desktop"
 
 render() {
   sed -e "s|@USER@|$user|g" -e "s|@REPO@|$repo|g" "$repo/scripts/systemd/$1"
+}
+
+render_desktop_entry() {
+  sed -e "s|@REPO@|$repo|g" "$repo/scripts/desktop/ultraskelly.desktop"
 }
 
 # polkit may keep its rules where only root can read them.
@@ -62,13 +69,15 @@ state() {
   echo "ultraskelly-bot (system):     $(systemctl is-enabled ultraskelly-bot.service), $(systemctl is-active ultraskelly-bot.service)${options:+, options $options from /etc/default/ultraskelly-bot}${panel:+, $panel from the control panel}"
   echo "ultraskelly-control (system): $(systemctl is-enabled ultraskelly-control.service), $(systemctl is-active ultraskelly-control.service), http://$(hostname).local/"
   echo "ultraskelly-dashboard (user): $(systemctl --user is-enabled ultraskelly-dashboard.service), $(systemctl --user is-active ultraskelly-dashboard.service)"
+  echo "desktop icon:                 $desktop_entry"
 }
 
 if [[ $action == --check ]]; then
   if cmp -s <(render ultraskelly-bot.service) "$bot_unit" &&
     cmp -s <(render ultraskelly-control.service) "$control_unit" &&
     cmp -s <(render ultraskelly-control.rules) <(installed_rule) &&
-    cmp -s <(render ultraskelly-dashboard.service) "$dashboard_unit"; then
+    cmp -s <(render ultraskelly-dashboard.service) "$dashboard_unit" &&
+    cmp -s <(render_desktop_entry) "$desktop_entry"; then
     state
     exit 0
   fi
@@ -102,6 +111,11 @@ fi
 mkdir -p "$(dirname "$dashboard_unit")"
 render ultraskelly-dashboard.service >"$dashboard_unit"
 systemctl --user daemon-reload
+
+# The desktop icon: a click starts the bot unless it runs and opens the dashboard.
+mkdir -p "$(dirname "$desktop_entry")"
+render_desktop_entry >"$desktop_entry"
+chmod 755 "$desktop_entry"  # The desktop's file manager runs a launcher only when it is executable
 
 case "$action" in
   --enable)

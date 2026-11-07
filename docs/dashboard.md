@@ -76,6 +76,13 @@ the panel adds no second copy of the video. Motor tests pass through the panel t
 
 How it runs:
 
+- On the Pi's desktop, the UltraSkelly icon (`scripts/desktop/ultraskelly.desktop`, put
+  there by `scripts/install-services.sh`) runs `scripts/start-ultraskelly.sh`. It starts
+  the bot through the panel unless the bot is running or starting, then opens the window
+  afresh, full screen and in front. What it did: `journalctl -t ultraskelly-shortcut`.
+- `scripts/open-dashboard.sh` opens the window. It first sets the window's saved size to the
+  whole screen, so out of full screen it stays full width. Chromium's default is half the
+  screen, 945 px, under which the dashboard folds into its one-column phone layout.
 - `python -m ultraskelly.control` (aiohttp). `scripts/install-services.sh` installs it
   from `scripts/systemd/ultraskelly-control.service`, enables it and restarts it on every
   run. Restart it after pulling new code: `sudo systemctl restart ultraskelly-control`,

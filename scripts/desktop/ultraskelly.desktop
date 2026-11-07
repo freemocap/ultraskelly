@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=UltraSkelly
+Comment=Start the robot and open its dashboard
+Exec=@REPO@/scripts/start-ultraskelly.sh
+Icon=@REPO@/scripts/desktop/ultraskelly.svg
+Terminal=false
+Categories=Utility;

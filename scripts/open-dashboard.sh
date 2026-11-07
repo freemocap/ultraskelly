@@ -46,6 +46,29 @@ preferences="$profile/Default/Preferences"
 if [[ -f "$preferences" ]]; then
   sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "$preferences"
 fi
+# The window's size whenever it is neither full screen nor maximized: the whole screen. Chromium's
+# own default is half of it (945 px on the Pi's 1920 px monitor), under which the dashboard folds
+# into its one-column phone layout.
+size=$(wlr-randr 2>/dev/null | sed -n 's/^ *\([0-9]\+\)x\([0-9]\+\) px,.*current.*/\1 \2/p' | head -n 1)
+# shellcheck disable=SC2086  # The width and height, as two words
+python3 - "$preferences" "$url" ${size:-1920 1080} <<'EOF' || echo "Could not set the window's saved size" >&2
+import json, sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+path, url, width, height = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+try:
+    preferences = json.loads(path.read_text())
+except (OSError, ValueError):
+    preferences = {}  # None yet (a first start), or cut short by a power cut: Chromium fills in the rest
+parts = urlsplit(url)
+app = f"{parts.hostname}_{parts.path or '/'}"  # How Chromium names an --app window's saved placement
+screen = {"left": 0, "top": 0, "right": width, "bottom": height}
+placement = {**screen, **{f"work_area_{side}": value for side, value in screen.items()}, "maximized": True}
+preferences.setdefault("browser", {}).setdefault("app_window_placement", {})[app] = placement
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(preferences))
+EOF
 
 # --start-fullscreen asks for full screen just after the window appears, and that ask can
 # be lost: once on the Pi a first start stayed at Chromium's default 945 px window.

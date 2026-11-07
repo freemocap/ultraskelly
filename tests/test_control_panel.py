@@ -425,6 +425,45 @@ def test_the_pi_screen_opens_the_panel_full_screen_and_keeps_devtools():
     assert not any(flag.startswith("--kiosk") for flag in chromium)  # Kiosk mode turns DevTools off
 
 
+def test_the_pi_screen_window_keeps_the_whole_screen_out_of_full_screen(tmp_path):
+    # 2026-11-07, the user: "why is the dashboard view in narrow mode?" Out of full screen the window fell back to
+    # Chromium's default half screen, 945 px, under which the dashboard folds into its phone layout.
+    opener = (ROOT / "scripts" / "open-dashboard.sh").read_text(encoding="utf-8")
+    start = opener.index("\n", opener.index("<<'EOF'")) + 1
+    sizing = opener[start:opener.index("\nEOF\n", start)]
+    preferences = tmp_path / "Default" / "Preferences"
+    preferences.parent.mkdir()
+    preferences.write_text(json.dumps({
+        "browser": {"app_window_placement": {"localhost_/": {"left": 10, "top": 10, "right": 955, "bottom": 1070}}},
+        "profile": {"exit_type": "Normal"},
+    }))
+    whole = {"left": 0, "top": 0, "right": 1920, "bottom": 1080, "work_area_left": 0, "work_area_top": 0,
+             "work_area_right": 1920, "work_area_bottom": 1080, "maximized": True}
+    size = [sys.executable, "-c", sizing, str(preferences), "http://localhost/", "1920", "1080"]
+    subprocess.run(size, check=True, timeout=30)
+    saved = json.loads(preferences.read_text())
+    assert saved["browser"]["app_window_placement"]["localhost_/"] == whole and saved["profile"] == {"exit_type": "Normal"}
+    preferences.unlink()  # A first start: no preferences yet
+    subprocess.run(size, check=True, timeout=30)
+    assert json.loads(preferences.read_text())["browser"]["app_window_placement"]["localhost_/"] == whole
+
+
+def test_the_desktop_icon_starts_the_bot_unless_it_runs_and_opens_the_dashboard():
+    # 2026-11-07, the user: "a shortcut on the rpi desktop I can click and it starts the dashboard and bot".
+    entry = (ROOT / "scripts" / "desktop" / "ultraskelly.desktop").read_text(encoding="utf-8")
+    assert {"[Desktop Entry]", "Type=Application", "Terminal=false", "Exec=/home/robot/ultraskelly/scripts/start-ultraskelly.sh",
+            "Icon=/home/robot/ultraskelly/scripts/desktop/ultraskelly.svg"} <= set(
+        entry.replace("@REPO@", "/home/robot/ultraskelly").splitlines())
+    assert (ROOT / "scripts" / "desktop" / "ultraskelly.svg").is_file()
+    action = (ROOT / "scripts" / "start-ultraskelly.sh").read_text(encoding="utf-8")
+    assert "if [[ $state == active || $state == activating ]]" in action  # A running bot is left alone
+    assert "http://localhost/api/bot/start" in action  # Started through the control panel, as its Turn on button does
+    assert action.rstrip().endswith("systemctl --user restart ultraskelly-dashboard.service")  # Then a fresh window
+    listed = subprocess.run(["git", "ls-files", "-s", "scripts/start-ultraskelly.sh"], cwd=ROOT, capture_output=True, text=True)
+    if listed.returncode == 0 and listed.stdout:  # Executable in the checkout the Pi pulls
+        assert listed.stdout.startswith("100755")
+
+
 # The rules file runs in a fresh context with only `polkit` in it, as polkitd runs it: nothing of node's leaks in.
 POLKIT = r"""
 const fs = require('fs'), vm = require('vm');

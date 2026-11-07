@@ -129,7 +129,8 @@ draws the overlay itself; [the stream guide](docs/stream.md) describes every fie
 On the Pi, the control panel on port 80 serves the same page with big buttons that turn
 the bot on and off, restart it and switch following
 ([Control panel](docs/dashboard.md#control-panel)); `scripts/open-dashboard.sh` opens it
-full-screen on the Pi's monitor.
+full-screen on the Pi's monitor. The UltraSkelly icon on the Pi's desktop starts the bot,
+unless it runs, and opens the dashboard (`scripts/start-ultraskelly.sh`).
 [The dashboard layout](docs/dashboard.md) describes its panels and sizing.
 
 The dashboard's **Motor test** panel moves one actuator at a time: pan or tilt by 10°
