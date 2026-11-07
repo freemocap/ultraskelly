@@ -62,3 +62,71 @@ strike items out with the commit that settles them.
     levelling in the picture. A linkage giving 0.5 degrees or more per servo degree would
     make levelling useful. Until then, measure roll's travel past ±30 (power cuts: item 8)
     before raising `span` (at most 30 now).
+
+## Plan (2026-11-07)
+
+**What has been tuned, and what not.**
+
+- **Tuned, 2026-11-06:** the head's aim, in the simulator fitted to the robot, with the waist
+  and roll off (`simulator/tuning.py`). The values: `reach` 0.30, `smoothing` 0.69, 15
+  degrees a second, 34 degrees a second squared, deadband 0.39, servo lag 55 ms, jumps
+  believed after 5 sightings. Roll levelling was fitted separately the same day.
+- **Changed since, not tuned:** pan held to 30 servo degrees a second; deadband 0.12; full
+  servo ranges, tilt to 180; waist on; roll on. Each was only re-checked against the head
+  battery.
+- **Never tuned:** the waist together with the head. The waist drive itself has not been
+  re-tuned since its motor was measured.
+
+**Why it feels slow, pausing and jumpy** (from the code and the fitted plant):
+
+1. **Slow.** Pan's servo at 30 degrees a second turns the view 7.8 degrees a second, so a
+   20 degree step takes at least 2.6 s.
+2. **Slow to converge.** Each frame aims at only `reach` (30 %) of the face's offset, and
+   `smoothing` filters that again.
+3. **Pauses.** A target more than 8 degrees from the goal must show up 5 frames in a row
+   before the head moves.
+4. **Waist pauses.** The waist starts only once the head has held still for 0.3 s. Its
+   drive starts at 0.15, under the 0.65 where it breaks loose, and rises 1.0 a second:
+   about half a second with nothing moving.
+5. **Jumps.** The body's turn is not measured. `body_turn` integrates the drive at one
+   speed, `degrees_per_second` (27 at full drive). The waist really turns 50 degrees a
+   second one way and 21.5 the other, and not at all until it breaks loose. The head
+   counter-rotates by that estimate: it turns off the face before the body moves, or by
+   the wrong amount, and the camera then pulls it back.
+6. **Waist overshoot, and one speed.** The waist runs at 0.5-0.6, between its stall (0.45)
+   and breakaway (0.65), so once moving it has one speed. It decides to stop at 5 degrees
+   of bearing. After that come about 0.2 s of camera delay, a 0.2 s ramp-down and a 0.3 s
+   coast, so it travels 10-20 degrees further.
+
+**Steps.** Short robot sessions; everything else in the simulator.
+
+1. **Measure today's robot:**
+   - Step responses of pan, tilt (to 180) and roll.
+   - The waist both ways at several drives: breakaway, stall, speed, coast. Use the ZED
+     gyro for the body's yaw rate.
+   - Update `simulator/plant.py`. Check fidelity (`simulator/fidelity.py`) against 3-5
+     recorded following runs.
+2. **Measure the delay chain** from a run: frame captured, pose, command, IMU motion.
+3. **Write the targets** into the scenario verdicts and `tuning.py`'s cost:
+   - A 20 degree step centred within 1 s by the head alone; 45 degrees within 3 s with the
+     waist.
+   - Overshoot under 1 degree for the head, under 3 for the body.
+   - No reversals at rest.
+   - No pause over 0.3 s once a person is believed.
+   - Robust to gearing ±15 %, slack, and 50 ms more delay.
+4. **Measure the body's turn:** the ZED gyro's yaw rate less the head's pan rate, in place
+   of the dead-reckoned `body_turn`. The head then counter-rotates by what the body does.
+5. **Rebuild the waist as a graded speed loop:**
+   - A wanted body speed proportional to the head's pan offset from centre: the head keeps
+     the face centred, and the waist brings the head back to centre.
+   - A PI loop on the measured yaw rate, with a breakaway kick and a floor above stall.
+   - A gain per direction (50 against 21.5).
+   - A stop that begins early enough for its measured stopping distance.
+6. **Tune the head**, waist off and then on: speed, acceleration, reach, smoothing,
+   deadband, jump gating, servo lag. Aim for fast and smooth: a higher top speed with
+   gentle acceleration, not a low top speed.
+7. **Check on the robot** after each step: the same scenarios acted out, compared with the
+   simulator.
+
+**First:** item 8, the servo supply, so long runs do not cut the Pi's power. Item 6, the
+tilt mechanism, so tilt's fit holds.
