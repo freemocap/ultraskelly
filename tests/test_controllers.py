@@ -33,11 +33,11 @@ def test_a_centred_target_locks_without_moving_the_head():
 def test_a_target_held_at_the_frame_corner_turns_the_head_to_the_edge_of_its_range_and_no_further():
     async def scenario():
         bus, node, _ = create_controllers()
-        margin = node.params.aim.end_margin  # Kept clear of the servos' end stops
+        aim = node.params.aim  # The head keeps end_margin inside its servo windows
         await follow(bus, node, 640, 0, 6.0)
-        assert node.pan_angle == pytest.approx(180 - margin)
-        assert node.tilt_angle == pytest.approx(margin, abs=1e-3)  # The smoothed goal halves its way down to the edge
-        assert node.servo_kit.servo[node.params.pan_channel].angle == pytest.approx(180 - margin)
+        assert node.pan_angle == pytest.approx(aim.pan_range[1] - aim.end_margin)
+        assert node.tilt_angle == pytest.approx(aim.tilt_range[0] + aim.end_margin, abs=1e-3)  # The goal halves its way down
+        assert node.servo_kit.servo[node.params.pan_channel].angle == pytest.approx(aim.pan_range[1] - aim.end_margin)
         bus.close()
     asyncio.run(scenario())
 
@@ -48,7 +48,7 @@ def test_waist_drives_continuously_while_the_head_is_turned():
         node.params.waist.degrees_per_second = 0.0  # The head holds still instead of counter-rotating
         now = [100.0]
         node.clock = lambda: now[0]
-        node.pan_angle = 165  # 18 degrees of view: the target ahead of the camera is past where the waist starts
+        node.pan_angle = 152  # 16 degrees of view, inside pan's window: the target ahead is past where the waist starts
         commands = []
         for tick in range(300):  # Three seconds; the old controller braked after half of one
             if tick % 10 == 0:
@@ -57,7 +57,7 @@ def test_waist_drives_continuously_while_the_head_is_turned():
             commands.append(node.waist_motor.throttle)
             now[0] += 0.01
         moving = [index for index, command in enumerate(commands) if command]
-        assert moving[0] <= 40  # Once the target has shown up four times in a row
+        assert moving[0] <= 10 * node.params.aim.jump_samples  # Once the target has shown up that many times in a row
         move = commands[moving[0]:]
         assert all(-0.8 <= command < 0 for command in move)  # One continuous move
         assert move[0] == -node.params.waist.start_throttle
@@ -100,9 +100,9 @@ def test_head_servo_channels_match_the_wiring_and_roll_holds_level():
     assert node.params.servo_names == {3: "pan", 11: "tilt", 7: "roll"}
     assert node.servo_kit.servo[7].angle == 90.0
     asyncio.run(follow(bus, node, 640, 0, 6.0))
-    margin = node.params.aim.end_margin
+    aim = node.params.aim
     angles = (node.servo_kit.servo[3].angle, node.servo_kit.servo[11].angle, node.servo_kit.servo[7].angle)
-    assert angles == pytest.approx((180 - margin, margin, 90.0), abs=1e-3)
+    assert angles == pytest.approx((aim.pan_range[1] - aim.end_margin, aim.tilt_range[0] + aim.end_margin, 90.0), abs=1e-3)
     bus.close()
 
 
@@ -125,20 +125,16 @@ def test_the_robot_launches_with_the_calmer_tuning():
 
     head = launch_config().orientation
     assert head.follow
+    assert not head.roll.enabled and not head.waist.enabled  # Head first, then the waist (the user, 2026-11-06)
     launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
-    # While the head is tuned alone (2026-11-06), roll and waist may be off and the head's gain lower;
-    # nothing else may differ
     for part in ("roll", "waist"):
         launched[part]["enabled"] = defaults[part]["enabled"]
+    assert launched == defaults  # The defaults the closed-loop scenarios check
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
     assert head.aim.pan_range == (20.0, 160.0) and head.aim.tilt_range == (20.0, 130.0)  # Measured 2026-11-06
     limits = launch_config().limits
     assert (limits.pan_min_degrees, limits.pan_max_degrees, limits.tilt_min_degrees, limits.tilt_max_degrees) == (
         20.0, 160.0, 20.0, 130.0)
-    for key in ("reach", "smoothing", "max_speed", "pan_ratio", "pan_range", "tilt_range"):
-        launched["aim"][key] = defaults["aim"][key]
-    assert launched == defaults  # The defaults the closed-loop scenarios check
-    assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
     assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7
 
 
@@ -170,3 +166,20 @@ def test_the_head_never_commands_outside_its_servo_ranges():
     pans, tilts = [c[0] for c in commands], [c[1] for c in commands]
     assert 20.0 <= min(pans) and max(pans) <= 160.0 and 20.0 <= min(tilts) and max(tilts) <= 130.0
     assert max(tilts) > 120.0 and min(pans) < 30.0  # It does use its range
+
+
+def test_a_jump_must_hold_over_consecutive_frames_not_add_up_from_bursts():
+    from ultraskelly.core.bot.motor.head_aim import HeadAim, HeadAimParams
+
+    def believed(seen: list[float]) -> bool:
+        """Whether the head takes up a target by the picture's edge, seen at these times."""
+        aim = HeadAim(HeadAimParams(jump_samples=5), 90.0, 90.0)
+        for now in seen:
+            aim.observe(now=now, error_x=300.0, error_y=0.0, captured=now)
+        return aim.goal is not None
+
+    frame = 1 / 30
+    bursts = [start + n * frame for start in (0.0, 0.7, 1.4, 2.1) for n in range(3)]
+    assert not believed(bursts)  # 12 sightings, 3 at a time: the robot's false detections (run 20261106-194104)
+    assert believed([n * frame for n in range(12)])  # As many back to back: someone is there
+    assert believed([n * frame for n in range(12) if n % 3 != 2])  # Someone whose every third detection drops

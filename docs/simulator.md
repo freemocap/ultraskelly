@@ -101,38 +101,55 @@ transforms, and face-mounted camera origin as the viewer frustum. It does not re
 infer a human pose: each sample reports the person the pose node would follow
 (`choose_person`, shared with it), optionally with pixel noise (`noise_px`) and dropped
 detections (`dropout`, from a seeded random generator). Frames reach the controller
-`camera_latency` after capture (default 55 ms, measured 50-70 ms on the Pi).
+`camera_latency` after capture (default 60 ms, measured 50-70 ms on the Pi).
 
-Servos close on their commands with a first-order lag (`servo_lag`, default 80 ms: on the
-robot the picture moved about 0.15 s after a command) and no faster than `servo_speed`
-(default 180°/s). The head's linkage gears them down and has play, as measured on the robot
-on 2026-11-06: the camera turns `pan_ratio` (0.36) degrees per pan servo degree and nods
-`tilt_ratio` (0.1) per tilt servo degree, once the servo has crossed `pan_backlash` (6) or
-`tilt_backlash` (2) servo degrees of slack after a reversal. So the head reaches only about
-±30° of pan and ±9° of tilt. The roll servo turns the whole picture's content clockwise
-(`roll_sign` -1) by `roll_ratio` (0.12) degrees per servo degree once it has crossed
-`roll_backlash` (18) servo degrees of slack, and nods the camera down `roll_nod` (0.18) degrees
-per servo degree as it does, as measured on 2026-11-06: within its span it turns the picture
-only about 2° either way. `pan_sign`/`tilt_sign`/`roll_sign` can turn any servo the wrong way,
-to test polarity. Each sample also reports every visible
-face as the OAK's face detector would: eyes, nose and mouth sized for the person's distance
-(eyes 63 mm apart), tilted in the picture by the person's own tilt (`Person.roll`) less the
-head's roll, with their own jitter (`landmark_noise_px`). Waist velocity is
-`-throttle * waist_speed` (default 30°/s at full throttle; round 1 measured 18-23°/s at
-0.75), with illustrative ±100° stops; a released (coasting) waist motor counts as zero drive.
-Optional friction (`waist_breakaway`, `waist_stall`; both 0 by default, and set only
-through the configure request, not the tuning form) makes a still waist wait for the
-breakaway drive and a turning one stop below the stall drive, with speed scaled
-between the stall drive and full drive. Negative mouth throttle opens the jaw toward 28° and
-zero allows spring return, limited to 90°/s. Geometry is a schematic armature with
-fixed arms and legs. These assumptions are intentionally simple: no inertia, torque,
-collisions, power limits, or I2C delays, and the head's tilt offset at rest is not modelled.
+The head's servos and the waist are the robot as measured (`simulator/plant.py`): each
+servo is a chain fitted to a recorded run (tests/data/motor-response-20261106) of steps,
+staircases and ramps watched by the camera,
 
-The head turns through `HeadAim` (`motor/head_aim.py`). It works out where the person
-is from where the camera pointed when the frame was captured, aims 65% of the way per
-frame (so a scale or gear-ratio error cannot overshoot), smooths that goal, turns at most
-40°/s of view with S-curves, keeps 5 servo degrees clear of the end stops, and moves only
-once its goal is more than 1.5° away. It counter-rotates against the waist's estimated
+    command --dead time--> servo (slew-limited) --slack--> linkage x gain --> head mode --> view
+
+where the head mode is the head's own ringing: a second-order system with dry friction and
+damping that differs by the way it turns. Fitted by least squares on every segment's view and
+the big steps' overshoot, settling and dead time:
+
+| | gain (view °/servo °) | dead time | slew | slack | mode | damping up / down | friction |
+|---|---|---|---|---|---|---|---|
+| pan | 0.261 | 44 ms | 576 °/s | 2.5° | 11.8 rad/s (1.9 Hz) | 0.41 / 0.28 | 19 °/s² |
+| tilt | 0.081 | 40 ms | 830 °/s | 1.8° | 38 rad/s | 0.64 / 0.37 | 22 °/s² |
+| roll | 0.063 | 43 ms | 375 °/s | 12° | 82 rad/s | 0.30 | 7 °/s² |
+
+Replaying every recorded command through the plant gives the recorded views within 1.01° RMS
+(pan), 0.58° (tilt) and 0.40° (roll), each big step's overshoot within 8 points and its settling
+within 0.25 s (tests/test_plant_fidelity.py, the gate any tuning on the simulator relies on).
+Inside the servo windows the robot uses (pan 20-160, tilt 20-130) the head reaches about ±17°
+of pan and 5° up and 2.7° down of tilt; beyond them the real linkages jam or go over centre,
+which the plant does not model. The roll turns the picture's content clockwise for a larger
+angle (`roll_sign` -1) and nods the camera down `roll_nod` (0.18) degrees per servo degree as it
+does. The settings vary the measured models for robustness tests: `pan_ratio`, `tilt_ratio`,
+`roll_ratio` (gains), `*_backlash` (slacks), `pan_frequency`, `pan_damping`, `pan_damping_down`
+(pan's mode), `delay_scale` (every dead time), and `pan_sign`/`tilt_sign`/`roll_sign` turn a
+servo the wrong way, to test polarity. Each sample also reports every visible face as the OAK's
+face detector would: eyes, nose and mouth sized for the person's distance (eyes 63 mm apart),
+tilted in the picture by the person's own tilt (`Person.roll`) less the head's roll, with their
+own jitter (`landmark_noise_px`). The waist (`plant.WAIST`) needs more than 0.6 drive to break
+loose and turns 50.4°/s at full negative drive but 21.5°/s at full positive drive, reaching
+speed in 0.16 s; its six recorded pulses replay within 0.5°. Negative mouth throttle opens the
+jaw toward 28° and zero allows spring return, limited to 90°/s. Geometry is a schematic
+armature with fixed arms and legs; the head's tilt offset at rest is not modelled.
+
+The head turns through `HeadAim` (`motor/head_aim.py`), its aim tuned on this plant ("Tuning
+the head" below). It works out where the person is from where the camera pointed when the
+frame was captured (the commands of 60 ms before, about pan's dead time), aims 30% of the way
+per frame (so the goal approaches without passing the person while the real gearing is under
+3.3 times what it assumes), takes 69% of each new estimate into its goal, turns at most 15°/s
+of view along S-curves that accelerate at most 34°/s² (a change of acceleration that large
+starts ringing of about a/ωₙ² = 34/11.84² = 0.24° in pan's 1.9 Hz mode, under the deadband, so
+the input shaper it has is left off), keeps 5 servo degrees inside its servo windows (pan
+20-160, tilt 20-130), and moves
+only once its goal is more than 0.39° away. A goal more than 8° from the last (someone new, or
+a false detection), and any within 40 px of the picture's edge, must show up five times with
+no more than 0.2 s between sightings before the head turns to it. It counter-rotates against the waist's estimated
 turn at once, and commands each servo half its linkage's slack past the view in the way it
 is moving, so a reversal takes the play up at once instead of leaving the head still. The
 roll (`motor/roll_level.py`) levels the followed face in the picture the same calm way, and
@@ -163,7 +180,7 @@ the simulator does not run that launcher.
 
 `ultraskelly/simulator/scenarios.py` runs the production controllers through this plant
 with people placed in front of the robot, and judges each run before any motor turns:
-someone stepping in 20° left or right, 6° up or down, 27° off (beyond the head's reach, so
+someone stepping in 20° left or right, 4° up or 2° down, 27° off (beyond the head's reach, so
 the waist must turn), walking across, walking off out of reach, two people whose detector
 scores keep swapping, a noisy detector that drops a third of its detections, and a person
 who leaves while another appears. A run fails on overshoot (the camera more than 2° past
@@ -178,18 +195,58 @@ does not stand the head upright once the person has gone; in every scenario the 
 turn back and forth.
 
 ```sh
-uv run --locked python -m pytest -q tests/test_scenarios.py
+uv run --locked python -m pytest -q tests/test_scenarios.py tests/test_scenarios_tuning.py
 ```
 
-The tests run every scenario on the plant above and at the edges of what was measured or
-assumed: camera delay 40-100 ms with servo lag 40-100 ms and field of view 64-74° (their
-corners), servo lag up to 120 ms, pan ratio 0.28-0.42, tilt ratio 0.07-0.14, pan slack 3-8
-and tilt slack 0-4 servo degrees, waist 17-37°/s, roll ratio 0.09-0.16, roll slack 12-22 and
-roll nod 0-0.3. A reversed pan servo must be caught as a runaway, and a reversed roll by the
-faces it leaves tilted. With tilt barely turning (a fifth as far, or 20 servo degrees of slack,
-as it measured on 2026-11-06), the head may miss someone above or below but must stay calm. `scenarios.run(scenario, prepare)` returns
-the trace and the verdict, so a tuning change can be checked the same way; `prepare`
+`tests/test_scenarios.py` runs the whole robot, head, waist and roll, on the measured
+plant. The waist is not tuned on it yet (it breaks loose only above 0.65 drive and turns
+50°/s one way, 21.5°/s the other), and a person 20° off is beyond the head's reach inside its
+servo window, so "left", "right" and "far" are expected to fail, strictly: they must start
+passing once the waist is tuned. So is "tilt-noisy": the roll, also untuned on this plant,
+reaches about 1.3° of picture and stops within its 1° deadband of that, just short of the
+degree nearer level the judge asks of a noisy face. With its ratio anywhere in the fit's spread
+(0.050-0.083), 8-16 servo degrees of slack and a nod of 0-0.3 the roll must stay calm: never
+turning back and forth or a face past level, and upright again once the face has gone. A
+reversed pan servo must be caught as a runaway, and a reversed roll by the faces it leaves tilted.
+
+The robot runs its head alone for now (waist braked, roll upright). `HEAD_BATTERY` is that
+setup's seventeen scenarios: steps of 4-16° that the head can reach, 4° up and 2° down (as far as
+tilt reaches below its rest), someone beyond its reach, walking across, two people with
+swapping scores, a noisy detector, a person leaving while another appears, and false
+detections of 1-3 frames at a time (the robot's: run 20261106-194104), at the picture's edge
+on alternate sides, at one spot by the edge, in the middle, and a half-seen person at the
+edge, where the camera must not move by more than 0.5°. A run also records how long the
+camera took to settle within 1.5° of a still person, how far the servos travelled and how
+far the camera wandered. `tests/test_scenarios_tuning.py` runs the launched head through the
+battery on the measured plant and checks it stays calm (no overshoot past 2°, oscillation,
+runaway or chasing) on the plants the tuner weighed and on others: camera delay 40 or
+100 ms, field of view 64 or 74°, and a tilt that barely turns or has 20 servo degrees of
+slack, as tilt measured on the evening of 2026-11-06. It also checks that the battery catches
+a head that swings and one that adds up false detections. `scenarios.run(scenario, prepare)`
+returns the trace and the verdict, so a tuning change can be checked the same way; `prepare`
 receives the `Simulation` before the run to change controller parameters.
+
+## Tuning the head
+
+`python -m ultraskelly.simulator.tuning [samples] [checkpoint.json]` tunes the head's aim
+(`HeadAimParams`: reach, smoothing, top speed, acceleration, deadband, servo lag, jump
+samples, the input shaper on or off) on the head battery. Each candidate runs all seventeen
+scenarios on the measured plant (weight 1) and on six stressed ones (weight ½ each): pan
+gearing 15% either way, 1.5 and 2 times (a tracking run once looked like twice), a head that
+rings at 45% instead of 22-32%, and 1.5 times every dead time. A run costs
+
+    5 × overshoot (°) + 3 × reversals beyond the scenario's allowance
+    + settle time (s; the whole run if it never settles) + 2 × final error (°)   [still people within reach]
+    + 0.002 × servo travel (°) + 5 × wander (°)   [false detections only]
+    + 30 × each hard failure (runaway, a person lost, chasing false detections, aim)
+
+The search samples the space at random, then refines the best setting one parameter at a
+time, the step halving from 15% of each range to under 1%. A candidate takes about 4 s on
+one worker; 120 samples and the refinement take a few minutes on eight. After every round
+the checkpoint holds the best setting and the step, and a run given that checkpoint carries
+on from it. Each worker reuses one event loop for all its runs: on Windows a new loop opens a
+loopback socket pair whose port is held for about two minutes after it closes, and eight
+workers' thousands of runs a minute used up the machine's 16,384 ports and stalled the pool.
 
 ## Develop and verify
 

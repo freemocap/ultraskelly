@@ -18,6 +18,7 @@ Bearings are degrees from the robot's base: positive yaw to the robot's left as 
 simulator draws it, positive pitch up.
 """
 import asyncio
+import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -32,6 +33,7 @@ ROLL_AIM = 1.5  # Degrees off level the face may stay at the end...
 ROLL_TOWARD = 1.0  # ...or at least this much closer to level than the person's own tilt
 ROLL_UPRIGHT = 0.5  # Degrees the head's actual roll may be off upright once nobody is left
 ROLL_LIMITS = (60.0, 120.0)  # The roll servo's hard limits (ActuatorLimits)
+SETTLE_DEGREES = 1.5  # Within this of the person, and staying there, the camera has settled
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,8 @@ class Scenario:
     roll: bool = False  # About a tilted face: the roll's overshoot and final level apply
     max_roll_reversals: int = 1
     upright_at_end: bool = False  # Nobody is left: the roll must stand the head upright again
+    aim: bool = True  # A still person within the head's reach: final aim applies (with `step`)
+    still_within: float | None = None  # Only false detections: the camera must stay within this of where it began
 
 
 @dataclass
@@ -81,6 +85,9 @@ class Verdict:
     roll_reversals: int = 0
     roll_overshoot: float = 0.0
     final_tilt: float | None = None
+    settle: float | None = None  # Seconds from the person's appearing until the camera stays within SETTLE_DEGREES
+    servo_travel: float = 0.0  # Servo degrees the pan and tilt commands moved in all
+    wandered: float = 0.0  # Degrees the camera went from where it began
     failures: list[str] = field(default_factory=list)
 
     @property
@@ -120,6 +127,27 @@ def tilted(roll: float, until: float | None = None, then: float | None = 0.0,
     return people
 
 
+def ghosts(base: Callable[[float], list[Person]], every: float = 0.7, frames: tuple[int, ...] = (1, 2, 3),
+           yaw: float = 30.0, score: float = 0.95, sides: tuple[int, ...] = (1, -1)) -> Callable[[float], list[Person]]:
+    """`base`'s people plus a false detection every `every` seconds, for 1-3 frames in turn, at `yaw` on
+    each of `sides` in turn (30 degrees lands within 25 px of the picture's edge with the head ahead): on
+    the robot 28 % of person detections had at most two confident keypoints, 93 % of them at the edge, and
+    ten bursts of up to three frames gave targets (run 20261106-194104)."""
+    frame = 1 / 30
+    def people(t: float) -> list[Person]:
+        burst = int(t / every)
+        length = frames[burst % len(frames)] * frame
+        found = list(base(t))
+        if burst > 0 and t - burst * every < length:
+            found.append(Person(yaw * sides[burst % len(sides)], 0.0, score))
+        return found
+    return people
+
+
+def nobody(t: float) -> list[Person]:
+    return []
+
+
 def comes_and_goes(first: float, second: float, gone: tuple[float, float]) -> Callable[[float], list[Person]]:
     """Someone at `first`, gone during `gone`, then someone else at `second`."""
     return lambda t: [] if gone[0] <= t < gone[1] else [Person(first if t < gone[0] else second, 0.0)]
@@ -128,9 +156,9 @@ def comes_and_goes(first: float, second: float, gone: tuple[float, float]) -> Ca
 SCENARIOS = [
     Scenario("left", "A person steps in 20 degrees to the robot's left", 4.0, still(20.0)),
     Scenario("right", "A person steps in 20 degrees to the robot's right", 4.0, still(-20.0)),
-    # The geared tilt reaches about 9 degrees either way (engine.py's tilt_ratio): 6 is within it.
-    Scenario("up", "A person 6 degrees up", 4.0, still(0.0, 6.0)),
-    Scenario("down", "A person 6 degrees down", 4.0, still(0.0, -6.0)),
+    # The tilt reaches about 5 degrees up and 2.7 down inside its window (see HEAD_BATTERY).
+    Scenario("up", "A person 4 degrees up", 4.0, still(0.0, 4.0)),
+    Scenario("down", "A person 2 degrees down", 4.0, still(0.0, -2.0)),
     Scenario("far", "A person 27 degrees off: the head turns and the waist brings it back", 8.0, still(27.0)),
     # Turning to someone, following them back and counter-rotating while the waist recentres
     # are three purposeful phases: two reversals, not a swing.
@@ -157,6 +185,48 @@ SCENARIOS = [
     Scenario("tilt-near", "A face 0.7 m away tilted 7 degrees: big, sharp eyes", 5.0, tilted(7.0, distance=0.7), roll=True),
 ]
 BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}
+
+# The robot as it runs now (2026-11-06): the head alone, waist and roll off (HEAD_ALONE). Its pan reaches
+# about 17 degrees either way inside its servo window (20-160) and its tilt about 5 up and 2.7 down
+# (20-130, from a head resting tilted up), so these people stand where the head can reach them, but for
+# the one beyond its reach, where only calm is asked.
+HEAD_BATTERY = [
+    Scenario("step-left", "A person steps in 12 degrees to the left", 4.0, still(12.0)),
+    Scenario("step-right", "A person steps in 12 degrees to the right", 4.0, still(-12.0)),
+    Scenario("step-edge", "A person 16 degrees off, at the edge of the head's reach", 4.0, still(16.0)),
+    Scenario("small-step", "A person 4 degrees off: within the jitter a head should ignore, nearly", 3.0, still(4.0)),
+    Scenario("look-up", "A person 4 degrees up", 3.0, still(0.0, 4.0)),
+    Scenario("look-down", "A person 2 degrees down, as far as the tilt reaches below rest", 3.0, still(0.0, -2.0)),
+    Scenario("beyond-reach", "A person 28 degrees off, beyond the head without the waist: stay calm", 5.0,
+             still(28.0), aim=False),
+    Scenario("walk", "A person walks across, 15 to -15 degrees at 10 deg/s", 6.0, walking(15.0, -15.0, 10.0),
+             step=False, max_reversals=2),
+    Scenario("two-people", "Two people 16 degrees apart whose scores keep swapping", 5.0, two_people(8.0, -8.0),
+             step=False),
+    Scenario("noisy", "A person 8 degrees off with 4 px of jitter and a third of detections dropped", 5.0, still(8.0),
+             settings={"noise_px": 4.0, "dropout": 0.33}),
+    Scenario("lost", "A person at 10 degrees leaves for 2 s; another appears at -10", 7.0,
+             comes_and_goes(10.0, -10.0, (2.5, 4.5)), step=False, max_reversals=2),
+    Scenario("ghosts", "Nobody there: false detections at the picture's edge for 1-3 frames at a time", 5.0,
+             ghosts(nobody), step=False, still_within=0.5),
+    Scenario("ghosts-and-person", "A person at 6 degrees, and false detections at the edge for 1-3 frames", 5.0,
+             ghosts(still(6.0)), max_reversals=1),
+    Scenario("ghosts-middle", "Nobody there: false detections 10 degrees off for 1-3 frames at a time", 5.0,
+             ghosts(nobody, yaw=10.0), step=False, still_within=0.5),
+    # A partial body flickering at one spot: bursts that, counted alone, add up to a person there.
+    Scenario("ghosts-one-spot", "Nobody there: false detections at one spot by the edge, 1-3 frames at a time", 5.0,
+             ghosts(nobody, sides=(1,)), step=False, still_within=0.5),
+    Scenario("ghosts-one-spot-middle", "Nobody there: false detections at one spot 10 degrees off, 1-3 frames at a time",
+             5.0, ghosts(nobody, yaw=10.0, sides=(1,)), step=False, still_within=0.5),
+    Scenario("edge-partial", "Someone half out of the picture at 31 degrees, seen 2-3 frames at a time", 5.0,
+             ghosts(nobody, every=0.4, frames=(2, 3), yaw=31.0, score=0.6), step=False, still_within=0.5),
+]
+HEAD_BY_NAME = {scenario.name: scenario for scenario in HEAD_BATTERY}
+
+
+def head_alone(sim: Simulation) -> None:
+    """The robot's setup while its head is tuned (2026-11-06): waist and roll off."""
+    sim.head.params.waist.enabled = sim.head.params.roll.enabled = False
 
 
 def reversals(values: list[float], threshold: float = REVERSAL_DEGREES) -> int:
@@ -279,7 +349,7 @@ def judge(scenario: Scenario, trace: Trace) -> Verdict:
             verdict.failures.append(f"overshoot: {verdict.overshoot:.1f} degrees past the person")
         final = [error for error in errors[-10:] if error is not None]
         verdict.final_error = max(final) if final else None
-        if verdict.final_error is None or verdict.final_error > AIM_DEGREES:
+        if scenario.aim and (verdict.final_error is None or verdict.final_error > AIM_DEGREES):
             verdict.failures.append(f"aim: {verdict.final_error} degrees off at the end")
 
     moves, signs = 0, []
@@ -297,9 +367,51 @@ def judge(scenario: Scenario, trace: Trace) -> Verdict:
     elif scenario.step and verdict.waist_reversals:
         verdict.failures.append(f"waist hunting: turned back {verdict.waist_reversals} times")
     roll_judgement(scenario, trace, verdict)
+    motion_judgement(scenario, trace, verdict)
     return verdict
 
 
+def motion_judgement(scenario: Scenario, trace: Trace, verdict: Verdict) -> None:
+    """How long the camera took to settle on a still person, how far the servos travelled in all, and, with
+    only false detections about, how far the camera wandered."""
+    verdict.servo_travel = float(sum(abs(b - a) for a, b in zip(trace.pan_command, trace.pan_command[1:]))
+                                 + sum(abs(b - a) for a, b in zip(trace.tilt_command, trace.tilt_command[1:])))
+    verdict.wandered = max(max(abs(y - trace.camera_yaw[0]), abs(p - trace.camera_pitch[0]))
+                           for y, p in zip(trace.camera_yaw, trace.camera_pitch))
+    if scenario.still_within is not None and verdict.wandered > scenario.still_within:
+        verdict.failures.append(f"chased false detections: the camera moved {verdict.wandered:.1f} degrees")
+    if scenario.step:
+        seen = [i for i, yaw in enumerate(trace.person_yaw) if yaw is not None]
+        if seen:
+            off = [((trace.person_yaw[i] - trace.camera_yaw[i]) ** 2 + (trace.person_pitch[i] - trace.camera_pitch[i]) ** 2) ** 0.5
+                   for i in seen]
+            last_out = max((n for n, error in enumerate(off) if error > SETTLE_DEGREES), default=-1)
+            if last_out < len(off) - 1:
+                verdict.settle = trace.time[seen[last_out + 1]] - trace.time[seen[0]]
+
+
 def run(scenario: Scenario, prepare: Callable[[Simulation], None] | None = None) -> tuple[Trace, Verdict]:
-    trace = asyncio.run(record(scenario, prepare))
+    trace = _on_this_threads_loop(record(scenario, prepare))
     return trace, judge(scenario, trace)
+
+
+_threads = threading.local()
+
+
+def _on_this_threads_loop(coroutine):
+    """Run `coroutine` on one event loop kept for every run on this thread. A new loop per run (asyncio.run)
+    opens a loopback socket pair on Windows whose port then waits about two minutes to close: one per run,
+    105 per tuner candidate (measured 2026-11-06). The tuner's eight workers make about 200 a second,
+    which uses up Windows' 16,384 ports within that time, and its worker pool stalled."""
+    runner = getattr(_threads, "runner", None)
+    if runner is None:
+        runner = _threads.runner = asyncio.Runner()
+    try:
+        return runner.run(coroutine)
+    finally:
+        loop = runner.get_loop()
+        leftover = asyncio.all_tasks(loop)  # A run leaves none today; one that did must not run into the next
+        for task in leftover:
+            task.cancel()
+        if leftover:
+            loop.run_until_complete(asyncio.gather(*leftover, return_exceptions=True))

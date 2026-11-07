@@ -18,6 +18,8 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from ultraskelly.core.bot.sensory.pose_common import choose_person
+from ultraskelly.simulator import plant
+from ultraskelly.simulator.plant import Axis, AxisModel, Waist, WaistModel, play
 from ultraskelly.core.pubsub.bot_topics import (
     FaceObservation,
     OakResultsMessage,
@@ -38,41 +40,41 @@ class Settings(BaseModel):
     pitch: float = Field(default=10, ge=-60, le=60)
     visible: bool = True
     sensor_hz: Literal[10, 20, 30, 50, 100] = 30
-    head_speed: float = Field(default=40, gt=0, le=600)  # The head's top turning speed, degrees per second
+    # The head's top turning speed, degrees per second; None keeps the controller's own (HeadAimParams.max_speed)
+    head_speed: float | None = Field(default=None, gt=0, le=600)
     head_deadzone: int = Field(default=100, ge=0, le=240)
     waist_gain: float = Field(default=0.008, gt=0, le=0.05)
-    servo_speed: float = Field(default=180, ge=1, le=720)
-    waist_speed: float = Field(default=30, ge=0, le=180)  # At full drive: round 1 measured 18-23 deg/s at 0.75
-    # Optional friction: a still waist needs this much drive to break loose, and a turning
-    # waist stops below waist_stall. Both 0 keep the plain linear model.
-    waist_breakaway: float = Field(default=0.0, ge=0, le=1)
-    waist_stall: float = Field(default=0.0, ge=0, lt=1)
-    # The camera and servos as on the robot. The OAK-1 sees 69 degrees across its 4:3
-    # sensor; frames reach the controller 50-70 ms after capture (measured on the Pi,
-    # 2026-11-02); with the servos' lag the picture moved about 0.15 s after a command (2026-11-06).
+    # The waist as measured on 2026-11-06 (plant.WAIST): it needs more than 0.6 drive to break loose
+    # and turns 50 deg/s at full negative drive but 21.5 at full positive drive.
+    waist_speed: float = Field(default=plant.WAIST.speed_negative, ge=0, le=180)  # At full negative drive
+    waist_speed_positive: float = Field(default=plant.WAIST.speed_positive, ge=0, le=180)
+    waist_breakaway: float = Field(default=plant.WAIST.breakaway, ge=0, le=1)
+    waist_stall: float = Field(default=plant.WAIST.stall, ge=0, lt=1)
+    # The camera as on the robot: the OAK-1 sees 69 degrees across its 4:3 sensor, and pose results
+    # reach the controller about 0.06 s after capture (2026-11-06).
     camera_hfov: float = Field(default=69.0, gt=10, lt=170)
-    camera_latency: float = Field(default=0.055, ge=0, le=0.5)
-    servo_lag: float = Field(default=0.08, ge=0, le=0.5)  # The robot's picture moved ~0.15 s after a command
+    camera_latency: float = Field(default=0.06, ge=0, le=0.5)
+    # The head's servos as measured on 2026-11-06 (plant.PAN, TILT, ROLL; tests/test_plant_fidelity.py):
+    # each turns the view by its gain per servo degree once it has crossed its slack, a dead time after
+    # the command, no faster than its slew, through the head's own ringing mode. These settings vary
+    # the measured models, for robustness tests: gains (`*_ratio`), slacks (`*_backlash`), every dead
+    # time (`delay_scale`), and pan's mode, the one that rings (1.9 Hz, 22-32 % overshoot).
     pan_sign: Literal[1, -1] = 1  # -1: a larger pan command turns the camera the other way
     tilt_sign: Literal[1, -1] = 1
-    # The head's linkage gears the servos down and has play, as measured on the robot on 2026-11-06
-    # at 8.1 px per degree near the middle: 12 servo degrees of pan moved the picture 35 px, and
-    # returning to 90 undid only half of it, about 6 servo degrees of slack (which also explains
-    # 11 px for the first move the other way); 12 degrees of tilt moved it 9-10 px and came back
-    # within 2 px. The camera turns pan_ratio degrees per pan servo degree and tilt_ratio per tilt
-    # degree, once the servo has crossed the slack after a reversal.
-    pan_ratio: float = Field(default=0.36, gt=0, le=1)
-    tilt_ratio: float = Field(default=0.1, gt=0, le=1)
-    pan_backlash: float = Field(default=6.0, ge=0, le=30)  # Servo degrees
-    tilt_backlash: float = Field(default=2.0, ge=0, le=30)
-    # The roll servo turns the picture's content anticlockwise by roll_ratio degrees per servo
-    # degree (roll_sign -1: clockwise), once it has crossed roll_backlash servo degrees of slack,
-    # and nods the camera down roll_nod degrees per servo degree as it does (the OAK sits off the
-    # roll's axis). Measured on 2026-11-06: 25 servo degrees turned the picture 2.1-2.9 degrees
-    # clockwise and moved it 27-29 px up; returning to 90 left 1.1-2.3 degrees of the turn.
-    roll_ratio: float = Field(default=0.12, gt=0, le=1)
+    pan_ratio: float = Field(default=plant.PAN.gain, gt=0, le=1)
+    tilt_ratio: float = Field(default=plant.TILT.gain, gt=0, le=1)
+    pan_backlash: float = Field(default=plant.PAN.slack, ge=0, le=30)  # Servo degrees
+    tilt_backlash: float = Field(default=plant.TILT.slack, ge=0, le=30)
+    pan_frequency: float = Field(default=plant.PAN.frequency, gt=0, le=200)  # Rad/s
+    pan_damping: float = Field(default=plant.PAN.damping, gt=0, le=2)  # Turning toward larger views
+    pan_damping_down: float = Field(default=plant.PAN.damping_down, gt=0, le=2)  # And toward smaller ones
+    delay_scale: float = Field(default=1.0, ge=0, le=5)  # Multiplies every servo's dead time
+    # The roll turns the picture's content clockwise for a larger angle (roll_sign -1; +1 turns it
+    # anticlockwise), and nods the camera down roll_nod degrees per servo degree as it does (the OAK
+    # sits off the roll's axis): 25 servo degrees moved the picture 27-29 px (2026-11-06).
+    roll_ratio: float = Field(default=plant.ROLL.gain, gt=0, le=1)
     roll_sign: Literal[1, -1] = -1
-    roll_backlash: float = Field(default=18.0, ge=0, le=40)  # Servo degrees
+    roll_backlash: float = Field(default=plant.ROLL.slack, ge=0, le=40)  # Servo degrees
     roll_nod: float = Field(default=0.18, ge=-1, le=1)
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
     landmark_noise_px: float = Field(default=0.0, ge=0, le=20)  # The face detector's own jitter on eyes, nose, mouth
@@ -94,11 +96,6 @@ def approach(value, target, amount):
     return value + max(-amount, min(amount, target - value))
 
 
-def play(output: float, driver: float, slack: float) -> float:
-    """Where a linkage with `slack` degrees of play sits: it moves only when the driver pushes it from one side."""
-    return min(max(output, driver - slack / 2), driver + slack / 2)
-
-
 class Simulation:
     dt = 0.01
 
@@ -114,10 +111,9 @@ class Simulation:
             self.close()
         self.bus, self.head, self.mouth = create_controllers()
         self.tick = 0
-        self.pan = self.tilt = self.roll = 90.0  # The servos' angles
-        self.linkage = [90.0, 90.0, 90.0]  # Where the head's linkages sit, in servo degrees: pan, tilt, roll
+        self.axes = self.build_axes()
+        self.waist_plant = self.build_waist()
         self.waist = self.jaw = 0.0
-        self.waist_moving = False
         self.last_camera = {"x": None, "y": None, "visible": False, "time": None}
         self.history = deque(maxlen=600)
         self.pending: deque[tuple[float, type, object]] = deque()  # (due, topic, message) still in the pipelines
@@ -132,13 +128,47 @@ class Simulation:
     def now(self) -> float:
         return self.tick * self.dt
 
+    def build_axes(self) -> dict[str, Axis]:
+        """The head's servos, the measured models (plant.py) as the settings vary them."""
+        s, scale = self.settings, self.settings.delay_scale
+        def varied(model: AxisModel, **changes) -> Axis:
+            return Axis(AxisModel(**{**model.__dict__, "dead_time": model.dead_time * scale, **changes}))
+        return {
+            "pan": varied(plant.PAN, gain=s.pan_ratio, slack=s.pan_backlash, frequency=s.pan_frequency,
+                          damping=s.pan_damping, damping_down=s.pan_damping_down),
+            "tilt": varied(plant.TILT, gain=s.tilt_ratio, slack=s.tilt_backlash),
+            "roll": varied(plant.ROLL, gain=s.roll_ratio, slack=s.roll_backlash),
+        }
+
+    def build_waist(self) -> Waist:
+        s = self.settings
+        return Waist(WaistModel(breakaway=s.waist_breakaway, stall=s.waist_stall, speed_negative=s.waist_speed,
+                                speed_positive=s.waist_speed_positive, time_constant=plant.WAIST.time_constant))
+
+    @property
+    def pan(self) -> float:
+        return self.axes["pan"].servo  # The servos' actual angles
+
+    @property
+    def tilt(self) -> float:
+        return self.axes["tilt"].servo
+
+    @property
+    def roll(self) -> float:
+        return self.axes["roll"].servo
+
     def configure(self, values: dict):
         # Validate the complete proposed change before mutating anything.
         settings = Settings.model_validate(self.settings.model_dump() | values)
         self.settings = settings
-        self.head.params.aim.max_speed = settings.head_speed
+        if settings.head_speed is not None:
+            self.head.params.aim.max_speed = settings.head_speed
         self.head.params.head_deadzone = settings.head_deadzone
         self.head.params.waist.gain = settings.waist_gain
+        if hasattr(self, "axes"):  # Plant settings take effect from here on, the axes where they stand
+            for name, axis in self.build_axes().items():
+                self.axes[name].model = axis.model
+            self.waist_plant.model = self.build_waist().model
 
     def target(self):
         t = self.now()
@@ -171,19 +201,18 @@ class Simulation:
         return self.position(people[0])
 
     def head_turn(self) -> tuple[float, float]:
-        """How far the head has turned from the body (yaw) and nodded up (pitch), degrees, through its linkage."""
+        """How far the head has turned from the body (yaw) and nodded up (pitch), degrees: the plant's views."""
         s = self.settings
-        return (s.pan_sign * s.pan_ratio * (self.linkage[0] - 90),
-                s.tilt_sign * s.tilt_ratio * (90 - self.linkage[1]))
+        return s.pan_sign * self.axes["pan"].view, -s.tilt_sign * self.axes["tilt"].view
 
     def picture_roll(self) -> float:
         """How far the roll servo has turned the picture's content anticlockwise, degrees."""
-        return self.settings.roll_sign * self.settings.roll_ratio * (self.linkage[2] - 90)
+        return self.settings.roll_sign * self.axes["roll"].view
 
     def camera_pose(self) -> tuple[float, float]:
-        """The camera's bearing from the base (yaw, pitch in degrees), from the servos' actual angles."""
+        """The camera's bearing from the base (yaw, pitch in degrees), from the plant's views."""
         yaw, pitch = self.head_turn()
-        return self.waist + yaw, pitch - self.settings.roll_nod * (self.linkage[2] - 90)
+        return self.waist + yaw, pitch - self.settings.roll_nod * (self.axes["roll"].linkage - 90)
 
     def project(self, person: Person) -> tuple[float, float] | None:
         """Where a person appears in the frame, in pixels, or None outside it."""
@@ -270,36 +299,19 @@ class Simulation:
             # Shared controllers hold fresh lock state between sensor samples.
             await self.head.step()
             await self.mouth.step()
-            self.pan = self.servo(self.pan, self.head.pan_angle)
-            self.tilt = self.servo(self.tilt, self.head.tilt_angle)
-            self.roll = self.servo(self.roll, self.head.roll_angle)
-            self.linkage = [play(self.linkage[0], self.pan, self.settings.pan_backlash),
-                            play(self.linkage[1], self.tilt, self.settings.tilt_backlash),
-                            play(self.linkage[2], self.roll, self.settings.roll_backlash)]
-            self.waist = max(-100, min(100, self.waist - self.waist_velocity() * self.dt))
+            for name, command in (("pan", self.head.pan_angle), ("tilt", self.head.tilt_angle), ("roll", self.head.roll_angle)):
+                self.axes[name].command(now, command)
+                self.axes[name].advance(now + self.dt, self.dt)
+            self.waist = max(-100.0, min(100.0, self.waist_plant.advance(self.waist_drive(), self.dt)))
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
             self.tick += 1
             if self.tick % 5 == 0:
                 self.history.append(self.sample())
 
-    def servo(self, angle: float, command: float) -> float:
-        """A servo's next angle: it closes on its command with a first-order lag, no faster than its top speed."""
-        lag = self.settings.servo_lag
-        wanted = (command - angle) * min(1.0, self.dt / lag) if lag else command - angle
-        return approach(angle, angle + wanted, self.settings.servo_speed * self.dt)
-
     def waist_drive(self):
-        # A released (coasting) waist motor has no drive; the plant has no inertia to carry it on.
-        return self.head.waist_motor.throttle or 0.0
-
-    def waist_velocity(self):
-        """Degrees per second for positive drive (negative drive increases yaw), with optional friction."""
-        drive, s = self.waist_drive(), self.settings
-        self.waist_moving = abs(drive) > s.waist_stall if self.waist_moving else abs(drive) >= max(s.waist_breakaway, 1e-9)
-        if not self.waist_moving:
-            return 0.0
-        return math.copysign((abs(drive) - s.waist_stall) / (1 - s.waist_stall), drive) * s.waist_speed
+        """The waist motor's command: a throttle, 0.0 braked, or None released to coast."""
+        return self.head.waist_motor.throttle
 
     def sample(self):
         head_yaw, head_pitch = self.head_turn()
@@ -308,7 +320,7 @@ class Simulation:
                 "pan_command": self.head.pan_angle, "tilt": self.tilt,
                 "roll": self.roll, "roll_command": self.head.roll_angle, "picture_roll": self.picture_roll(),
                 "tilt_command": self.head.tilt_angle, "waist": self.waist, "jaw": self.jaw,
-                "waist_throttle": self.waist_drive(),
+                "waist_throttle": self.waist_drive() or 0.0,
                 "mouth_throttle": self.mouth.mouth_motor.throttle,
                 "mouth_state": self.mouth.mouth_state.value,
                 "jaw_energized": self.mouth.mouth_motor.throttle < 0}

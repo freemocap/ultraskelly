@@ -36,10 +36,19 @@ from pydantic import Field
 from ultraskelly.core.bot.base_abcs import NodeParams
 from ultraskelly.core.bot.motor.waist_drive import MAX_STEP, s_curve_step
 
-SERVO_RANGE = (0.0, 180.0)
 MIDDLE = 90.0  # Servo degrees at which the head faces the way the body does
 HISTORY_SECONDS = 1.0  # How far back the head remembers where the camera pointed
 SLACK_TURN = 0.2  # Degrees of view the head must turn back before its servo takes up the slack the other way
+FRAME = (640, 480)  # The picture the targets are measured in, pixels
+
+
+def zero_vibration(frequency: float, damping: float) -> tuple[float, float, float]:
+    """A two-impulse zero-vibration shaper for a mode of natural `frequency` (rad/s) and `damping` ratio:
+    (A1, A2, delay). A command split into A1 now and A2 half a ringing period later cancels the ringing
+    the first part starts: K = exp(-damping pi / sqrt(1 - damping^2)), A1 = 1/(1+K), A2 = K/(1+K)."""
+    ringing = frequency * math.sqrt(1.0 - damping ** 2)
+    k = math.exp(-damping * math.pi / math.sqrt(1.0 - damping ** 2))
+    return 1.0 / (1.0 + k), k / (1.0 + k), math.pi / ringing
 
 
 class HeadAimParams(NodeParams):
@@ -50,48 +59,85 @@ class HeadAimParams(NodeParams):
         description="Image pixels per degree at the frame's centre: the OAK-1's 640 px over 69 degrees, a pinhole",
     )
     pan_ratio: float = Field(
-        default=0.33, gt=0.0, le=1.0,
-        description="Degrees the view turns per pan servo degree: 12 servo degrees moved the picture 35 px on 2026-11-06 "
-                    "(0.36 at 8.1 px per degree); a little under, so the head errs toward turning short",
+        default=0.26, gt=0.0, le=1.0,
+        description="Degrees the view turns per pan servo degree: 0.261 fitted to the robot's recorded steps (2026-11-06)",
     )
     tilt_ratio: float = Field(
-        default=0.1, gt=0.0, le=1.0,
-        description="Degrees the view nods per tilt servo degree: 12 servo degrees moved the picture 9-10 px on 2026-11-06",
+        default=0.08, gt=0.0, le=1.0, description="Degrees the view nods per tilt servo degree: 0.081 fitted (2026-11-06)",
     )
     pan_slack: float = Field(
-        default=5.0, ge=0.0, le=20.0,
-        description="Servo degrees of play in the pan linkage taken up at each reversal: returning pan from 78 to 90 "
-                    "undid only 17.7 of 34.7 px on 2026-11-06, about 6; a little under, as too much makes the head jump",
+        default=2.0, ge=0.0, le=20.0,
+        description="Servo degrees of play in the pan linkage taken up at each reversal: 2.5 fitted; a little under, "
+                    "as too much makes the head jump",
     )
     tilt_slack: float = Field(
-        default=2.0, ge=0.0, le=20.0, description="Servo degrees of play in the tilt linkage: tilt came back within 2 px",
+        default=1.5, ge=0.0, le=20.0, description="Servo degrees of play in the tilt linkage: 1.8 fitted",
+    )
+    shaper: bool = Field(
+        default=False,
+        description="Split each command so the head's own ringing cancels (a zero-vibration input shaper). Off: the "
+                    "acceleration limit already keeps the ringing under the deadband, and the shaper's half-period "
+                    "delay (0.28 s on pan) slowed every move (simulator/tuning.py, 2026-11-06)",
+    )
+    pan_mode: tuple[float, float] = Field(
+        default=(11.84, 0.34),
+        description="The pan head's ringing mode the shaper cancels: natural frequency (rad/s) and damping ratio, "
+                    "fitted to the robot (1.9 Hz; damping 0.41 turning up and 0.28 down)",
+    )
+    tilt_mode: tuple[float, float] = Field(
+        default=(37.97, 0.5), description="The tilt head's mode: 6 Hz, damping 0.64 turning up and 0.37 down",
+    )
+    edge_margin: float = Field(
+        default=40.0, ge=0.0, le=200.0,
+        description="Pixels from the picture's edge within which a target must show up jump_samples times in a "
+                    "row before the head turns to it: there partial bodies give brief false targets",
     )
     pan_direction: Literal[1, -1] = Field(default=1, description="+1: a target right of the aim point needs a larger pan angle")
     tilt_direction: Literal[1, -1] = Field(default=1, description="+1: a target below the aim point needs a larger tilt angle")
     end_margin: float = Field(default=5.0, ge=0.0, le=45.0, description="Servo degrees the head keeps clear of each end stop")
+    # Pan turns the view steadily from servo 10 to 170 but jammed after being held at 5; tilt's linkage goes
+    # over centre past about 140 (full sweeps, scripts/check_pan_travel.py, 2026-11-06).
     pan_range: tuple[float, float] = Field(
-        default=SERVO_RANGE, description="Servo degrees the pan may use: where its linkage turns the head steadily",
+        default=(20.0, 160.0), description="Servo degrees the pan may use: where its linkage turns the head steadily",
     )
     tilt_range: tuple[float, float] = Field(
-        default=SERVO_RANGE, description="Servo degrees the tilt may use: short of a linkage's over-centre point",
+        default=(20.0, 130.0), description="Servo degrees the tilt may use: short of its linkage's over-centre point",
     )
-    smoothing: float = Field(default=0.5, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
-    deadband: float = Field(default=1.5, ge=0.0, le=10.0, description="A still head turns only when its goal is further than this")
-    max_speed: float = Field(default=40.0, gt=0.0, le=600.0, description="Top turning speed of the view, degrees per second")
+    # The aim below was tuned on the measured plant (simulator/tuning.py, 2026-11-06: cost 64.4 against 2209 for
+    # the stopgap it replaces; docs/audit-2026.md, "A simulator fitted to the robot").
+    smoothing: float = Field(default=0.69, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
+    deadband: float = Field(default=0.39, ge=0.0, le=10.0, description="A still head turns only when its goal is further than this")
+    max_speed: float = Field(default=15.0, gt=0.0, le=600.0, description="Top turning speed of the view, degrees per second")
     servo_speed: float = Field(
         default=150.0, gt=0.0, description="Top servo speed, servo degrees per second, slow enough that the servos keep up",
     )
-    max_acceleration: float = Field(default=300.0, gt=0.0, description="Degrees per second squared, speeding up and slowing down")
+    max_acceleration: float = Field(
+        default=34.0, gt=0.0,
+        description="Degrees per second squared, speeding up and slowing down: a change of acceleration this large "
+                    "starts ringing of about max_acceleration / omega_n^2 in pan's 1.9 Hz mode, 0.24 degrees, under "
+                    "the deadband (300 gave 2.1, and swung a head geared twice the fit)",
+    )
     jump_degrees: float = Field(default=8.0, gt=0.0, description="A goal further than this from the current one is a jump")
-    jump_samples: int = Field(default=4, ge=1, description="Samples in a row a jump must show up in before the head turns to it")
+    jump_samples: int = Field(
+        default=5, ge=1,
+        description="Samples in a row a jump must show up in before the head turns to it: more than the robot's false "
+                    "detections, which came 1-3 frames at a time",
+    )
+    candidate_gap: float = Field(
+        default=0.2, ge=0.0,
+        description="Seconds without a sighting after which a jump's count starts again: false detections that come "
+                    "a burst at a time never add up to one, while a real person's dropped frames do not reset it",
+    )
     reach: float = Field(
-        default=0.65, gt=0.0, le=1.0,
-        description="Share of a target's offset each frame aims for: a scale error under 1/reach - 1 cannot overshoot, "
-                    "and later frames close the rest",
+        default=0.30, gt=0.0, le=1.0,
+        description="Share of a target's offset each frame aims for: the goal approaches without passing the target "
+                    "while 1 - reach * g >= 0, g the real gearing over pan_ratio, so up to g = 3.3; later frames close the rest",
     )
     servo_lag: float = Field(
-        default=0.08, ge=0.0, le=0.5,
-        description="How far the servos trail their commands: the robot's picture moved about 0.15 s after a command, less the camera's 0.055",
+        default=0.055, ge=0.0, le=0.5,
+        description="How far the camera trails the commands: pan's fitted 0.044 s dead time and a little of its "
+                    "rise. Looked up in the commands kept each 10 ms control tick, so 0.055 reads those of 60 ms "
+                    "before (the tuner's choice); a value on a tick, such as 0.05, would rest on rounding",
     )
     assumed_latency: float = Field(
         default=0.06, ge=0.0, le=0.5, description="Camera-to-target delay assumed for targets that do not say when they were captured",
@@ -117,7 +163,11 @@ class HeadAim:
         self.goal: tuple[float, float] | None = None  # Pan relative to the base (body + pan), and tilt
         self.candidate: tuple[float, float] | None = None  # A jump waiting to be believed
         self.candidate_count = 0
+        self.candidate_seen = 0.0  # When the jump was last seen
         self.history: deque[tuple[float, float, float, float]] = deque()  # (time, body, pan, tilt view) commanded
+        self.planned: deque[tuple[float, float, float]] = deque()  # (time, pan, tilt view) before shaping
+        self.shaped = list(self.view)  # The views the servos are commanded to, after shaping
+        self.commanded = list(self.view)  # The shaped views last turned into servo commands
         self.last_update: float | None = None
 
     @property
@@ -151,9 +201,10 @@ class HeadAim:
         """Something else moved the head here (a motor test): hold it here and forget the old goal."""
         self.servos, self.view = [pan, tilt], [self._view(0, pan), self._view(1, tilt)]
         self.rates, self.turning = [0.0, 0.0], [False, False]
-        self.pushing, self.extreme = [0, 0], list(self.view)
+        self.pushing, self.extreme, self.shaped, self.commanded = [0, 0], list(self.view), list(self.view), list(self.view)
         self.goal, self.candidate, self.candidate_count = None, None, 0
         self.history.clear()
+        self.planned.clear()
 
     def bearing(self) -> float | None:
         """How far the target is from the body's forward direction, in pan's sense, or None without a goal."""
@@ -191,32 +242,60 @@ class HeadAim:
             pan_then + p.reach * p.pan_direction * math.degrees(math.atan(error_x / focal)),
             min(max(tilt_then + p.reach * p.tilt_direction * math.degrees(math.atan(error_y / focal)), low), high),
         )
-        if self.goal is not None and math.dist(estimate, self.goal) <= p.jump_degrees:
+        at_edge = (abs(error_x) > FRAME[0] / 2 - p.edge_margin or abs(error_y) > FRAME[1] / 2 - p.edge_margin)
+        if self.goal is not None and math.dist(estimate, self.goal) <= p.jump_degrees and not at_edge:
             self.candidate, self.candidate_count = None, 0
             self.goal = tuple(goal + p.smoothing * (new - goal) for goal, new in zip(self.goal, estimate))
             return
-        # Someone new or somewhere new: believe it once it has held for jump_samples samples in a row.
-        if self.candidate is not None and math.dist(estimate, self.candidate) <= p.jump_degrees:
+        # Someone new or somewhere new: believe it once it has held for jump_samples samples in a row, none
+        # more than candidate_gap after the last. Counting sightings alone, bursts of false detections
+        # seconds apart added up to a jump, as did two on either side once reach brought them together.
+        seen = captured if captured is not None else now
+        if (self.candidate is not None and math.dist(estimate, self.candidate) <= p.jump_degrees
+                and seen - self.candidate_seen <= p.candidate_gap):
             self.candidate_count += 1
             self.candidate = tuple((old + new) / 2 for old, new in zip(self.candidate, estimate))
         else:
             self.candidate, self.candidate_count = estimate, 1
+        self.candidate_seen = seen
         if self.candidate_count >= p.jump_samples:
             self.goal, self.candidate, self.candidate_count = self.candidate, None, 0
 
+    def _shape(self, now: float) -> None:
+        """The views to command now: each planned view split by the axis's zero-vibration shaper, A1 of it
+        now and A2 of what was planned half a ringing period ago, so the ringing the first part starts,
+        the second cancels."""
+        p = self.params
+        self.planned.append((now, self.view[0], self.view[1]))
+        for axis, mode in enumerate((p.pan_mode, p.tilt_mode)):
+            if not p.shaper:
+                self.shaped[axis] = self.view[axis]
+                continue
+            first, second, delay = zero_vibration(*mode)
+            earlier = self.planned[0][axis + 1]
+            for time, *views in self.planned:
+                if time > now - delay:
+                    break
+                earlier = views[axis]
+            self.shaped[axis] = first * self.view[axis] + second * earlier
+        while len(self.planned) > 1 and self.planned[1][0] <= now - HISTORY_SECONDS:
+            self.planned.popleft()
+
     def _command(self, axis: int) -> None:
-        """The servo angle that puts the linkage at this axis's view: past it by half the slack, the way it moves.
+        """The servo angle that puts the linkage at this axis's shaped view: past it by half the slack, the way
+        it moves.
 
         A linkage with play follows its servo only once the servo pushes it from one side. After a
         reversal the servo first crosses the play while the head stands still; pushing half the slack
         ahead of the view takes the play up at once. A turn back must exceed SLACK_TURN to count, so
         the servo never chatters across the play."""
-        moved = self.view[axis] - self.extreme[axis]
+        view = self.shaped[axis]
+        moved = view - self.extreme[axis]
         if (self.pushing[axis] >= 0 and moved < -SLACK_TURN) or (self.pushing[axis] <= 0 and moved > SLACK_TURN):
-            self.pushing[axis], self.extreme[axis] = (1 if moved > 0 else -1), self.view[axis]
+            self.pushing[axis], self.extreme[axis] = (1 if moved > 0 else -1), view
         elif self.pushing[axis] * moved > 0:
-            self.extreme[axis] = self.view[axis]  # Still going the same way
-        servo = MIDDLE + self.view[axis] / self._ratio(axis) + self.pushing[axis] * self._slack(axis) / 2
+            self.extreme[axis] = view  # Still going the same way
+        servo = MIDDLE + view / self._ratio(axis) + self.pushing[axis] * self._slack(axis) / 2
         low, high = self._range(axis)
         self.servos[axis] = min(max(servo, low), high)
 
@@ -238,10 +317,14 @@ class HeadAim:
                     self.view[axis], self.rates[axis] = s_curve_step(
                         self.view[axis], self.rates[axis], wanted, up=speed, down=speed, jerk=p.max_acceleration, dt=dt,
                     )
-                    self._command(axis)
                     if self.view[axis] == wanted and self.rates[axis] == 0.0:
                         self.turning[axis] = False
-        self.history.append((now, body, self.view[0], self.view[1]))
+        self._shape(now)
+        for axis in (0, 1):
+            if self.shaped[axis] != self.commanded[axis]:  # Also after turning stops: the shaper's second part lands later
+                self._command(axis)
+                self.commanded[axis] = self.shaped[axis]
+        self.history.append((now, body, self.shaped[0], self.shaped[1]))
         while self.history and self.history[0][0] < now - HISTORY_SECONDS:
             self.history.popleft()
         return self.pan, self.tilt

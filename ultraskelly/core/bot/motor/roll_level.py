@@ -12,8 +12,8 @@ seconds it eases back to level.
 
 Angles are the picture's rotation in degrees, clockwise on screen (image y points down). On
 2026-11-06 scripts/check_motor_directions.py found a larger roll angle turning the picture's
-content clockwise, about 0.1 degrees per servo degree, through about 17 servo degrees of slack:
-within its span the roll turns the picture only about 2 degrees either way.
+content clockwise, about 0.06 degrees per servo degree (fitted to the recorded steps), through about
+12 servo degrees of slack: within its span the roll turns the picture only about 1.3 degrees either way.
 """
 import math
 from collections import deque
@@ -35,17 +35,17 @@ class RollLevelParams(NodeParams):
 
     enabled: bool = Field(default=True, description="Level the followed face with the roll servo; off, roll holds level")
     ratio: float = Field(
-        default=0.11, gt=0.0, le=1.0,
-        description="Degrees the picture turns per roll servo degree, once the slack is taken up: "
-                    "25 servo degrees turned it 2.9 degrees on 2026-11-06",
+        default=0.065, gt=0.0, le=1.0,
+        description="Degrees the picture turns per roll servo degree, once the slack is taken up: 0.063 fitted to the "
+                    "robot's recorded steps (2026-11-06), which ranged 0.050-0.083",
     )
     direction: Literal[1, -1] = Field(
         default=-1, description="-1: a larger roll angle turns the picture's content clockwise, as measured on 2026-11-06",
     )
     slack: float = Field(
-        default=16.0, ge=0.0, le=30.0,
-        description="Servo degrees of play in the roll linkage, taken up at each reversal: returning from 65 to 90 left "
-                    "the picture turned 2.3 degrees on 2026-11-06, about 19; a little under, as too much makes the head jump",
+        default=10.0, ge=0.0, le=30.0,
+        description="Servo degrees of play in the roll linkage, taken up at each reversal: 12 fitted to the recording; "
+                    "a little under, as too much makes the head jump",
     )
     span: float = Field(
         default=25.0, gt=0.0, le=30.0,

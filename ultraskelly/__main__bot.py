@@ -9,7 +9,6 @@ import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
-from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
 from ultraskelly.core.bot.motor.waist_drive import WaistDriveParams
@@ -92,27 +91,13 @@ def launch_config(
     config.runtime_server.depth_previews = depth_previews
     config.tracking = not zed_only
     config.runtime_server.port = port
-    # The head, roll and waist run their defaults: fitted to the gearing, slack and direction measured on the
-    # robot on 2026-11-06 and checked by the closed-loop scenarios (tests/test_scenarios.py), which run the
-    # defaults, so nothing is overridden here.
-    # Head-only tuning, 2026-11-06 (the user: disable the waist and tune the head's face centering first, then
-    # work the waist back in): the waist stays braked and the roll upright, so only pan and tilt follow.
+    # The head runs its defaults: its aim tuned on the simulated robot fitted to the motors recorded on
+    # 2026-11-06 (simulator/tuning.py) inside the servo windows measured that evening (pan 20-160, tilt
+    # 20-130), and checked by the closed-loop scenarios (tests/test_scenarios_tuning.py), which run what
+    # launches here. Head first, then the waist (the user, 2026-11-06): the waist stays braked and the roll
+    # upright, so only pan and tilt follow.
     config.orientation = OrientationNodeParams(
         follow=follow, roll=RollLevelParams(enabled=False), waist=WaistDriveParams(enabled=False),
-        # Lower head gain (2026-11-06, the user: "Swings past me", "gain tooo high"). Recorded run
-        # 20261106-194104: one approach went from -297 px to +150 px past the middle; 447 px of image for
-        # 85 servo degrees is about 0.65 degrees of view per servo degree on large moves, twice pan_ratio,
-        # so g = 2 and each sample's error factor 1 - reach * g = -0.3 (an overshoot every sample). With
-        # reach 0.35 it stays >= 0 up to g = 2.86; the simulator then shows no overshoot even with 0.15 s of
-        # servo lag (tests/test_scenarios_tuning.py), at the cost of slower aiming.
-        # Servo windows from full sweeps on the robot (scripts/check_pan_travel.py, 2026-11-06 20:09-20:11):
-        # pan turns the view steadily from 10 to 170 at 0.27 degrees per servo degree, but jammed for 70
-        # degrees after being held at 5, then snapped; tilt turns it steadily from 10 to ~140 (only 3.4
-        # degrees below rest), and past ~140 its linkage goes over centre: further servo turns the view
-        # back, then not at all. So pan keeps to 20-160 and tilt to 20-130.
-        aim=HeadAimParams(
-            reach=0.35, smoothing=0.3, max_speed=15.0, pan_ratio=0.27, pan_range=(20.0, 160.0), tilt_range=(20.0, 130.0),
-        ),
     )
     config.limits = ActuatorLimits(  # The same windows as hard limits on every command, motor tests included
         pan_min_degrees=20.0, pan_max_degrees=160.0, tilt_min_degrees=20.0, tilt_max_degrees=130.0,

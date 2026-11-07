@@ -664,6 +664,108 @@ px for 25 servo degrees, against 9-10 px for 12 at 16:53: its travel is uncertai
 linkage is checked, and the tests check that the head stays calm, only failing to reach someone
 above or below, if tilt turns a fifth as far or has 20 degrees of slack.
 
+## A simulator fitted to the robot, and the head tuned on it (2026-11-06)
+
+At the user's request ("make it ACCURATE to the real robot, then built and tune the controller on
+there"), the simulated plant is now fitted to a recording of the robot's motors, a test holds it to
+that recording, and the head's aim is tuned on it against a stated cost.
+
+**The recording.** `scripts/record_motor_response.py` ran, inside the servo windows, steps of several
+sizes, a staircase each way, ramps at several speeds and big steps on pan, tilt and roll, then short
+waist pulses each way, while the OAK kept every frame with its capture time
+(`tests/data/motor-response-20261106`: the commands, the segments, and the picture's yaw, pitch and roll
+from registering frame to frame). `scripts/analyze_motor_response.py` measures from it each servo's gain
+each way, slack, dead time, overshoot and settling.
+
+**The model and the fit.** Each servo is a chain (`simulator/plant.py`): command, dead time, a
+slew-limited servo, slack (a play operator), gain, and the head's own mode, second order with dry
+friction and damping that differs by the way it turns. It is fitted by Nelder-Mead to every segment's
+recorded view, each segment aligned by the median of its first four frames (the chained views drift
+over the run), plus the big steps' overshoot, settling and dead time as `analyze_motor_response.py`
+measures them on both. A bias force could not give pan its different overshoot each way, since a
+constant force moves only where the head comes to rest; damping by direction does. Dry friction
+removes a fixed amount each swing, so small moves overshoot less than large ones, as on the robot.
+The fitted values are in docs/simulator.md ("Plant assumptions"): pan 0.261 degrees of view per servo
+degree, 44 ms dead time, 2.5 servo degrees of slack, a 1.9 Hz mode damped 0.41 turning one way and 0.28
+the other; tilt 0.081, 40 ms, 1.8; roll 0.063, 43 ms, 12. The waist breaks loose only above 0.65 drive,
+then turns 50.4 deg/s at full negative drive and 21.5 at full positive, reaching speed in 0.16 s.
+
+**Fidelity, the gate for everything below** (`tests/test_plant_fidelity.py`). Replaying every recorded
+command through the plant gives the recorded view within 1.01 degrees RMS on pan, 0.58 on tilt and
+0.40 on roll (bounds 1.5, 1.0, 1.0). Each big step's overshoot, robot against model, stays within the
+8 points asked: pan 90 to 140 21.9 % against 22.0, 140 to 40 32.4 against 32.4, 40 to 90 26.0 against
+21.6; tilt 1.3 against 5.5, 14.0 against 13.7, 8.5 against 5.6; roll 4.1 against 2.0, 5.1 against
+5.3, 5.2 against 6.1. Settling to within 5 % agrees within 0.2 s but on pan's 90 to 140, 0.52 s
+against 0.76, which the test allows as 0.25 s: the model is slow there, the conservative side for
+tuning. The gains agree within 15 % on pan and tilt and 35 % on roll, whose own ratio varied from
+0.050 to 0.083 between moves. The waist's pulses replay within 0.02 degrees: 13.24 against 13.26 for
++0.7 for 0.5 s, 5.65 against 5.66 for -0.7, and none at 0.6. The model reaches 2 % of a step about
+35 ms later than the robot.
+
+**What the plant reproduces.** An aggressive head (aiming the whole offset each frame, no smoothing,
+3000 deg/s^2) overshoots a person 12 degrees off by 3.4 degrees with 11 reversals, the robot's swing.
+False detections, the robot's 1-3 frames at a time, exposed a flaw in the head: a jump (a goal more
+than 8 degrees from the last) was believed after `jump_samples` sightings in a row, but nothing reset
+that count between sightings, so bursts seconds apart added up. Flickering at one spot by the edge,
+they took the head 21.9 degrees of view, 84 pan servo degrees, after nothing: the order of the
+67-servo-degree swing that followed a burst on the robot (run 20261106-194104). Now the count starts
+again after `candidate_gap`, 0.2 s (six frames at 30 Hz) without a sighting, and a jump must show up
+five times: the same scenarios leave the camera still, while a real person with a third of their
+detections dropped breaks a run of sightings only after six drops in a row (0.33^6, about 0.1 %).
+
+**The battery, the cost and the tuner** are in docs/simulator.md ("Closed-loop scenarios", "Tuning
+the head"): seventeen head-alone scenarios, the robot's present setup, on the measured plant and six
+stressed ones (pan gearing 15 % either way, 1.5 and 2 times, 45 % ringing, 1.5 times the dead time),
+with the cost per run stated there.
+
+**The tuned head.** 120 random settings and refinement one parameter at a time, on the head as it
+launches (inside its servo windows), found reach 0.30, smoothing 0.69, acceleration 34 deg/s^2,
+deadband 0.39 degrees, the commands of 60 ms before for where the camera pointed (`servo_lag`
+0.055), five sightings for a jump and the input shaper off; top speed hardly mattered (15 and 24
+deg/s cost 64.39 and 64.46), so it stays at the guard's 15. These are now `HeadAimParams`' defaults, and
+the robot launches them. On the measured plant the head overshoots no one in any of the seventeen
+scenarios, settles within 1.5 degrees of someone 12 degrees off in 1.75 s and of someone 4 degrees
+off in 0.87 s, ends 0.18-0.34 degrees off a still person, and does not move for any of the false
+detections. On every stressed plant it fails nothing; its worst overshoot is 0.51 degrees, with pan
+geared twice the fit. Its cost is 64.4. The stopgap it replaces (reach 0.35, smoothing 0.3, deadband
+1.5, 300 deg/s^2, sightings counted however far apart) costs 2209 on the same battery: it never
+settles within 1.5 degrees of a step, ends 2.0-3.4 degrees off (five aim failures), and follows
+false detections in four scenarios, by 2.2 to 16.6 degrees.
+
+Why these values. The goal moves smoothing x reach = 0.21 of the remaining offset per frame, and
+the tuner's best lies along that product: reach 0.35 at smoothing 0.59 costs 66.7, 0.30 at 0.69
+64.4, 0.25 at 0.83 70.6 and 0.21 at 1.0 80.6. Lower, the head is slower (a 12-degree step settles
+in 1.91 s at 0.25 and 2.09 s at 0.21, against 1.75), and a still head moves only once reach x its
+offset passes the deadband, so it can rest up to deadband / reach off, 1.3 degrees at 0.30. Higher,
+0.425 at 0.50 swings with pan geared twice (overshoot 1.7 degrees, oscillation). Reach 0.30 keeps
+each estimate on the near side of the person while 1 - reach x g >= 0, g being the real gearing
+over the assumed, so up to g = 3.3, inside the guard's reach <= 0.35 (2.86). The acceleration limit
+is what keeps pan's 1.9 Hz mode quiet: for this second-order head a change of acceleration a starts
+ringing of about a / omega_n^2 (1.06 a / omega_n^2 at damping 0.34), 34 / 11.84^2 = 0.24 degrees,
+under the deadband, against 2.1 at the old 300 deg/s^2. With 300 and the rest as tuned, 12-degree
+steps settle in 1.2-1.3 s on the measured plant, but the head swings with pan geared twice
+(overshoot 2.2 degrees, oscillation; cost 106.5). The zero-vibration shaper (A1 0.76 now and A2
+0.24 half a ringing period, 0.28 s, later) cancels the rest but delays every move: with it a
+12-degree step settles in 2.07 s instead of 1.75, at cost 77.6 against 64.4, for a worst overshoot
+on any plant of 0.04 degrees instead of 0.51. It stays in the controller, off.
+
+Two artefacts went with the tuning. A tuner run stalled twice with every worker idle: each scenario
+run made a new asyncio loop, which on Windows opens a loopback socket pair whose port is held about
+two minutes after closing; one candidate left 105 such ports and eight workers about 200 a second,
+past Windows' 16,384. Each thread now reuses one loop, leaving one port per worker, and a stalled
+batch now stops the tuner with its checkpoint kept rather than waiting forever. And the
+simulator's head speed setting replaced the controller's top speed in every run, so the scenarios
+had run the head at 40 deg/s whatever its default; it now does so only when set.
+
+**Not done.** The waist and the roll are not tuned on the measured plant: the whole robot fails
+"left", "right" and "far" (a person beyond the head's reach and a waist that breaks loose only above
+0.65 drive) and "tilt-noisy" (the roll levels a noisy face by a little under the degree asked), as
+strict expected failures; both stay off on the robot. Tilt's travel on the robot is uncertain since
+its linkage measured smaller in the evening, so the head must stay calm, and does, with tilt turning
+a quarter as far or with 20 servo degrees of slack. The plant comes from one recording, does not
+model the linkages beyond the windows (pan jammed, tilt over centre), and has not yet been checked
+against the head running closed-loop on the robot: the coordinator records that run.
+
 ## Recovering from lost connections (2026-11-02)
 
 A lost board, camera or detector now ends the bot the same way: it stops every node,

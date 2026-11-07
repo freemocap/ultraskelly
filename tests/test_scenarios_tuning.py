@@ -1,10 +1,11 @@
-"""The robot's head tuning on a plant like the one recorded on 2026-11-06: no swinging past people.
+"""The robot's head as launched, on the simulated robot as recorded on 2026-11-06.
 
-Full servo sweeps on the robot (scripts/check_pan_travel.py, 20:09-20:11) measured 0.27 degrees of view
-per pan servo degree and 0.12 per tilt degree where the linkages turn steadily, and run 20261106-194104
-showed the picture moving 0.1-0.2 s after a command. Outside the servo windows the robot's linkages jam
-or go over centre, which the simulator does not model; the launched head never commands there
-(tests/test_controllers.py). STRESS_PLANT is twice the measured pan gearing.
+The plant (simulator/plant.py) replays the recorded motor-response run within the fidelity bounds of
+tests/test_plant_fidelity.py; the battery (scenarios.HEAD_BATTERY) is the robot's present setup, the head
+alone. The launched aim is the one simulator/tuning.py found best on its stated cost: here it must pass
+the battery on the measured plant, and stay calm on the stressed plants the tuner weighed (pan gearing
+15 % either way, 1.5 and 2 times, a head that rings at 45 % instead of 22-32 %, 1.5 times the dead time)
+and on others it did not.
 """
 import dataclasses
 
@@ -12,31 +13,61 @@ import pytest
 
 from ultraskelly.__main__bot import launch_config
 from ultraskelly.simulator import scenarios as S
+from ultraskelly.simulator.tuning import PLANTS
 
-RECORDED_PLANT = {"pan_ratio": 0.27, "tilt_ratio": 0.12, "servo_lag": 0.15}
-STRESS_PLANT = {"pan_ratio": 0.54, "tilt_ratio": 0.12, "servo_lag": 0.15}
+CALM = ("overshoot", "oscillation", "runaway", "chased")  # Failures that mean the head swings or chases
+
+# Plants the tuner did not weigh: the camera's delay either side of the 50-70 ms measured, the OAK's field
+# of view (69 degrees on its datasheet, unmeasured) 5 degrees either way, and a tilt that barely turns or is
+# loose: on 2026-11-06 it went from 9-10 px per 12 servo degrees to 0-4.5 px per 25, so its travel is
+# uncertain until its linkage is checked. The head may then miss someone above or below, but not swing.
+UNWEIGHED = {
+    "camera delay 0.04 s": {"camera_latency": 0.04},
+    "camera delay 0.10 s": {"camera_latency": 0.10},
+    "field of view 64": {"camera_hfov": 64.0},
+    "field of view 74": {"camera_hfov": 74.0},
+    "tilt barely turns": {"tilt_ratio": 0.02},
+    "tilt loose": {"tilt_backlash": 20.0},
+}
+STRESSED = {**{name: settings for name, (settings, _) in PLANTS.items() if name != "measured"}, **UNWEIGHED}
 
 
-@pytest.mark.parametrize("plant,most", [(RECORDED_PLANT, 0.5), (STRESS_PLANT, S.OVERSHOOT_DEGREES)], ids=["measured", "stress"])
-@pytest.mark.parametrize("name", ["left", "right", "noisy", "lost", "walk", "two-people"])
-def test_the_launched_head_does_not_swing_past_people_on_the_recorded_plant(name, plant, most):
-    aim, scenario = launch_config().orientation.aim, next(s for s in S.SCENARIOS if s.name == name)
-
-    def prepare(sim):
-        sim.head.params.waist.enabled = sim.head.params.roll.enabled = False
-        for key, value in aim.model_dump().items():  # In place: the head's aim already holds this object
-            setattr(sim.head.params.aim, key, value)
-
-    trace, verdict = S.run(dataclasses.replace(scenario, settings={**scenario.settings, **plant}), prepare)
-    assert verdict.overshoot <= most, verdict.failures
-    assert not [f for f in verdict.failures if f.startswith(("overshoot", "oscillation", "runaway"))]
+def launched(sim):
+    S.head_alone(sim)
+    for key, value in launch_config().orientation.aim.model_dump().items():  # In place: the head holds this object
+        setattr(sim.head.params.aim, key, value)
 
 
-def test_the_old_gain_does_swing_on_the_stress_plant():
-    scenario = next(s for s in S.SCENARIOS if s.name == "left")
+@pytest.mark.parametrize("scenario", S.HEAD_BATTERY, ids=lambda scenario: scenario.name)
+def test_the_launched_head_passes_its_battery_on_the_measured_plant(scenario):
+    trace, verdict = S.run(scenario, launched)
+    assert verdict.passed, verdict.failures
+    assert verdict.overshoot <= 0.5
 
-    def prepare(sim):
-        sim.head.params.waist.enabled = sim.head.params.roll.enabled = False
 
-    trace, verdict = S.run(dataclasses.replace(scenario, settings={**scenario.settings, **STRESS_PLANT}), prepare)
-    assert verdict.overshoot > 2.0  # The old gain swings where the new one does not: the test can see it
+@pytest.mark.parametrize("plant", STRESSED)
+def test_the_launched_head_stays_calm_on_stressed_plants(plant):
+    swinging = []
+    for scenario in S.HEAD_BATTERY:
+        trace, verdict = S.run(dataclasses.replace(scenario, settings={**scenario.settings, **STRESSED[plant]}), launched)
+        swinging += [f"{scenario.name}: {failure}" for failure in verdict.failures if failure.startswith(CALM)]
+    assert not swinging
+
+
+def test_the_battery_catches_a_head_that_swings():
+    def aggressive(sim):  # Full reach, no smoothing, no shaping, fast: it rings the head's own mode
+        S.head_alone(sim)
+        aim = sim.head.params.aim
+        aim.reach, aim.smoothing, aim.max_speed, aim.max_acceleration, aim.shaper, aim.deadband = 1.0, 1.0, 120.0, 3000.0, False, 0.0
+
+    trace, verdict = S.run(S.HEAD_BY_NAME["step-left"], aggressive)
+    assert verdict.overshoot > S.OVERSHOOT_DEGREES and verdict.pan_reversals > 5 and not verdict.passed
+
+
+def test_the_battery_catches_a_head_that_adds_up_false_detections():
+    def counting_alone(sim):  # A jump believed after jump_samples sightings however far apart: the old count
+        launched(sim)
+        sim.head.params.aim.candidate_gap = 1e9
+
+    trace, verdict = S.run(S.HEAD_BY_NAME["ghosts-one-spot"], counting_alone)
+    assert verdict.wandered > 10.0 and not verdict.passed
