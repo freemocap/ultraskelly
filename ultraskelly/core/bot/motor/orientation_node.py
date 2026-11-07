@@ -283,11 +283,12 @@ class OrientationNode(Node):
         # head can counter-rotate at once. Negative drive turns the torso toward positive pan.
         dt = 0.0 if self.last_step is None else min(max(now - self.last_step, 0.0), MAX_STEP)
         self.last_step = now
-        self.body_turn -= (self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second * dt
-        self._command_head(*self.head_aim.update(now=now, body=self.body_turn))
+        body_rate = -(self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second
+        self.body_turn += body_rate * dt
+        self._command_head(*self.head_aim.update(now=now, body=self.body_turn, body_rate=body_rate))
         self._track_pinned(now, errors)
         self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
-        if any(self.head_aim.turning):
+        if not all(self.head_aim.settled):
             self.head_still_since = None
         elif self.head_still_since is None:
             self.head_still_since = now
@@ -296,7 +297,7 @@ class OrientationNode(Node):
         # back toward the middle meanwhile; without a target the waist ramps to a stop.
         if self.params.waist.enabled:
             self.waist_motor.throttle = self.waist_drive.update(
-                now=now, pan_offset=self.head_aim.bearing() if valid else None,
+                now=now, pan_offset=self.head_aim.demand() if valid else None,
                 head_still_for=0.0 if self.head_still_since is None else now - self.head_still_since,
             )
         else:
@@ -312,7 +313,7 @@ class OrientationNode(Node):
         """Main control loop."""
         waist = self.params.waist
         logger.info(
-            f"Starting OrientationNode [head up to {self.params.aim.max_speed:.0f} deg/s, "
+            f"Starting OrientationNode [pan up to {self.params.aim.pan_speed:.0f} deg/s at {self.params.aim.pan_acceleration:.0f} deg/s^2, "
             f"waist {waist.min_throttle:.2f}-{waist.max_throttle:.2f} from {waist.start_throttle:.2f}, "
             f"ramps +{waist.ramp_up:.1f}/-{waist.ramp_down:.1f} per s]"
         )

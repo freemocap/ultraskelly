@@ -45,7 +45,8 @@ def test_servo_tests_reach_every_angle_the_servo_takes():
         # 2026-11-07: "the -10 tilt moves the head UP and +10 moves it down")
         assert tester.state()["limits"]["directions"] == {"pan": 1, "tilt": 1, "roll": -1}
         tester.orientation.params.roll.servo_speed = 1000.0  # This test is about the range, not the sweep's speed
-        tester.orientation.params.aim.max_acceleration = tester.orientation.params.roll.max_acceleration = 1000.0
+        aim = tester.orientation.params.aim
+        aim.pan_acceleration = aim.tilt_acceleration = tester.orientation.params.roll.max_acceleration = 1000.0
         for actuator, angle in (("tilt", 180.0), ("tilt", 0.0), ("pan", 180.0), ("pan", 0.0), ("tilt", 90.0),
                                 ("roll", 180.0), ("roll", 0.0), ("roll", 90.0)):
             result = await tester.run(MotorTestRequest(actuator=actuator, angle=angle))
@@ -58,10 +59,11 @@ def test_servo_tests_reach_every_angle_the_servo_takes():
 
 def test_a_servo_test_sweeps_at_the_heads_own_top_speed_and_a_stop_holds_it():
     # 2026-11-07, the owner: "decrease max pan servo speed". A test jumped the servo at its own full speed; it now turns
-    # no faster than following does (pan_servo_speed for pan; the robot launches with 30 degrees a second).
+    # no faster than following does (pan_speed over the gearing, in servo degrees a second).
     async def scenario():
         tester, recorder, bus = build()
-        tester.orientation.params.aim.pan_servo_speed = 60.0
+        aim = tester.orientation.params.aim
+        aim.pan_speed = 60.0 * aim.pan_ratio  # 60 servo degrees a second
         result = await tester.run(MotorTestRequest(actuator="pan", angle=120))
         pans = values(recorder, "pan")
         assert result["outcome"] == "done" and pans[-1] == 120 and tester.orientation.pan_angle == 120

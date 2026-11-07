@@ -40,8 +40,8 @@ class Settings(BaseModel):
     pitch: float = Field(default=10, ge=-60, le=60)
     visible: bool = True
     sensor_hz: Literal[10, 20, 30, 50, 100] = 30
-    # The head's top turning speed, degrees per second; None keeps the controller's own (HeadAimParams.max_speed)
-    head_speed: float | None = Field(default=None, gt=0, le=600)
+    # Pan's top turning speed, degrees of view per second; None keeps the controller's own (HeadAimParams.pan_speed)
+    head_speed: float | None = Field(default=None, gt=0, le=150)
     head_deadzone: int = Field(default=100, ge=0, le=240)
     waist_gain: float = Field(default=0.008, gt=0, le=0.05)
     # The waist as measured on 2026-11-06 (plant.WAIST): it needs more than 0.6 drive to break loose
@@ -166,7 +166,7 @@ class Simulation:
         settings = Settings.model_validate(self.settings.model_dump() | values)
         self.settings = settings
         if settings.head_speed is not None:
-            self.head.params.aim.max_speed = settings.head_speed
+            self.head.params.aim.pan_speed = settings.head_speed
         self.head.params.head_deadzone = settings.head_deadzone
         self.head.params.waist.gain = settings.waist_gain
         if hasattr(self, "axes"):  # Plant settings take effect from here on, the axes where they stand

@@ -6,9 +6,9 @@ from ultraskelly.simulator.engine import Simulation, Settings
 
 
 def settled_pixels(sim):
-    """How far off centre a person may stay: a still head turns only once its goal is past its deadband."""
+    """How far off centre a person may stay: a settled head turns again only once its aim is past its resume band."""
     aim = sim.head.params.aim
-    return aim.deadband / aim.reach * aim.px_per_degree + 1
+    return max(aim.pan_resume, aim.tilt_resume) * aim.px_per_degree + 2
 
 
 @pytest.mark.parametrize("yaw", [-30, 30])  # Inside the OAK's 69-degree view

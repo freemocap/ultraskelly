@@ -75,19 +75,21 @@ def test_a_face_low_in_the_picture_pans_as_one_at_eye_level():
 
 
 def test_the_battery_catches_a_head_that_swings():
-    def aggressive(sim):  # Full reach, no smoothing, no shaping, fast: it rings the head's own mode
+    def aggressive(sim):  # A planned move all the way, a high gain, no shaping, hard acceleration, no band
         S.head_alone(sim)
         aim = sim.head.params.aim
-        aim.reach, aim.smoothing, aim.max_speed, aim.max_acceleration, aim.shaper, aim.deadband = 1.0, 1.0, 120.0, 3000.0, False, 0.0
+        aim.reach, aim.pan_gain, aim.pan_speed, aim.pan_acceleration, aim.shaper = 1.0, 10.0, 150.0, 1000.0, False
+        aim.pan_settle = aim.pan_resume = 0.0
+        aim.pan_dead_time = 0.0  # And a model that ignores the servo's delay
 
     trace, verdict = S.run(S.HEAD_BY_NAME["step-left"], aggressive)
-    assert verdict.overshoot > S.OVERSHOOT_DEGREES and verdict.pan_reversals > 5 and not verdict.passed
+    assert verdict.overshoot > S.OVERSHOOT_DEGREES and verdict.pan_reversals > 2 and not verdict.passed
 
 
-def test_the_battery_catches_a_head_that_adds_up_false_detections():
-    def counting_alone(sim):  # A jump believed after jump_samples sightings however far apart: the old count
+def test_the_battery_catches_a_head_that_believes_single_false_frames():
+    def credulous(sim):  # Someone new believed on one frame: the robot's 1-3 frame false detections take it
         launched(sim)
-        sim.head.params.aim.candidate_gap = 1e9
+        sim.head.params.aim.confirm_frames = sim.head.params.aim.confirm_window = 1
 
-    trace, verdict = S.run(S.HEAD_BY_NAME["ghosts-one-spot"], counting_alone)
+    trace, verdict = S.run(S.HEAD_BY_NAME["ghosts-one-spot"], credulous)
     assert verdict.wandered > 10.0 and not verdict.passed

@@ -137,11 +137,13 @@ def ghosts(base: Callable[[float], list[Person]], every: float = 0.7, frames: tu
     """`base`'s people plus a false detection every `every` seconds, for 1-3 frames in turn, at `yaw` on
     each of `sides` in turn (30 degrees lands within 25 px of the picture's edge with the head ahead): on
     the robot 28 % of person detections had at most two confident keypoints, 93 % of them at the edge, and
-    ten bursts of up to three frames gave targets (run 20261106-194104)."""
+    ten bursts of up to three frames gave targets (run 20261106-194104). A burst lasts half a frame less than
+    its frames, so it spans exactly that many of the camera's frames: a whole number of frame periods on the
+    simulator's 10 ms ticks sometimes held one more (frames come 30-40 ms apart there)."""
     frame = 1 / 30
     def people(t: float) -> list[Person]:
         burst = int(t / every)
-        length = frames[burst % len(frames)] * frame
+        length = (frames[burst % len(frames)] - 0.5) * frame
         found = list(base(t))
         if burst > 0 and t - burst * every < length:
             found.append(Person(yaw * sides[burst % len(sides)], 0.0, score))

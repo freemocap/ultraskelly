@@ -95,7 +95,7 @@ def main() -> None:
 
     params = OrientationNodeParams()
     if args.speed is not None:
-        params.aim.max_speed = args.speed
+        params.aim.pan_speed = args.speed
     servos = open_servo_board()
     bus = PubSubTopicManager.create()
     camera = OakCameraNode.create(pubsub=bus, params=OakCameraNodeParams(flip_camera=True))
@@ -148,7 +148,7 @@ def main() -> None:
             servos.servo[channel].angle = 90.0
         camera.pipeline.stop()
         camera.pipeline.getDefaultDevice().close()
-    print(json.dumps({"speed": params.aim.max_speed, "delay_frames": args.delay_frames, "runs": runs}, indent=1))
+    print(json.dumps({"speed": params.aim.pan_speed, "delay_frames": args.delay_frames, "runs": runs}, indent=1))
     if args.save:
         rows = []
         for offset, first, centre, last, end_row in pictures:

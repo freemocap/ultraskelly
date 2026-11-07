@@ -75,9 +75,7 @@ def launch_config(
     # for 0.3 s, which the tighter deadband makes rarer. The roll levels the followed face (the owner, 2026-11-07:
     # "start the face leveling head roll support work"): on the simulated robot it straightens a tilted face only
     # about 1.5 degrees, all its linkage gives within `span` (tests/test_scenarios.py, the "tilt" scenarios).
-    config.orientation = OrientationNodeParams(
-        follow=follow, aim=HeadAimParams(deadband=0.12, max_acceleration=25.0),
-    )
+    config.orientation = OrientationNodeParams(follow=follow, aim=HeadAimParams())
     return config
 
 

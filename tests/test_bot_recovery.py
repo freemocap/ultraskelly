@@ -90,7 +90,8 @@ class Bot:
             servo_kit=FakeServoKit(servo_board),
             waist_motor=self.waist,
             target_subscription=pubsub.get_subscription(TargetLocationTopic),
-            pan_angle=150.0,  # Head turned well past where the waist drive starts turning the torso
+            # Head at the end of its reach, and the fake camera's person always 10 px further: the waist turns at once
+            pan_angle=165.0,
         )
         mouth = MouthNode(
             pubsub=pubsub,

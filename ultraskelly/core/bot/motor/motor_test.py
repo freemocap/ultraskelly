@@ -172,13 +172,14 @@ class MotorTester:
 
     async def _sweep(self, servo, actuator: str, target: float) -> bool:
         """Turn a head servo to `target` as the head turns it when following: no faster than its top speed
-        (pan_servo_speed for pan, servo_speed for tilt, the roll's own servo_speed for roll), speeding up and slowing
-        down at its acceleration (max_acceleration over the axis's gearing, in servo degrees), not jumping to the
-        servo's own full speed. True if a stop came first; the servo holds where the sweep had got to."""
+        (pan_speed or tilt_speed over the axis's gearing, the roll's own servo_speed for roll), speeding up and
+        slowing down at its acceleration (pan_acceleration or tilt_acceleration over the gearing, in servo degrees),
+        not jumping to the servo's own full speed. True if a stop came first; the servo holds where the sweep had
+        got to."""
         aim, roll = self.orientation.params.aim, self.orientation.params.roll
         speed, acceleration = {
-            "pan": (min(aim.servo_speed, aim.pan_servo_speed), aim.max_acceleration / aim.pan_ratio),
-            "tilt": (aim.servo_speed, aim.max_acceleration / aim.tilt_ratio),
+            "pan": (aim.pan_speed / aim.pan_ratio, aim.pan_acceleration / aim.pan_ratio),
+            "tilt": (aim.tilt_speed / aim.tilt_ratio, aim.tilt_acceleration / aim.tilt_ratio),
             "roll": (roll.servo_speed, roll.max_acceleration / roll.ratio),
         }[actuator]
         position = float(getattr(self.orientation, f"{actuator}_angle"))

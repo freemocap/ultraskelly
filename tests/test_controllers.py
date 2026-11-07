@@ -209,10 +209,10 @@ def test_a_jump_must_hold_over_consecutive_frames_not_add_up_from_bursts():
 
     def believed(seen: list[float]) -> bool:
         """Whether the head takes up a target by the picture's edge, seen at these times."""
-        aim = HeadAim(HeadAimParams(jump_samples=5), 90.0, 90.0)
+        aim = HeadAim(HeadAimParams(), 90.0, 90.0)  # Someone new must be seen in 4 of 5 frames
         for now in seen:
             aim.observe(now=now, error_x=300.0, error_y=0.0, captured=now)
-        return aim.goal is not None
+        return aim.tracks is not None
 
     frame = 1 / 30
     bursts = [start + n * frame for start in (0.0, 0.7, 1.4, 2.1) for n in range(3)]
