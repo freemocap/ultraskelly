@@ -21,7 +21,7 @@ Observed through the re-imaged Pi and the owner's description, not by inspecting
 | Part | Best-supported identification | Confidence and evidence |
 | --- | --- | --- |
 | Host | Raspberry Pi 5 | You identified the model. Python runs the camera and actuator controllers. |
-| Camera | Raspberry Pi AI Camera / Sony IMX500 family (original build; not fitted as of 2026-11-02) | `PoseDetectorNode` constructs IMX500 and Picamera2. Exact module branding and cable routing are unverified. |
+| Camera | Raspberry Pi AI Camera / Sony IMX500 family (original build; not fitted as of 2026-11-02) | Its pose detector constructed IMX500 and Picamera2; that code was removed on 2026-11-07 and remains in git history at `d4fe10b`. Exact module branding and cable routing are unverified. |
 | Servo controller | 16-channel PCA9685 board, possibly Adafruit Servo HAT, bonnet, or breakout | `ServoKit(channels=16)` uses default address `0x40` and 50 Hz. Library supports multiple physical boards; source cannot identify the SKU. |
 | DC driver | Likely Adafruit DC & Stepper Motor HAT or compatible MotorKit board | Both active motor factories select `0x60`, 1600 Hz. Scratch code explicitly calls it a DC+Stepper HAT. HAT versus bonnet and revision remain unverified. |
 | Head actuators | Three positional hobby servos | `servo[3].angle` controls pan, `servo[11].angle` tilt, `servo[7].angle` roll (held level at 90). Found 2026-11-06 by wiggling each channel with the user watching. Model, torque and rated supply voltage are absent. |
@@ -69,7 +69,7 @@ Old tracking scripts disagree on servo channels, and some include roll. The acti
 
 1. With power disconnected, compare board labels and connector markings against this map. Identify motor and servo supply ratings before reconnecting power. Keep unresolved power and encoder connections unconnected until identified.
 2. Confirm the two servo plugs are on outputs 11 and 3, and the two actuator pairs are on M1 and M2. Inspect signal/power/ground orientation on the actual servo board.
-3. Original IMX500 build only: confirm the camera ribbon fits the Pi 5 and AI Camera connectors. The code discovers `imx500.camera_num`; it does not encode which CAM/DISP socket you used. The current cameras are USB; see the observations above.
+3. Original IMX500 build only: confirm the camera ribbon fits the Pi 5 and AI Camera connectors. Its code (removed 2026-11-07, in git history at `d4fe10b`) discovered `imx500.camera_num`; it did not encode which CAM/DISP socket you used. The current cameras are USB; see the observations above.
 4. After the physical wiring and supplies are established, check the expected control addresses `0x40` and `0x60`. Address presence alone does not establish correct motor wiring or supply voltage; board all-call addresses can also appear.
 5. Plan the first powered actuator check with clearance for motion: the existing hardware factories immediately command head servos to 90 degrees and drive the jaw at +1 for 0.5 seconds, then -1 for 0.5 seconds. Since 2026-11-02 the launcher no longer recreates nodes periodically, so this happens once per launch. Do not launch it merely to identify connected boards.
 
@@ -92,7 +92,7 @@ Repository evidence:
 - [Active launcher](../ultraskelly/bot_launcher.py): `LaunchConfig`, `_create_nodes`.
 - [Orientation controller](../ultraskelly/core/bot/motor/orientation_node.py): parameter defaults and `create`.
 - [Jaw controller](../ultraskelly/core/bot/motor/mouth_node.py): channel 2, address and startup drive.
-- [Pose detector](../ultraskelly/core/bot/sensory/pose_detection_node.py): IMX500 model and camera discovery.
+- IMX500 pose detector, `ultraskelly/core/bot/sensory/pose_detection_node.py` (removed 2026-11-07; in git history at `d4fe10b`): IMX500 model and camera discovery.
 - [Historical waist/encoder experiment](../ultraskelly/scratch/rotory_motor_test.py): HAT description and GPIO assignments. Read only; do not import it for inspection.
 
 Manufacturer references checked 2026-10-29:

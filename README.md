@@ -71,8 +71,7 @@ finds, and MediaPipe hands five times a second (`--no-oak-models` turns them off
 where, and why, is in the audit).
 `scripts/setup-pi.sh` fetches the models once (`.venv/bin/python -m scripts.fetch_oak_models`
 does it alone); the bot then loads them without the internet, and with one missing it runs
-the OAK as a plain camera and says why. The original IMX500 AI camera remains available as
-`DetectorType.POSE` in `ultraskelly/__main__bot.py`. depthai, the OAK's library, uploads
+the OAK as a plain camera and says why. depthai, the OAK's library, uploads
 usage events to Luxonis by default; the bot and the OAK scripts turn that off
 (`DEPTHAI_TELEMETRY=0`) unless the variable is already set.
 
@@ -95,9 +94,9 @@ desktop log in by itself and keep the screen on; installs uv and builds `.venv`;
 the OAK's models into `~/ultraskelly-models/oak-zoo`; and installs the robot's services,
 disabled. The first sudo may ask for your password.
 Reboot when it says so; it is safe to re-run. `.venv` is built on the system Python
-because Picamera2, libcamera and the Hailo runtime with its pose model come from
-Raspberry Pi OS; the `hardware` extra adds the motor, OpenCV and OAK (`depthai`)
-packages. Installing the extra on Windows does not provide a Pi runtime.
+because the Hailo runtime and its pose model come from Raspberry Pi OS; the `hardware`
+extra adds the motor, OpenCV and OAK (`depthai`) packages. Installing the extra on
+Windows does not provide a Pi runtime.
 
 `scripts/setup-pi.sh --check` changes nothing. It reports every setting, the OAK's models
 among them, why the Pi last stopped, the power and USB state, the Hailo-8, the I²C boards,
@@ -110,7 +109,7 @@ loss or whenever something seems off.
 scripts/run-bot.sh                  # add bot options, such as --record
 ```
 
-runs `python -m ultraskelly --hardware --no-window` from `.venv`, holding the robot
+runs `python -m ultraskelly --hardware` from `.venv`, holding the robot
 lock (below). The older `python -m ultraskelly.__main__bot` entry point also remains
 available. Both center the head when they start; the full-power jaw test runs only with
 `MouthNodeParams.startup_test`. Every servo angle and motor throttle is clamped to
@@ -121,9 +120,7 @@ actuators record their commands and send nothing. Cameras and the Hailo-8 are pi
 within seconds of appearing; a motor board that answers after the start is reported with a
 restart to use it, since the boards are set up only at startup. Add `--simulate-motors` to run the
 cameras and controllers while recording motor commands in memory instead of driving the
-motor boards. Add `--window` to also show the
-camera in an OpenCV window, which needs a graphical session; `--no-window` is accepted
-and does nothing, since the window is off by default. While the bot runs, port
+motor boards. While the bot runs, port
 8080 serves the live dashboard to the network. One read-only WebSocket, `/stream`,
 carries FreeMoCap's self-describing CBOR messages: `frame` messages with each OAK image
 and the poses, faces and hands found in it, and `robot_state` messages with motor commands,

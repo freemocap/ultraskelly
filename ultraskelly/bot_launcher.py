@@ -57,27 +57,17 @@ from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, Ru
 from ultraskelly.core.bot.stall_monitor_node import StallMonitorNode, StallMonitorParams
 
 logger = logging.getLogger(__name__)
-from ultraskelly.core.bot.base_abcs import DetectorType, Node, NodeParams
-from ultraskelly.core.bot.sensory.bright_point_detection_node import (
-    BrightnessDetectorNode,
-    BrightnessDetectorParams,
-)
-from ultraskelly.core.bot.sensory.camera_node import VisionNode, VisionNodeParams
+from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import (
     HailoPoseDetectorNode,
     HailoPoseDetectorParams,
 )
 from ultraskelly.core.bot.sensory.oak_camera_node import OakCameraNode, OakCameraNodeParams
 from ultraskelly.core.bot.sensory.oak_models import missing_models
-from ultraskelly.core.bot.sensory.pose_detection_node import (
-    PoseDetectorNode,
-    PoseDetectorParams,
-)
 from ultraskelly.core.bot.sensory.face_locator_node import FaceLocatorNode, FaceLocatorParams
 from ultraskelly.core.bot.sensory.stereo_depth_node import StereoDepthNode, StereoDepthNodeParams
 from ultraskelly.core.bot.sensory.zed_camera_node import ZED_MODES, ZedCameraNode, ZedCameraNodeParams
 from ultraskelly.core.bot.sensory.zed_imu_node import ZedImuNode, ZedImuNodeParams
-from ultraskelly.ui.cv2_ui import UINode, UINodeParams
 from ultraskelly.ui.runtime_server import (
     RuntimeServerNode, RuntimeServerParams, TrackingOverlay, encode_jpeg_with_opencv,
 )
@@ -103,30 +93,14 @@ OAK_FEED = "oak"  # The dashboard's name for the OAK's camera
 class LaunchConfig(NodeParams):
     """Declarative launch configuration."""
 
-    detector_type: DetectorType = Field(
-        default=DetectorType.POSE, description="Which detector to use"
-    )
-    vision: VisionNodeParams = Field(default_factory=VisionNodeParams)
-    brightness_detector: BrightnessDetectorParams = Field(
-        default_factory=BrightnessDetectorParams
-    )
-    pose_detector: PoseDetectorParams = Field(default_factory=PoseDetectorParams)
     oak_camera: OakCameraNodeParams = Field(default_factory=OakCameraNodeParams)
     hailo_pose_detector: HailoPoseDetectorParams = Field(default_factory=HailoPoseDetectorParams)
-    # head: HeadNodeParams = Field(default_factory=HeadNodeParams)
     mouth: MouthNodeParams = Field(default_factory=MouthNodeParams)
-    # waist: WaistNodeParams = Field(default_factory=WaistNodeParams)
     orientation: OrientationNodeParams = Field(default_factory=OrientationNodeParams)
-    ui: UINodeParams = Field(default_factory=UINodeParams)
     runtime_server: RuntimeServerParams = Field(default_factory=RuntimeServerParams)
     simulate_motors: bool = Field(
         default=False,
         description="Drive memory-only servo and motor stand-ins instead of the motor boards",
-    )
-    show_window: bool = Field(
-        default=False,
-        description="Also show the OpenCV camera window (`--window`), which needs a desktop session; "
-                    "the dashboard works either way.",
     )
     limits: ActuatorLimits = Field(
         default_factory=ActuatorLimits,
@@ -276,9 +250,6 @@ class BotLauncher(BaseModel):
             return
         stereo_feeds = self._create_stereo_nodes()
 
-        # Create motor and UI nodes
-        # self.nodes.append(HeadNode.create(pubsub=self.pubsub, params=self.config.head))
-        # self.nodes.append(WaistNode.create(pubsub=self.pubsub, params=self.config.waist))
         orientation, mouth = self._create_motor_nodes()
         self.controllers = (orientation, mouth)
         self.nodes.extend([orientation, mouth])
@@ -291,52 +262,29 @@ class BotLauncher(BaseModel):
         self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
         orientation.motor_watchdog = self.motor_watchdog
         self.watches.append(self._watch_head(orientation))
-        if self.config.show_window:
-            self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
-        # Create detector based on type
-        oak = None
-        if self.config.detector_type == DetectorType.BRIGHTNESS:
-            self.nodes.append(
-                VisionNode.create(pubsub=self.pubsub, params=self.config.vision)
-            )
-            self.nodes.append(
-                BrightnessDetectorNode.create(
-                    pubsub=self.pubsub, params=self.config.brightness_detector
-                )
-            )
-        elif self.config.detector_type == DetectorType.POSE:
-            self.nodes.append(
-                PoseDetectorNode.create(pubsub=self.pubsub, params=self.config.pose_detector)
-            )
-        elif self.config.detector_type == DetectorType.HAILO_POSE:
-            oak = self._create_tracking_nodes()
-        else:
-            raise ValueError(f"Unknown detector type: {self.config.detector_type}")
-
-        hailo_pose = self.config.detector_type == DetectorType.HAILO_POSE
-        camera_name = OAK_FEED if hailo_pose else "camera"
+        oak = self._create_tracking_nodes()
         aim = self.config.orientation
         self.server = RuntimeServerNode.create(
             pubsub=self.pubsub,
             params=self.config.runtime_server,
-            cameras={camera_name: FrameTopic},
+            cameras={OAK_FEED: FrameTopic},
             **stereo_feeds,
             recorder=self.command_recorder,
             motors_simulated=self.config.simulate_motors,
             node_status=self.node_status,
             overlays={
-                camera_name: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
+                OAK_FEED: TrackingOverlay(aim=(aim.target_x, aim.target_y), jaw_zone=aim.head_deadzone)
             },
             # The Hailo detector reports which OAK frame each pose came from.
-            pose_camera=camera_name if hailo_pose else None,
+            pose_camera=OAK_FEED,
             motor_tests=self.motor_tester,
             # The OAK's own chip finds faces in the same frames.
             # Only while the OAK runs its models: without them no frame would ever get its results.
             # An OAK brought back later sets it (_oak_started); its results and status follow the newest OAK.
-            results_camera=camera_name if oak is not None and oak.assembler is not None else None,
-            results_for=self._oak_results if hailo_pose else None,
-            oak_status=self._oak_status if hailo_pose else None,
+            results_camera=OAK_FEED if oak is not None and oak.assembler is not None else None,
+            results_for=self._oak_results,
+            oak_status=self._oak_status,
             health=self.health,
         )
         self.nodes.append(self.server)
@@ -345,7 +293,7 @@ class BotLauncher(BaseModel):
                 RunRecorderNode.create(
                     pubsub=self.pubsub,
                     params=self.config.recording,
-                    camera=camera_name,
+                    camera=OAK_FEED,
                     frame_topic=FrameTopic,
                     commands=self.command_recorder,
                     configuration=self.config.model_dump(mode="json"),
@@ -358,13 +306,11 @@ class BotLauncher(BaseModel):
             StallMonitorNode.create(
                 pubsub=self.pubsub,
                 params=self.config.stall_monitor,
-                # Only the Hailo detector reports the frame each pose result belongs to.
-                watch_poses=hailo_pose,
+                # The Hailo detector reports the frame each pose result belongs to.
+                watch_poses=True,
                 # A stream is watched only while its source works; a missing one is reported, not restarted.
-                frames_expected=(lambda: self.health.ok("oak_camera")) if hailo_pose else None,
-                poses_expected=(
-                    (lambda: self.health.ok("oak_camera") and self.health.ok("hailo")) if hailo_pose else None
-                ),
+                frames_expected=lambda: self.health.ok("oak_camera"),
+                poses_expected=lambda: self.health.ok("oak_camera") and self.health.ok("hailo"),
             )
         )
 
@@ -714,13 +660,6 @@ class BotLauncher(BaseModel):
 
         # Clear task list
         self.tasks.clear()
-
-        # Explicitly close camera resources for PoseDetectorNode
-        for node in self.nodes:
-            if hasattr(node, 'picam2') and node.picam2 is not None:
-                logger.info(f"Closing camera for {node.__class__.__name__}")
-                node.picam2.close()
-                node.picam2 = None
 
         # Clear nodes to release resources
         self.nodes.clear()

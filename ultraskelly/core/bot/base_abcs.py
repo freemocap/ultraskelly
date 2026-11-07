@@ -1,19 +1,11 @@
 from abc import ABC, abstractmethod
 import asyncio
-from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 from pydantic import BaseModel, SkipValidation, Field, ConfigDict
 
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
-
-
-class DetectorType(Enum):
-    """Types of detectors available."""
-    BRIGHTNESS = auto()
-    POSE = auto()  # IMX500 AI camera on the Pi's camera connector
-    HAILO_POSE = auto()  # OAK USB camera + YOLOv8 pose on the Hailo-8 AI HAT+
 
 
 class NodeParams(BaseModel):

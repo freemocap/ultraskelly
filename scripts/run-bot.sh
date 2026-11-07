@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the robot the way the boot service does: under the shared robot lock, from
-# this checkout's virtual environment, without the OpenCV window.
+# this checkout's virtual environment.
 #
 #   scripts/run-bot.sh [more bot options, e.g. --record]
 #
@@ -32,4 +32,4 @@ if ! flock --nonblock 9; then
 fi
 
 cd "$repo"
-exec "$python" -m ultraskelly --hardware --no-window "$@"
+exec "$python" -m ultraskelly --hardware "$@"
