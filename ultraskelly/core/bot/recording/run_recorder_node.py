@@ -19,12 +19,19 @@ files line up with each other and with the audio (run.json gives its first sampl
 time). Motor values are commands, not measured positions. A thread does the writing
 behind a bounded queue: a slow disk drops items, counted in run.json, instead of
 slowing the bot.
+
+The video takes about 5 GB an hour, so the recordings keep within a budget: as a run starts,
+the oldest run folders are deleted until the rest fit in `keep_gb`, and while the disk has
+less than `min_free_gb` free, video frames and IMU samples are dropped (and counted).
 """
 import asyncio
 import csv
 import json
 import logging
+import math
 import queue
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -120,6 +127,38 @@ class RunRecorderParams(NodeParams):
         default=None, description="Part of a sound card's name to record audio from; None records no audio"
     )
     queue_size: int = Field(default=60, ge=1, description="Items waiting for the disk before new ones are dropped")
+    keep_gb: float = Field(
+        default=40.0, gt=0.0,
+        description="Run folders kept, in GB: as a run starts, the oldest runs are deleted until the rest fit. "
+                    "The video takes about 5 GB an hour",
+    )
+    min_free_gb: float = Field(
+        default=20.0, ge=0.0,
+        description="Below this much free disk, video frames and IMU samples stop being written (and are counted "
+                    "as dropped); the small tables go on",
+    )
+
+
+RUN_NAME = re.compile(r"run-\d{8}-\d{6}")  # The folders this node makes; nothing else in `folder` is ever deleted
+DISK_CHECK_SECONDS = 30.0
+
+
+def prune_runs(folder: Path, keep_bytes: float) -> list[tuple[str, int]]:
+    """Delete the oldest run folders until the runs left take at most `keep_bytes`. Returns each deleted run's
+    name and size."""
+    if not folder.is_dir():
+        return []
+    runs = sorted((path for path in folder.iterdir() if path.is_dir() and RUN_NAME.fullmatch(path.name)),
+                  key=lambda path: path.name)  # The names sort by start time
+    sizes = {run: sum(file.stat().st_size for file in run.rglob("*") if file.is_file()) for run in runs}
+    total, deleted = sum(sizes.values()), []
+    for run in runs:
+        if total <= keep_bytes:
+            break
+        shutil.rmtree(run, ignore_errors=True)
+        total -= sizes[run]
+        deleted.append((run.name, sizes[run]))
+    return deleted
 
 
 class RunRecorderNode(Node):
@@ -236,8 +275,23 @@ class RunRecorderNode(Node):
             poses = files.enter_context(open(self.folder / "poses.jsonl", "w"))
             video = imu = None
             previous_number = next_imu_sample = None
+            checked_at, low_disk = -math.inf, False
             while (item := self.pending.get()) is not None:
                 kind, received, message = item
+                if kind in ("frame", "imu"):  # The big ones: they stop while the disk is nearly full
+                    if (now := time.monotonic()) - checked_at >= DISK_CHECK_SECONDS:
+                        checked_at = now
+                        free = shutil.disk_usage(self.folder).free
+                        if (free < self.params.min_free_gb * 1e9) != low_disk:
+                            low_disk = not low_disk
+                            if low_disk:
+                                logger.warning(f"Only {free / 1e9:.1f} GB of disk left: the recording stops saving "
+                                               f"video and IMU samples until there is {self.params.min_free_gb:g} GB")
+                            else:
+                                logger.info("Disk space is back: the recording saves video and IMU samples again")
+                    if low_disk:
+                        self.dropped[f"{kind}_low_disk"] = self.dropped.get(f"{kind}_low_disk", 0) + 1
+                        continue
                 if kind == "frame":
                     frame: FrameMessage = message
                     if video is None:
@@ -275,6 +329,9 @@ class RunRecorderNode(Node):
                 self.counts[kind] = self.counts.get(kind, 0) + 1
 
     def _start(self) -> None:
+        for name, size in prune_runs(self.params.folder, self.params.keep_gb * 1e9):
+            logger.info(f"Deleted the oldest recording, {name} ({size / 1e9:.1f} GB), to keep recordings under "
+                        f"{self.params.keep_gb:g} GB")
         self.started, self.started_at = datetime.now(), time.monotonic()
         self.folder = self.params.folder / f"run-{self.started:%Y%m%d-%H%M%S}"
         self.folder.mkdir(parents=True)

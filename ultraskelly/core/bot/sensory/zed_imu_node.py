@@ -12,11 +12,12 @@ recording only: nothing steers by them.
 """
 import asyncio
 import logging
+import math
 import os
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -41,6 +42,8 @@ NOT_FOUND = (
 
 TICK = 39062.5e-9  # Seconds per IMU tick
 TICKS_PER_SAMPLE = 32  # 800 samples a second by the IMU's clock
+COUNT_SPAN = 1 << 24  # The tick count is 24 bits: it wraps every 655.36 s (seen on the Pi, 2026-11-06)
+WRAP_STEP = int(10.0 / TICK)  # A drop that lands at most 10 s past the wrap is the count wrapping, not a reset
 ACCELERATION_SCALE = 9.8189 * 8.0 / 32768.0  # m/s² per count: ±8 g
 ANGULAR_VELOCITY_SCALE = 1000.0 / 32768.0  # Degrees per second per count: ±1000 °/s
 TEMPERATURE_SCALE = 0.01  # °C per count
@@ -66,6 +69,12 @@ class ImuSamples:
     acceleration: np.ndarray  # (N, 3) float32 m/s²
     angular_velocity: np.ndarray  # (N, 3) float32 °/s
     temperature: np.ndarray  # (N,) float32 °C, the IMU's
+
+
+def samples_between(samples: ImuSamples, start: int, end: int) -> ImuSamples:
+    """Samples start to end (exclusive)."""
+    return ImuSamples(ticks=samples.ticks[start:end], acceleration=samples.acceleration[start:end],
+                      angular_velocity=samples.angular_velocity[start:end], temperature=samples.temperature[start:end])
 
 
 def parse_reports(data: bytes) -> ImuSamples:
@@ -209,7 +218,9 @@ class ZedImuNode(Node):
     gathered: SkipValidation[list[tuple[np.ndarray, ...]]] = Field(default_factory=list, exclude=True)
     samples: int = Field(default=0, exclude=True, description="Samples published")
     lost: int = Field(default=0, exclude=True, description="Samples the IMU took that never arrived")
-    last_tick: int | None = Field(default=None, exclude=True)
+    last_tick: int | None = Field(default=None, exclude=True)  # The newest sample's count, unwrapped
+    last_raw: int | None = Field(default=None, exclude=True)  # The newest sample's count as the IMU sent it
+    wraps: int = Field(default=0, exclude=True, description="Times the 24-bit count wrapped since it started")
     last_time: float = Field(default=float("-inf"), exclude=True)
 
     @classmethod
@@ -226,6 +237,13 @@ class ZedImuNode(Node):
         if not self.clock.fitted:
             return None
         return 1.0 / (TICKS_PER_SAMPLE * TICK * (1.0 + self.clock.drift))
+
+    def clock_error(self, now: float) -> float | None:
+        """Seconds the newest sample's host time sits ahead of `now` (time.monotonic()), once the clock is
+        fitted: a few hundredths behind while it works."""
+        if not self.clock.fitted or not math.isfinite(self.last_time):
+            return None
+        return self.last_time - now
 
     def summary(self) -> str:
         rate = self.sample_rate()
@@ -286,21 +304,33 @@ class ZedImuNode(Node):
 
     def gather(self, samples: ImuSamples, arrival: float) -> None:
         """Map samples read at `arrival` onto host time and keep them for the next batch. Until the
-        IMU's drift is measured, a second in, they wait, so the first are mapped as well as the rest."""
-        ticks = samples.ticks
-        if len(ticks) == 0:
+        IMU's drift is measured, a second in, they wait, so the first are mapped as well as the rest.
+
+        The count is 24 bits and wraps every 655.36 s; it is unwrapped here, so IMU time keeps rising
+        and the clock map holds. A count that drops anywhere else started over (the camera reset):
+        the samples before the drop are mapped on the old clock, the rest start a new one."""
+        raw = samples.ticks
+        if len(raw) == 0:
             return
-        previous = ticks[0] - TICKS_PER_SAMPLE if self.last_tick is None else self.last_tick
-        steps = np.diff(ticks, prepend=previous)
-        if steps.min() < 0:  # The IMU's count started over (the camera reset): so does the clock map
+        previous = raw[0] - TICKS_PER_SAMPLE if self.last_raw is None else self.last_raw
+        steps = np.diff(raw, prepend=previous)
+        wrapped = (steps < 0) & (steps + COUNT_SPAN <= WRAP_STEP)
+        steps = np.where(wrapped, steps + COUNT_SPAN, steps)
+        if (drops := np.flatnonzero(steps < 0)).size:
+            first = int(drops[0])
+            if first:
+                self.gather(samples_between(samples, 0, first), arrival)
             logger.warning("The ZED's IMU clock started over")
             self._map_waiting()
-            self.clock, self.last_time = ImuClock(), float("-inf")
-            steps = np.full(len(ticks), TICKS_PER_SAMPLE)
+            self.clock, self.last_time, self.last_raw, self.wraps = ImuClock(), float("-inf"), None, 0
+            self.gather(samples_between(samples, first, len(raw)), arrival)
+            return
+        ticks = raw + (self.wraps + np.cumsum(wrapped)) * COUNT_SPAN
+        self.wraps += int(wrapped.sum())
         self.lost += int(np.maximum(np.rint(steps / TICKS_PER_SAMPLE) - 1, 0).sum())
-        self.last_tick = int(ticks[-1])
+        self.last_raw, self.last_tick = int(raw[-1]), int(ticks[-1])
         self.clock.add(float(ticks[-1] * TICK), arrival)  # The newest report waited least, so it says most
-        self.waiting.append(samples)
+        self.waiting.append(replace(samples, ticks=ticks))
         if self.clock.fitted:
             self._map_waiting()
 

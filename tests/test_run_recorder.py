@@ -1,12 +1,14 @@
 import asyncio
 import csv
 import json
+import shutil
 import threading
 
 import numpy as np
 
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
-from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams
+from ultraskelly.core.bot.recording import run_recorder_node
+from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderNode, RunRecorderParams, prune_runs
 from ultraskelly.core.pubsub.bot_topics import (
     FrameMessage,
     FrameTopic,
@@ -255,3 +257,41 @@ def test_command_listeners_hear_each_change_once():
     commands.record("waist", None)
 
     assert [(c.actuator, c.value) for c in heard] == [("waist", 0.7), ("waist", None)]
+
+
+def test_the_oldest_runs_are_deleted_to_keep_the_recordings_in_budget(tmp_path):
+    for name, size in (("run-20261101-120000", 1000), ("run-20261102-120000", 1000), ("run-20261103-120000", 1000),
+                       ("motor-response-20261101-120000", 5000)):  # Not a run folder: never deleted
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "oak.avi").write_bytes(b"x" * size)
+
+    deleted = prune_runs(tmp_path, keep_bytes=2500)
+
+    assert deleted == [("run-20261101-120000", 1000)]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "motor-response-20261101-120000", "run-20261102-120000", "run-20261103-120000"]
+    assert prune_runs(tmp_path / "missing", keep_bytes=0) == []
+
+
+def test_a_nearly_full_disk_stops_the_video_but_not_the_tables(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_recorder_node.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(100e9, 99e9, 1e9))
+    videos = []
+
+    async def scenario():
+        bus = PubSubTopicManager.create()
+        node = make_recorder(bus, tmp_path, None, videos, min_free_gb=20.0)
+        task = asyncio.create_task(node.run())
+        await asyncio.sleep(0.02)
+        for number in (1, 2, 3):
+            await bus.publish(FrameTopic, frame(number))
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320.0, y=240.0))
+            await asyncio.sleep(0.02)
+        node.stop()
+        await task
+        bus.close()
+        return node
+
+    node = asyncio.run(scenario())
+
+    assert videos == [] and node.dropped["frame_low_disk"] == 3
+    assert len(rows(node.folder / "targets.csv")) == 3

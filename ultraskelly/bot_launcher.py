@@ -36,6 +36,8 @@ from ultraskelly.core.bot.health import (
     diagnose_oak,
     diagnose_zed,
     diagnose_zed_imu,
+    head_finding,
+    imu_clock_finding,
     oak_on_usb,
 )
 from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
@@ -288,6 +290,7 @@ class BotLauncher(BaseModel):
             logger.info("Not following the target (--no-follow): the head and waist move only for motor tests")
         self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
         orientation.motor_watchdog = self.motor_watchdog
+        self.watches.append(self._watch_head(orientation))
         if self.config.show_window:
             self.nodes.append(UINode.create(pubsub=self.pubsub, params=self.config.ui))
 
@@ -561,6 +564,7 @@ class BotLauncher(BaseModel):
             self.watches.append(self._watch_streaming(
                 "zed_imu", lambda node: node.samples, "Reading the accelerometer and gyroscope",
                 lambda: diagnose_zed_imu(OSError("no samples arrive"), probes),
+                check=lambda node: imu_clock_finding(node.clock_error(time.monotonic())),
             ))
         feeds = {"stereo_cameras": {"zed": StereoFrameTopic}}
         if self.config.stereo_depth is not None:
@@ -590,12 +594,22 @@ class BotLauncher(BaseModel):
                 self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
         return feeds
 
+    def _watch_head(self, orientation: OrientationNode) -> Callable[[], None]:
+        """The head's aim: following, or an axis held at the end of its range while following someone."""
+        def watch() -> None:
+            self.health.report("head", *head_finding(
+                follow=self.config.orientation.follow, pinned=orientation.pinned(orientation.clock()),
+            ))
+        return watch
+
     def _watch_streaming(
         self, component: str, count: Callable[[Node], int | None], working: str, diagnose: Callable[[], Finding],
+        check: Callable[[Node], Finding | None] | None = None,
     ) -> Callable[[], None]:
         """A part whose node picks it up by itself: working while `count` of its node (None: not open)
         keeps rising, else diagnosed from what is plugged in. For each node's first STREAMING_WINDOW
-        the status it had stands, while the node opens it."""
+        the status it had stands, while the node opens it. While it streams, `check` may still find
+        something wrong with what it sends."""
         state = {"node": None, "count": None, "rose_at": None, "first": None}
 
         def watch() -> None:
@@ -607,7 +621,8 @@ class BotLauncher(BaseModel):
                 state["rose_at"] = now
             state["count"] = latest
             if state["rose_at"] is not None and now - state["rose_at"] <= STREAMING_WINDOW:
-                self.health.report(component, Status.OK, working)
+                finding = check(node) if check is not None else None
+                self.health.report(component, *(finding or (Status.OK, working)))
             elif now - state["first"] > STREAMING_WINDOW:
                 self.health.report(component, *diagnose())
         return watch

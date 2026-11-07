@@ -26,6 +26,7 @@ from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 logger = logging.getLogger(__name__)
 
 ROLL_LEVEL = LEVEL  # Roll servo degrees at which the head stands upright
+PINNED_SLACK = 0.5  # Servo degrees from where the head stops short of an end stop that still count as at that end
 
 
 class OrientationNodeParams(NodeParams):
@@ -116,6 +117,32 @@ class OrientationNode(Node):
     target_received_at: float | None = Field(default=None)
     last_target_x: int | None = Field(default=None)
     last_target_y: int | None = Field(default=None)
+    pinned_since: dict[str, float | None] = Field(
+        default_factory=lambda: {"pan": None, "tilt": None}, exclude=True,
+        description="Per head axis, since when it has sat at an end of its range with the person followed still "
+                    "off the aim point beyond that end, else None",
+    )
+
+    def pinned(self, now: float) -> dict[str, float]:
+        """The head axes that cannot reach the person followed: at an end of their range with the person still
+        off the aim point that way, and for how many seconds."""
+        return {axis: now - since for axis, since in self.pinned_since.items() if since is not None}
+
+    def _track_pinned(self, now: float, errors: tuple[float, float] | None) -> None:
+        """`errors`: the person's pixel offset from the aim point, None while nobody is followed."""
+        aim = self.params.aim
+        for index, (axis, angle, (low, high), direction) in enumerate((
+            ("pan", self.pan_angle, aim.pan_range, aim.pan_direction),
+            ("tilt", self.tilt_angle, aim.tilt_range, aim.tilt_direction),
+        )):
+            error = None if errors is None else errors[index]
+            wants = 0.0 if error is None or abs(error) <= self.params.head_deadzone else error * direction
+            stuck = ((wants > 0 and angle >= high - aim.end_margin - PINNED_SLACK)
+                     or (wants < 0 and angle <= low + aim.end_margin + PINNED_SLACK))
+            if not stuck:
+                self.pinned_since[axis] = None
+            elif self.pinned_since[axis] is None:
+                self.pinned_since[axis] = now
 
     def model_post_init(self, context: object) -> None:
         if self.waist_drive is None:
@@ -207,6 +234,7 @@ class OrientationNode(Node):
             self.latest_faces = await self.faces_subscription.get()
             fresh_faces = True
         if self.manual or not self.params.follow:  # A motor test drives, or nothing follows the target
+            self._track_pinned(self.clock(), None)
             await self.pubsub.publish(ServoStateTopic, ServoStateMessage(  # Angles as commanded, not measured
                 pan_angle=self.pan_angle, tilt_angle=self.tilt_angle, roll_angle=self.roll_angle,
                 is_locked_x=False, is_locked_y=False, is_locked_roll=False,
@@ -220,8 +248,9 @@ class OrientationNode(Node):
                  and self.target_received_at is not None
                  and now - self.target_received_at <= self.params.target_timeout)
         locked_x = locked_y = False
+        errors = None
         if valid:
-            error_x, error_y = self._target_errors(msg)
+            error_x, error_y = errors = self._target_errors(msg)
             if fresh:
                 upright_x, upright_y = self._upright(error_x, error_y, msg.captured, now)
                 self.head_aim.observe(now=now, error_x=upright_x, error_y=upright_y, captured=msg.captured)
@@ -237,6 +266,7 @@ class OrientationNode(Node):
         self.last_step = now
         self.body_turn -= (self.waist_motor.throttle or 0.0) * self.params.waist.degrees_per_second * dt
         self._command_head(*self.head_aim.update(now=now, body=self.body_turn))
+        self._track_pinned(now, errors)
         self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
         if any(self.head_aim.turning):
             self.head_still_since = None

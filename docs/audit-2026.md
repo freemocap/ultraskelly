@@ -780,6 +780,35 @@ a quarter as far or with 20 servo degrees of slack. The plant comes from one rec
 model the linkages beyond the windows (pan jammed, tilt over centre), and has not yet been checked
 against the head running closed-loop on the robot: the coordinator records that run.
 
+### Tilt reach (2026-11-06)
+
+With the tuned head following on the robot (run 20261106-224643), the tilt command reached the end
+of its window, 125, within 2 s of a person stepping into view, and stayed there. The servo board was
+read live at 1791 µs on channel 11, the pulse for 125°. The person's face stayed 125 to 246 px below
+the aim point (median 183 px, about 22°). The ZED's accelerometer measured the head nodding 2.9° for
+those 35 servo degrees. The user's dashboard tilt test, 115 to 65, measured 4.8° for 50, the same
+0.08° per servo degree as the recorded plant (0.07 to 0.12 by stair). So tilt control works; the
+mechanism cannot point the camera at a standing person's face. The head rests about 20° above it at
+90, and its whole 20 to 130 window gives about 9°. The fix is mechanical: rest level at 90, and a
+linkage giving at least 0.25° per servo degree. The `head` health check reports an axis held at the
+end of its range for 5 s while the person followed is still off the aim point beyond that end.
+
+### The ZED IMU's clock wrap blanked the dashboard's charts (2026-11-06)
+
+The ZED Mini's IMU tick count is 24 bits, 39.0625 µs a tick, so it wraps every 655.36 s. `ZedImuNode`
+took the drop for a camera reset and restarted its clock map. The reads around the wrap were mapped
+about 655 s late, and every later timestamp stuck at that value until the new map caught up. In
+run 20261106-224643 the host times froze for 400,000 to 500,000 samples at a time and leapt about
+660 s at each wrap. The node logged "The ZED's IMU clock started over" five times in 40 minutes.
+The strip charts' window ended at the newest time of any lane, so one batch timed ahead pushed it
+past every other lane's data: all six charts went blank.
+
+The node now unwraps the count. A drop is a wrap when the count lands within 10 s past it; any
+other drop is a reset, and the samples before it are mapped on the old clock. Replayed offline, the
+wrap left the error at 0.4 ms against 629 s before. The charts' window ends at the newest robot
+state time, and samples outside it are not drawn. The `zed_imu` health check reports timestamps
+more than 2 s off the Pi's clock.
+
 ## Recovering from lost connections (2026-11-02)
 
 A lost board, camera or detector now ends the bot the same way: it stops every node,

@@ -2,7 +2,9 @@
 // no position feedback and the DC motors no encoders, so no motor position exists to plot. The target's
 // offset is the controllers' input, the face distance comes from the Pi's face locator, and the ZED's
 // accelerometer and gyroscope are measured, in the IMU's own axes, which are not the head's. Times are the
-// Pi's clock (robot_state.time, the IMU's start_time). The canvas redraws in the page's frame (frameclock.js),
+// Pi's clock (robot_state.time, the IMU's start_time), and the window ends at the newest robot_state time:
+// a batch whose clock ran ahead (the IMU's did, 2026-11-06, and blanked every lane) cannot move the window,
+// and samples outside it are not drawn. The canvas redraws in the page's frame (frameclock.js),
 // at most 4 times a second and only when something new arrived, at one point per pixel column (the first,
 // lowest, highest and last value that falls in it), so a long window costs little. The IMU's 794 samples a
 // second come in batches of about 53, each kept as its lowest and highest value per trace.
@@ -27,10 +29,10 @@ class Ring {
     this.t[this.next] = t; this.v[this.next] = v; this.newest = newest;
     this.next = (this.next + 1) % CAPACITY; this.n = Math.min(this.n + 1, CAPACITY);
   }
-  // Oldest first, from the first sample at or after `since`.
-  forEach(since, visit) {
+  // Oldest first, the samples from `since` to `until`.
+  forEach(since, until, visit) {
     for (let k = 0, i = (this.next - this.n + CAPACITY) % CAPACITY; k < this.n; k++, i = (i + 1) % CAPACITY) {
-      if (this.t[i] >= since) visit(this.t[i], this.v[i]);
+      if (this.t[i] >= since && this.t[i] <= until) visit(this.t[i], this.v[i]);
     }
   }
   last() { return this.newest; }  // The newest value, for the header
@@ -89,8 +91,7 @@ export class TimeSeries {
       if (gap) rings[i].push(times[0], NaN);
       for (const k of low === high ? [low] : low < high ? [low, high] : [high, low]) rings[i].push(times[k], values[k], values[n - 1]);
     });
-    this.now = Math.max(this.now ?? times[n - 1], times[n - 1]);
-    this.changed();
+    this.changed();  // The window still ends at the robot's state time: a batch's own clock never moves it
   }
 
   // The strip's part of the page's frame: at most every DRAW_MS, and only when something new arrived.
@@ -139,7 +140,7 @@ export class TimeSeries {
     ctx.fillStyle = '#0b1318'; ctx.fillRect(x, top, w, plotH);
     // The value range: fixed, or the window's own with a minimum span.
     let lo = Infinity, hi = -Infinity, any = false;
-    rings.forEach(ring => ring.forEach(since, (t, v) => { if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); any = true; } }));
+    rings.forEach(ring => ring.forEach(since, now, (t, v) => { if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); any = true; } }));
     if (lane.fixed) [lo, hi] = lane.fixed;
     else if (!any) [lo, hi] = lane.fromZero ? [0, lane.fromZero] : [-(lane.symmetric ?? 1), lane.symmetric ?? 1];
     else if (lane.symmetric) { const m = Math.max(Math.abs(lo), Math.abs(hi), lane.symmetric); lo = -m; hi = m; }
@@ -166,7 +167,7 @@ export class TimeSeries {
         if (low !== high) { ctx.lineTo(cx, yOf(low)); ctx.lineTo(cx, yOf(high)); }
         ctx.lineTo(cx, yOf(last));
       };
-      rings[i].forEach(since, (t, v) => {
+      rings[i].forEach(since, now, (t, v) => {
         if (!Number.isFinite(v)) { flush(); column = null; pen = false; return; }
         const c = Math.round((t - since) / WINDOW_S * (w - 1));
         if (c !== column) { flush(); column = c; first = low = high = last = v; }

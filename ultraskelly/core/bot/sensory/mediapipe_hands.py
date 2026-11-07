@@ -76,7 +76,8 @@ def decode_palms(
     anchors = palm_anchors(size)
     raw = np.asarray(regressors, np.float32).reshape(len(anchors), 18)
     logits = np.asarray(scores, np.float32).reshape(len(anchors))
-    probability = 1.0 / (1.0 + np.exp(-np.clip(logits, -100, 100)))
+    # ±80, not ±100: float32 exp overflows past 88.7, and the warning filled the bot's log 40 times a minute
+    probability = 1.0 / (1.0 + np.exp(-np.clip(logits, -80.0, 80.0)))
     keep = probability > score_threshold
     if not np.any(keep):
         return Palms(np.zeros((0, 4), np.float32), np.zeros((0, 7, 2), np.float32), np.zeros(0, np.float32))
