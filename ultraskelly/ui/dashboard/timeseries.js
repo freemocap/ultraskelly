@@ -139,20 +139,7 @@ export class TimeSeries {
 
   drawLane(ctx, lane, x, y, w, h) {
     const rings = this.rings.get(lane.id), now = this.now ?? 0, since = now - WINDOW_S;
-    const header = Math.min(15, h * .4), top = y + header, plotH = Math.max(4, h - header);
-    // Header: the lane's name, then each trace's newest value in its colour.
-    ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#91a2a8'; ctx.fillText(lane.title, x, y + header / 2);
-    let at = x + ctx.measureText(lane.title).width + 8;
-    const note = this.notes.get(lane.id);
-    if (note) { ctx.fillStyle = '#ff8f7f'; ctx.fillText(note, at, y + header / 2); at += ctx.measureText(note).width + 8; }
-    ctx.font = '11px ui-monospace, monospace';
-    lane.traces.forEach(([name, color], i) => {
-      const value = rings[i].last(), text = `${name} ${Number.isFinite(value) ? value.toFixed(lane.digits) + lane.unit : '—'}`;
-      if (at + ctx.measureText(text).width > x + w) return;
-      ctx.fillStyle = color; ctx.fillText(text, at, y + header / 2);
-      at += ctx.measureText(text).width + 8;
-    });
+    const top = y, plotH = Math.max(4, h);  // The plot fills the lane; its label sits over the upper-left corner
     ctx.fillStyle = '#0b1318'; ctx.fillRect(x, top, w, plotH);
     // The value range: fixed, or the window's own with a minimum span.
     let lo = Infinity, hi = -Infinity, any = false;
@@ -168,12 +155,13 @@ export class TimeSeries {
     for (let s = 10; s < WINDOW_S; s += 10) { const gx = x + w - s / WINDOW_S * w; ctx.moveTo(gx, top); ctx.lineTo(gx, top + plotH); }
     if (lo < 0 && hi > 0) { ctx.moveTo(x, yOf(0)); ctx.lineTo(x + w, yOf(0)); }
     ctx.stroke();
-    ctx.fillStyle = '#5d6f76'; ctx.font = '10px ui-monospace, monospace';
-    if (plotH > 24) { ctx.fillText(hi.toFixed(lane.digits), x + 3, top + 7); ctx.fillText(lo.toFixed(lane.digits), x + 3, top + plotH - 6); }
     const waiting = this.waiting.get(lane.id) ?? lane.waiting;
-    if (!any && waiting) { ctx.fillText(waiting, x + w / 2 - ctx.measureText(waiting).width / 2, top + plotH / 2); return; }
+    if (!any && waiting) {
+      ctx.fillStyle = '#5d6f76'; ctx.font = '10px ui-monospace, monospace'; ctx.textBaseline = 'middle';
+      ctx.fillText(waiting, x + w / 2 - ctx.measureText(waiting).width / 2, top + plotH / 2);
+    }
     // Traces, decimated to the pixel columns; a NaN leaves a gap.
-    lane.traces.forEach(([, color], i) => {
+    if (any) lane.traces.forEach(([, color], i) => {
       ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
       let column = null, first = 0, low = 0, high = 0, last = 0, pen = false;
       const flush = () => {
@@ -192,5 +180,33 @@ export class TimeSeries {
       flush();
       ctx.stroke();
     });
+    const label = this.drawLabel(ctx, lane, rings, x, y, w, h);
+    // The scale's ends, small: the top one under the label, the bottom one in the lower-left corner.
+    ctx.fillStyle = '#5d6f76'; ctx.font = '10px ui-monospace, monospace'; ctx.textBaseline = 'middle';
+    if (plotH > label + 30) { ctx.fillText(hi.toFixed(lane.digits), x + 6, top + label + 12); ctx.fillText(lo.toFixed(lane.digits), x + 6, top + plotH - 7); }
+  }
+
+  // The lane's name and each trace's newest value in its colour, large, over the plot's upper-left corner: about a
+  // quarter to a third of the lane's height (the owner, 2026-11-07), smaller where the lane is too narrow for the line.
+  // Outlined in the plot's colour, so it stays readable over the traces. Returns the text's height.
+  drawLabel(ctx, lane, rings, x, y, w, h) {
+    const note = this.notes.get(lane.id);
+    const parts = [[lane.title, '#c3cdcf'], ...(note ? [[note, '#ff8f7f']] : []), ...lane.traces.map(([name, color], i) => {
+      const value = rings[i].last();
+      return [`${name} ${Number.isFinite(value) ? value.toFixed(lane.digits) + lane.unit : '—'}`, color];
+    })];
+    const font = px => `600 ${px}px ui-monospace, monospace`;
+    let size = Math.max(12, Math.min(36, Math.round(h * 0.28)));
+    ctx.font = font(size);
+    const width = parts.reduce((sum, [text]) => sum + ctx.measureText(text).width, 0) + size * 0.6 * (parts.length - 1);
+    if (width > w - 12) { size = Math.max(9, Math.floor(size * (w - 12) / width)); ctx.font = font(size); }
+    ctx.textBaseline = 'top'; ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(2, size / 5); ctx.strokeStyle = 'rgba(11,19,24,0.85)';
+    let at = x + 6;
+    for (const [text, color] of parts) {
+      ctx.strokeText(text, at, y + 5);
+      ctx.fillStyle = color; ctx.fillText(text, at, y + 5);
+      at += ctx.measureText(text).width + size * 0.6;
+    }
+    return size;
   }
 }
