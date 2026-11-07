@@ -69,6 +69,12 @@ class HeadAimParams(NodeParams):
     pan_direction: Literal[1, -1] = Field(default=1, description="+1: a target right of the aim point needs a larger pan angle")
     tilt_direction: Literal[1, -1] = Field(default=1, description="+1: a target below the aim point needs a larger tilt angle")
     end_margin: float = Field(default=5.0, ge=0.0, le=45.0, description="Servo degrees the head keeps clear of each end stop")
+    pan_range: tuple[float, float] = Field(
+        default=SERVO_RANGE, description="Servo degrees the pan may use: where its linkage turns the head steadily",
+    )
+    tilt_range: tuple[float, float] = Field(
+        default=SERVO_RANGE, description="Servo degrees the tilt may use: short of a linkage's over-centre point",
+    )
     smoothing: float = Field(default=0.5, gt=0.0, le=1.0, description="Share of each new estimate taken into the goal")
     deadband: float = Field(default=1.5, ge=0.0, le=10.0, description="A still head turns only when its goal is further than this")
     max_speed: float = Field(default=40.0, gt=0.0, le=600.0, description="Top turning speed of the view, degrees per second")
@@ -128,6 +134,9 @@ class HeadAim:
     def _view(self, axis: int, servo: float) -> float:
         return self._ratio(axis) * (servo - MIDDLE)
 
+    def _range(self, axis: int) -> tuple[float, float]:
+        return (self.params.pan_range, self.params.tilt_range)[axis]
+
     def _slack(self, axis: int) -> float:
         return (self.params.pan_slack, self.params.tilt_slack)[axis]
 
@@ -135,7 +144,8 @@ class HeadAim:
         """The views an axis can be commanded to (0 pan, 1 tilt): its servo, pushing past the view by half
         the slack, stays end_margin clear of its end stops."""
         ratio, margin = self._ratio(axis), self.params.end_margin + self._slack(axis) / 2
-        return ratio * (SERVO_RANGE[0] + margin - MIDDLE), ratio * (SERVO_RANGE[1] - margin - MIDDLE)
+        low, high = self._range(axis)
+        return ratio * (low + margin - MIDDLE), ratio * (high - margin - MIDDLE)
 
     def place(self, pan: float, tilt: float) -> None:
         """Something else moved the head here (a motor test): hold it here and forget the old goal."""
@@ -207,7 +217,8 @@ class HeadAim:
         elif self.pushing[axis] * moved > 0:
             self.extreme[axis] = self.view[axis]  # Still going the same way
         servo = MIDDLE + self.view[axis] / self._ratio(axis) + self.pushing[axis] * self._slack(axis) / 2
-        self.servos[axis] = min(max(servo, SERVO_RANGE[0]), SERVO_RANGE[1])
+        low, high = self._range(axis)
+        self.servos[axis] = min(max(servo, low), high)
 
     def update(self, *, now: float, body: float = 0.0) -> tuple[float, float]:
         """This tick's pan and tilt servo commands, for a body turned `body` degrees."""

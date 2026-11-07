@@ -8,6 +8,7 @@ import asyncio
 import logging
 from ultraskelly.core.bot.base_abcs import DetectorType
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
+from ultraskelly.core.bot.motor.actuator_limits import ActuatorLimits
 from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.motor.roll_level import RollLevelParams
@@ -104,7 +105,17 @@ def launch_config(
         # so g = 2 and each sample's error factor 1 - reach * g = -0.3 (an overshoot every sample). With
         # reach 0.35 it stays >= 0 up to g = 2.86; the simulator then shows no overshoot even with 0.15 s of
         # servo lag (tests/test_scenarios_tuning.py), at the cost of slower aiming.
-        aim=HeadAimParams(reach=0.35, smoothing=0.3, max_speed=15.0),
+        # Servo windows from full sweeps on the robot (scripts/check_pan_travel.py, 2026-11-06 20:09-20:11):
+        # pan turns the view steadily from 10 to 170 at 0.27 degrees per servo degree, but jammed for 70
+        # degrees after being held at 5, then snapped; tilt turns it steadily from 10 to ~140 (only 3.4
+        # degrees below rest), and past ~140 its linkage goes over centre: further servo turns the view
+        # back, then not at all. So pan keeps to 20-160 and tilt to 20-130.
+        aim=HeadAimParams(
+            reach=0.35, smoothing=0.3, max_speed=15.0, pan_ratio=0.27, pan_range=(20.0, 160.0), tilt_range=(20.0, 130.0),
+        ),
+    )
+    config.limits = ActuatorLimits(  # The same windows as hard limits on every command, motor tests included
+        pan_min_degrees=20.0, pan_max_degrees=160.0, tilt_min_degrees=20.0, tilt_max_degrees=130.0,
     )
     return config
 

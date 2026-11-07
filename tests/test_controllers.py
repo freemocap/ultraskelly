@@ -131,7 +131,11 @@ def test_the_robot_launches_with_the_calmer_tuning():
     for part in ("roll", "waist"):
         launched[part]["enabled"] = defaults[part]["enabled"]
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
-    for key in ("reach", "smoothing", "max_speed"):
+    assert head.aim.pan_range == (20.0, 160.0) and head.aim.tilt_range == (20.0, 130.0)  # Measured 2026-11-06
+    limits = launch_config().limits
+    assert (limits.pan_min_degrees, limits.pan_max_degrees, limits.tilt_min_degrees, limits.tilt_max_degrees) == (
+        20.0, 160.0, 20.0, 130.0)
+    for key in ("reach", "smoothing", "max_speed", "pan_ratio", "pan_range", "tilt_range"):
         launched["aim"][key] = defaults["aim"][key]
     assert launched == defaults  # The defaults the closed-loop scenarios check
     assert head.aim.max_speed <= 40 and head.aim.reach < 1  # Calm turns that aim short of the target
@@ -150,3 +154,19 @@ def test_with_the_waist_off_following_never_drives_it():
             assert node.waist_motor.throttle == 0.0
         bus.close()
     asyncio.run(scenario())
+
+
+def test_the_head_never_commands_outside_its_servo_ranges():
+    from ultraskelly.core.bot.motor.head_aim import HeadAim, HeadAimParams
+
+    aim = HeadAim(HeadAimParams(pan_range=(20.0, 160.0), tilt_range=(20.0, 130.0)), 90.0, 90.0)
+    commands = []
+    for tick in range(600):  # 6 s of a person far right and far below, then far left and far above
+        now = tick * 0.01
+        error = (600.0, 400.0) if tick < 300 else (-600.0, -400.0)
+        if tick % 3 == 0:
+            aim.observe(now=now, error_x=error[0], error_y=error[1], captured=now)
+        commands.append(aim.update(now=now))
+    pans, tilts = [c[0] for c in commands], [c[1] for c in commands]
+    assert 20.0 <= min(pans) and max(pans) <= 160.0 and 20.0 <= min(tilts) and max(tilts) <= 130.0
+    assert max(tilts) > 120.0 and min(pans) < 30.0  # It does use its range
