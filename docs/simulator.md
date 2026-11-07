@@ -248,7 +248,9 @@ one worker; 120 samples and the refinement take a few minutes on eight. After ev
 the checkpoint holds the best setting and the step, and a run given that checkpoint carries
 on from it. Each worker reuses one event loop for all its runs: on Windows a new loop opens a
 loopback socket pair whose port is held for about two minutes after it closes, and eight
-workers' thousands of runs a minute used up the machine's 16,384 ports and stalled the pool.
+workers' thousands of runs a minute would use up the machine's 16,384 ports. The pool stalled
+twice before that change (and before workers stopped being replaced after 40 tasks); a batch
+that stalls now stops the tuner, its checkpoint kept.
 
 ## Develop and verify
 

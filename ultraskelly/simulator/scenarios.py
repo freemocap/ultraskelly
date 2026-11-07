@@ -410,8 +410,8 @@ _threads = threading.local()
 def _on_this_threads_loop(coroutine):
     """Run `coroutine` on one event loop kept for every run on this thread. A new loop per run (asyncio.run)
     opens a loopback socket pair on Windows whose port then waits about two minutes to close: one per run,
-    105 per tuner candidate (measured 2026-11-06). The tuner's eight workers make about 200 a second,
-    which uses up Windows' 16,384 ports within that time, and its worker pool stalled."""
+    105 per tuner candidate (measured 2026-11-06). The tuner's eight workers made about 200 a second,
+    enough to use up Windows' 16,384 ports within that time; its pool had stalled twice."""
     runner = getattr(_threads, "runner", None)
     if runner is None:
         runner = _threads.runner = asyncio.Runner()

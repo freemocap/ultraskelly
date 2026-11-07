@@ -749,11 +749,14 @@ steps settle in 1.2-1.3 s on the measured plant, but the head swings with pan ge
 12-degree step settles in 2.07 s instead of 1.75, at cost 77.6 against 64.4, for a worst overshoot
 on any plant of 0.04 degrees instead of 0.51. It stays in the controller, off.
 
-Two artefacts went with the tuning. A tuner run stalled twice with every worker idle: each scenario
-run made a new asyncio loop, which on Windows opens a loopback socket pair whose port is held about
-two minutes after closing; one candidate left 105 such ports and eight workers about 200 a second,
-past Windows' 16,384. Each thread now reuses one loop, leaving one port per worker, and a stalled
-batch now stops the tuner with its checkpoint kept rather than waiting forever. And the
+Two artefacts went with the tuning. The tuner stalled twice with every worker idle, the second time
+just as the pool replaced a worker after its 40 tasks. Each scenario run also made a new asyncio
+loop, which on Windows opens a loopback socket pair whose port is held about two minutes after
+closing: one candidate left 105 such ports, eight workers about 200 a second, enough to use up
+Windows' 16,384 within that time. Each thread now reuses one loop (one port per worker), workers
+are no longer replaced, and a stalled batch stops the tuner with its checkpoint kept rather than
+waiting forever; three full runs have finished since, though which change cured the stall is not
+established. And the
 simulator's head speed setting replaced the controller's top speed in every run, so the scenarios
 had run the head at 40 deg/s whatever its default; it now does so only when set.
 
