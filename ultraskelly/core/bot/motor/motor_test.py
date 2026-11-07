@@ -97,7 +97,12 @@ class MotorTester:
         return {
             "enabled": self.limits.enabled,
             "simulated": self.simulated,
-            "limits": {**self.limits.model_dump(), "servo_windows": {name: list(SERVO_TRAVEL) for name in ("pan", "tilt")}},
+            "limits": {
+                **self.limits.model_dump(),
+                "servo_windows": {name: list(SERVO_TRAVEL) for name in ("pan", "tilt")},
+                # +1: a larger angle turns the view right (pan) or down (tilt), as the head's aim has it (head_aim.py)
+                "directions": {"pan": self.orientation.params.aim.pan_direction, "tilt": self.orientation.params.aim.tilt_direction},
+            },
             "running": self.current,
             "last": self.last,
             "waist_travel": round(self.waist_travel, 3),

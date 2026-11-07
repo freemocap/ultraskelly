@@ -95,17 +95,20 @@ export class MotorTestPanel {
     };
     const number = (value, max, label) => element('input', {type: 'number', value, min: .05, max, step: .05, title: label, ariaLabel: label});
     const name = text => element('span', {className: 'motor-test-name', textContent: text});
-    const servo = (actuator, label) => {
+    // A servo's row: its two nudges, [text, title, change in servo degrees], either side of the middle.
+    const servo = (actuator, label, first, last) => {
       const [low, high] = windows[actuator];
       // Whole degrees: a nudge starts from the head's commanded angle, which following leaves fractional.
       const move = angle => this.send({actuator, angle: Math.round(Math.min(high, Math.max(low, angle)))});
       const current = () => this.commands[actuator] ?? CENTER;
       this.shown[actuator] = element('span', {className: 'motor-test-value', textContent: '—', title: 'Commanded angle, not a measured position'});
       return [name(label), element('span', {className: 'motor-test-buttons'},
-        button(`−${SERVO_STEP}`, `${label}: ${SERVO_STEP}° less`, () => move(current() - SERVO_STEP)),
+        button(first[0], first[1], () => move(current() + first[2])),
         button(`${CENTER}`, `${label}: back to ${CENTER}°`, () => move(CENTER)),
-        button(`+${SERVO_STEP}`, `${label}: ${SERVO_STEP}° more`, () => move(current() + SERVO_STEP))), this.shown[actuator]];
+        button(last[0], last[1], () => move(current() + last[2]))), this.shown[actuator]];
     };
+    // Tilt by where the head goes, not by the servo's number: on this robot a larger tilt angle turns it down.
+    const headDown = limits.directions?.tilt ?? 1;  // +1: a larger tilt angle turns the head down
     // A DC motor's row: its buttons, then the drive and seconds each press sends.
     const dc = (actuator, label, drive, seconds, buttons) => [name(label), element('span', {className: 'motor-test-drive'},
       ...buttons.map(([text, title, sign]) => button(text, title, () => this.send({actuator, throttle: sign * Number(drive.value), seconds: Number(seconds.value)}))),
@@ -118,7 +121,9 @@ export class MotorTestPanel {
       `One at a time; tracking pauses during each test. Pan ${windows.pan[0]}–${windows.pan[1]}°, tilt ${windows.tilt[0]}–${windows.tilt[1]}°; waist up to ${limits.waist_max_throttle.toFixed(2)} ` +
       `for ${limits.waist_max_seconds.toFixed(2)} s, at most ${limits.waist_max_travel.toFixed(2)} throttle-seconds one way; jaw up to ` +
       `${limits.mouth_max_throttle.toFixed(2)} for ${limits.mouth_max_seconds.toFixed(2)} s.`},
-      ...servo('pan', 'Pan'), ...servo('tilt', 'Tilt'),
+      ...servo('pan', 'Pan', [`−${SERVO_STEP}`, `Pan: ${SERVO_STEP}° less`, -SERVO_STEP], [`+${SERVO_STEP}`, `Pan: ${SERVO_STEP}° more`, SERVO_STEP]),
+      ...servo('tilt', 'Tilt', [`▲${SERVO_STEP}`, `Tilt: head up, ${SERVO_STEP}° of servo`, -SERVO_STEP * headDown],
+                               [`▼${SERVO_STEP}`, `Tilt: head down, ${SERVO_STEP}° of servo`, SERVO_STEP * headDown]),
       ...dc('waist', 'Waist', waistDrive, waistSeconds, [['−', 'Drive the waist with negative throttle', -1], ['+', 'Drive the waist with positive throttle', 1]]),
       ...dc('mouth', 'Jaw', jawDrive, jawSeconds, [['Open', 'Drive the jaw open (negative throttle); its spring closes it', -1]]));
     this.stopButton = element('button', {textContent: '■ Stop', className: 'motor-test-stop', title: 'Stop the running test', onclick: () => this.stop()});

@@ -5,6 +5,7 @@ import shutil
 import threading
 
 import numpy as np
+import pytest
 
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.recording import run_recorder_node
@@ -23,6 +24,13 @@ from ultraskelly.core.pubsub.bot_topics import (
     TargetLocationTopic,
 )
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
+
+
+@pytest.fixture(autouse=True)
+def plenty_of_disk(monkeypatch):
+    """The recorder stops saving video and IMU below min_free_gb of free disk, so these tests must not depend on how
+    full the computer running them is (they failed on 2026-11-07 with 19 GB free). The full-disk test sets its own."""
+    monkeypatch.setattr(run_recorder_node.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(2e12, 1e12, 1e12))
 
 
 class FakeVideo:

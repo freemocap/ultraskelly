@@ -41,6 +41,9 @@ def test_servo_tests_reach_every_angle_the_servo_takes():
     async def scenario():
         tester, recorder, bus = build()
         assert tester.state()["limits"]["servo_windows"] == {"pan": [0.0, 180.0], "tilt": [0.0, 180.0]}
+        # The card's tilt buttons go by where the head goes: a larger tilt angle turns it down (the owner,
+        # 2026-11-07: "the -10 tilt moves the head UP and +10 moves it down")
+        assert tester.state()["limits"]["directions"] == {"pan": 1, "tilt": 1}
         for actuator, angle in (("tilt", 180.0), ("tilt", 0.0), ("pan", 180.0), ("pan", 0.0), ("tilt", 90.0)):
             result = await tester.run(MotorTestRequest(actuator=actuator, angle=angle))
             assert result["outcome"] == "done" and values(recorder, actuator)[-1] == angle
