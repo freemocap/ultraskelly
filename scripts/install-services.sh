@@ -112,10 +112,20 @@ mkdir -p "$(dirname "$dashboard_unit")"
 render ultraskelly-dashboard.service >"$dashboard_unit"
 systemctl --user daemon-reload
 
-# The desktop icon: a click starts the bot unless it runs and opens the dashboard.
+# The desktop icon: a click starts the bot unless it runs and opens the dashboard. It goes in
+# whole and executable in one step: the desktop names an icon from its first look at the file,
+# and one it first saw empty keeps its file name ("ultraskelly.desktop") as its label.
 mkdir -p "$(dirname "$desktop_entry")"
-render_desktop_entry >"$desktop_entry"
-chmod 755 "$desktop_entry"  # The desktop's file manager runs a launcher only when it is executable
+if ! cmp -s <(render_desktop_entry) "$desktop_entry"; then
+  entry_tmp=$(mktemp "$(dirname "$desktop_entry")/.ultraskelly.XXXXXX")
+  render_desktop_entry >"$entry_tmp"
+  chmod 755 "$entry_tmp"
+  if [[ -e $desktop_entry ]]; then
+    rm -f "$desktop_entry"
+    sleep 2  # The desktop drops the old icon before the new file appears
+  fi
+  mv "$entry_tmp" "$desktop_entry"
+fi
 
 case "$action" in
   --enable)
