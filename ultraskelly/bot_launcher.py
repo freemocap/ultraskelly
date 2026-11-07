@@ -595,10 +595,11 @@ class BotLauncher(BaseModel):
         return feeds
 
     def _watch_head(self, orientation: OrientationNode) -> Callable[[], None]:
-        """The head's aim: following, or an axis held at the end of its range while following someone."""
+        """The head's aim: following, or an axis held at the end of its range while following someone. Following
+        is the node's live switch (--no-follow at start, then the control panel), not the start option."""
         def watch() -> None:
             self.health.report("head", *head_finding(
-                follow=self.config.orientation.follow, pinned=orientation.pinned(orientation.clock()),
+                follow=orientation.following, pinned=orientation.pinned(orientation.clock()),
             ))
         return watch
 

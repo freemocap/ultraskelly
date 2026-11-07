@@ -39,7 +39,7 @@ const ENDED = {
 };
 // The bot's hardware checks' short names in the status rows, which group them as core/bot/health.py COMPONENTS does.
 const SHORT = {oak_camera: 'OAK', oak_models: 'OAK models', hailo: 'Hailo-8', zed_camera: 'ZED Mini', zed_imu: 'ZED IMU', depth: 'Depth',
-               servo_board: 'Servo board', motor_board: 'Motor HAT', power: 'Pi power'};
+               servo_board: 'Servo board', motor_board: 'Motor HAT', head: 'Head aim', power: 'Pi power'};
 
 const clockTime = unix => new Date(unix * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 export function duration(seconds) {

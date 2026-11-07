@@ -7,7 +7,7 @@ import { placeKeyed, setProperty, setText } from '/dom.js';
 
 // Short names for the nodes card's lights, by the bot's part ids.
 const SHORT = {oak_camera: 'OAK', oak_models: 'Models', hailo: 'Hailo', zed_camera: 'ZED', zed_imu: 'IMU', depth: 'Depth',
-               servo_board: 'Servo', motor_board: 'Motor', power: 'Power'};
+               servo_board: 'Servo', motor_board: 'Motor', head: 'Head', power: 'Power'};
 // The bot's statuses and the light each gets: degraded works in part, missing and error not at all, off is not used.
 const LIGHTS = {ok: 'ok', degraded: 'warn', missing: 'fail', error: 'fail', off: 'off'};
 const PROBLEM = new Set(['warn', 'fail']);

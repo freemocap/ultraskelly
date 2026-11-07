@@ -60,7 +60,7 @@ def head_finding(*, follow: bool, pinned: dict[str, float]) -> Finding:
     """The head's aim: off, following, or an axis held at the end of its range while following someone
     (`pinned`: seconds per axis, from OrientationNode.pinned)."""
     if not follow:
-        return Finding(Status.OFF, "Not following (--no-follow): the head moves only for motor tests")
+        return Finding(Status.OFF, "Not following (switched off, or --no-follow): the head moves only for motor tests")
     stuck = {axis: seconds for axis, seconds in pinned.items() if seconds >= PINNED_SECONDS}
     if "tilt" in stuck:
         return Finding(Status.DEGRADED,

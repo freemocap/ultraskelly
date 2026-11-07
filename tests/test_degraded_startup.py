@@ -312,6 +312,20 @@ def test_stereonet_without_the_hailo_reports_depth_missing(tmp_path):
     assert depth.because == "hailo"
 
 
+def test_the_head_aim_check_follows_the_live_following_switch(tmp_path):
+    launcher = start(Robot(), tmp_path)
+    orientation = launcher.motor_tester.orientation
+    watch = launcher._watch_head(orientation)
+    watch()
+    assert launcher.health.get("head").status == Status.OK
+    orientation.set_following(False)  # As the control panel's switch and its Stop all motors do
+    watch()
+    assert launcher.health.get("head").status == Status.OFF
+    orientation.set_following(True)
+    watch()
+    assert launcher.health.get("head").status == Status.OK
+
+
 def test_simulated_motors_are_reported_off_and_not_opened(tmp_path):
     robot = Robot(servo_board=False, motor_board=False)
     launcher = start(robot, tmp_path, simulate_motors=True)
