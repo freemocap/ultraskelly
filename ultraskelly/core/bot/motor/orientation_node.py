@@ -201,7 +201,14 @@ class OrientationNode(Node):
         if "waist" in switches or "pan" in switches:  # The waist's move was planned with the old joints
             if not self.manual:
                 self.waist_motor.throttle = 0.0
-            self.waist_drive = WaistDrive(self.params.waist)
+            self.restart_waist()
+
+    def restart_waist(self) -> None:
+        """A fresh waist planner, so no stale move resumes; a side it found blocked stays blocked, as the body is
+        still where it was."""
+        blocked = self.waist_drive.blocked
+        self.waist_drive = WaistDrive(self.params.waist)
+        self.waist_drive.blocked = blocked
 
     def set_following(self, on: bool) -> None:
         """Follow the target, or hold still: the head stays where it was last sent and the waist brakes at once,
@@ -209,7 +216,7 @@ class OrientationNode(Node):
         starts from rest. Runs on the event loop, between control steps."""
         if not on and not self.manual:
             self.waist_motor.throttle = 0.0
-        self.waist_drive = WaistDrive(self.params.waist)  # No stale move resumes
+        self.restart_waist()
         self.following = on
 
     def retune(self, groups: set[str]) -> None:

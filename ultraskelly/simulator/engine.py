@@ -55,6 +55,7 @@ class Settings(BaseModel):
     waist_time_constant: float = Field(default=plant.WAIST.time_constant, gt=0, le=2)  # Seconds to reach its speed
     waist_brake_time: float = Field(default=plant.WAIST.brake_time, gt=0, le=2)  # Seconds to stop, braked
     waist_coast_time: float = Field(default=plant.WAIST.coast_time, gt=0, le=5)  # And released to coast
+    waist_stop: float = Field(default=100.0, gt=0, le=180)  # Degrees the torso turns each way before its end stop
     # The camera as on the robot: the OAK-1 sees 69 degrees across its 4:3 sensor, and pose results
     # reach the controller about 0.06 s after capture (2026-11-06).
     camera_hfov: float = Field(default=69.0, gt=10, lt=170)
@@ -309,7 +310,10 @@ class Simulation:
             for name, command in (("pan", self.head.pan_angle), ("tilt", self.head.tilt_angle), ("roll", self.head.roll_angle)):
                 self.axes[name].command(now, command)
                 self.axes[name].advance(now + self.dt, self.dt)
-            self.waist = max(-100.0, min(100.0, self.waist_plant.advance(self.waist_drive(), self.dt)))
+            angle, stop = self.waist_plant.advance(self.waist_drive(), self.dt), self.settings.waist_stop
+            if abs(angle) > stop:  # At its end stop the torso turns no further that way, however hard it is driven
+                self.waist_plant.angle, self.waist_plant.speed = math.copysign(stop, angle), 0.0
+            self.waist = self.waist_plant.angle
             # Illustrative spring-return jaw: negative drive opens, zero releases.
             self.jaw = approach(self.jaw, max(0, -self.mouth.mouth_motor.throttle) * 28, 90 * self.dt)
             self.tick += 1

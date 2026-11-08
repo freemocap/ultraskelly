@@ -20,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from ultraskelly.core.bot.base_abcs import NodeParams
 from ultraskelly.core.bot.motor.mouth_node import MouthNode
 from ultraskelly.core.bot.motor.orientation_node import OrientationNode
-from ultraskelly.core.bot.motor.waist_drive import WaistDrive
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +228,9 @@ class MotorTester:
                 self.waist_travel += sent * min(driven, request.seconds)
             if outcome == "done" and await self._interrupted(self.limits.settle_seconds):
                 outcome = "stopped"
-            self.orientation.waist_drive = WaistDrive(self.orientation.params.waist)  # No stale move resumes
+            self.orientation.restart_waist()  # No stale move resumes
+            if request.actuator == "waist" and sent:  # Negative drive turns the torso toward positive pan
+                self.orientation.waist_drive.moved(-1 if sent > 0 else 1)
             self.orientation.manual = self.mouth.manual = False
             if self.simulated and outcome == "done":
                 outcome = "simulated, nothing moved (the bot runs with --simulate-motors)"

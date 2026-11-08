@@ -25,6 +25,13 @@ in the base's frame less the body's modelled turn, which the model's own errors 
 picture's delay no longer carries the waist past them. Near the end the wanted speed is the lowest, so it
 brakes from low speed.
 
+**Getting nowhere.** No sensor says the torso has reached the end of its travel, but the picture does: once a
+move has run progress_settle, the person's offset from the body's front must shrink, over every progress_window,
+by progress_share of the turn the model drove, less what the person walked away meanwhile (as seen while the
+body stood still before the move). If it does not, the body is not turning: the waist brakes and starts no move
+that way again until it has turned the other way (a move, or a motor test). Before this a move pushed into the
+stop for its whole max_move_seconds, rested, and pushed again.
+
 **The model: an efference copy.** `WaistModel` runs the drive actually sent (after the actuator limits)
 through the fitted friction model: breakaway, stall, a speed per direction, how fast it reaches speed and
 stops. The head counter-rotates against its turn (head_aim.py), with a speed for each direction and nothing
@@ -123,6 +130,26 @@ class WaistDriveParams(NodeParams):
         default=6.0, gt=0.0, le=60.0, description="Safety limit: a move this long brakes and rests, whatever the picture says",
     )
 
+    # Getting nowhere: at the end of its travel, or held, the waist turns but the person comes no nearer
+    progress_window: float = Field(
+        default=0.5, gt=0.0, le=3.0,
+        description="Seconds over which a turning waist must bring the person nearer, counted once the kick has "
+                    "broken it loose and the camera has seen it (progress_settle)",
+    )
+    progress_settle: float = Field(
+        default=0.3, ge=0.0, le=2.0,
+        description="Seconds after the kick before a move's progress is counted: breaking loose, and the camera's delay",
+    )
+    progress_share: float = Field(
+        default=0.33, ge=0.0, le=1.0,
+        description="Share of the turn the model drove over progress_window by which the person's offset from the "
+                    "body's front must shrink; less, and the waist brakes and turns no further that way until it "
+                    "has turned the other way (0: never)",
+    )
+    progress_min_turn: float = Field(
+        default=3.0, gt=0.0, le=30.0, description="Degrees the model must have driven over the window before it is judged",
+    )
+
     @model_validator(mode="after")
     def _ordered(self) -> "WaistDriveParams":
         if self.stall > self.breakaway:
@@ -211,6 +238,13 @@ class WaistDrive:
         self.rest_until = self.reverse_until = -math.inf
         self.last_update: float | None = None
         self.last_advance: float | None = None
+        # (when, the person's offset from the body's front, the model's angle) each tick of the move, for its progress
+        self.progress: deque[tuple[float, float, float]] = deque()
+        self.blocked = 0  # A side a move found it could not turn toward (+1 positive pan, -1 negative), until it turns the other way
+        # How fast the person was going further away as the move started, degrees a second: seen while the body
+        # was still, so the waist's model had not yet had any say in it
+        self.start_away = 0.0
+        self.idle_offsets: deque[tuple[float, float]] = deque()  # (now, the person's offset) while the waist is idle
 
     @property
     def state(self) -> WaistState:
@@ -256,10 +290,50 @@ class WaistDrive:
         full = p.speed_positive if self.side < 0 else p.speed_negative  # Toward negative pan takes positive drive
         return min(max(speed / full, p.run_throttle), p.max_throttle)
 
+    def moved(self, side: int) -> None:
+        """The body turned toward `side` (+1 positive pan, -1 negative) another way than a move here, such as a
+        motor test: turned away from the side it found blocked, it may try that way again."""
+        if self.blocked and side == -self.blocked:
+            logger.info("Waist turned the other way: it may try toward the blocked side again")
+            self.blocked = 0
+
+    def _stalled(self, when: float, demand: float) -> bool:
+        """Whether this move has stopped bringing the person nearer: over the last progress_window the model
+        drove the body at least progress_min_turn degrees toward them, and their offset from its front shrank
+        by less than progress_share of that. The offset is the picture's, in the base's frame less the body's
+        modelled turn: when the body really turns it shrinks by the turn, and when it does not (at the end of
+        its travel, or held) the picture keeps the person where they were and it stays put."""
+        p = self.params
+        now = when - p.plan_ahead  # The offset and the model's angle are now's; `when` is the command's, ahead
+        if p.progress_share <= 0.0 or now - self.move_started < p.progress_settle:
+            return False
+        self.progress.append((now, abs(demand), self.model.angle))
+        while len(self.progress) > 1 and self.progress[1][0] <= now - p.progress_window:
+            self.progress.popleft()
+        then, offset_then, angle_then = self.progress[0]
+        if now - then < p.progress_window - 1e-6:
+            return False
+        # Once the waist turns, the tracker cannot tell a body that does not turn from a person walking away as fast
+        # as the model says it turns: so the person's own walking away is taken as it was before the move started
+        driven = (self.model.angle - angle_then) * self.side
+        expected = driven - self.start_away * (now - then)
+        nearer = offset_then - abs(demand)
+        if expected < p.progress_min_turn or nearer >= p.progress_share * expected:
+            return False
+        logger.warning(
+            f"Waist: the model drove {driven:.1f} degrees toward {'positive' if self.side > 0 else 'negative'} pan in "
+            f"{now - then:.2f} s, which should have brought the person {expected:.1f} degrees nearer, but they came "
+            f"{nearer:.1f}; braking, and turning no further that way until it has turned the other way"
+        )
+        return True
+
     def _start(self, when: float, demand: float, settled: bool, offset: float | None, planning: bool) -> bool:
         """Whether a move starts at `when` toward a person `demand` degrees off the body's front."""
         p = self.params
         side = 1 if demand > 0 else -1
+        if side == self.blocked:  # It could not turn that way last time: not until it has turned the other way
+            self.offset_since = None
+            return False
         beyond = abs(demand) > p.start_now and not planning  # The head turns first, then the torso
         holding = settled and offset is not None and abs(offset) > p.start_offset and (offset > 0) == (side > 0)
         if not holding:
@@ -272,6 +346,8 @@ class WaistDrive:
             return False
         self.phase, self.side = WaistState.KICK, side
         self.kick_until, self.move_started, self.offset_since = when + p.kick_seconds, when, None
+        self.progress.clear()
+        self.moved(side)  # Turning away from a side it found blocked frees that side
         return True
 
     def _decide(self, when: float, demand: float | None, settled: bool, offset: float | None, planning: bool,
@@ -281,9 +357,19 @@ class WaistDrive:
         if self.phase is WaistState.IDLE:
             if demand is None:
                 self.offset_since = None
+                self.idle_offsets.clear()
                 return 0.0
+            now = when - p.plan_ahead
+            self.idle_offsets.append((now, demand))
+            while len(self.idle_offsets) > 1 and self.idle_offsets[1][0] <= now - p.progress_window:
+                self.idle_offsets.popleft()
             if not self._start(when, demand, settled, offset, planning):
                 return 0.0
+            # The person's own walking away, from their offset while the body stood still, or as the tracker had it
+            then, offset_then = self.idle_offsets[0]
+            seen = (demand - offset_then) / (now - then) * self.side if now - then >= p.progress_window / 2 else 0.0
+            self.start_away = max(0.0, seen, person_speed * self.side)
+            self.idle_offsets.clear()
         drive = -float(self.side)  # The sign that turns the torso toward the person
         if self.phase is WaistState.KICK:
             if demand is None or when - self.move_started > p.max_move_seconds:
@@ -298,6 +384,8 @@ class WaistDrive:
                 if demand is not None and when - self.move_started > p.max_move_seconds:
                     logger.warning(f"Waist drove {p.max_move_seconds:.1f} s without the person coming ahead; resting")
                 self.phase = WaistState.STOPPING
+            elif self._stalled(when, demand):  # Turning, but the person comes no nearer: it cannot turn this way
+                self.blocked, self.phase = self.side, WaistState.STOPPING
             else:
                 # The person's offset as it will be: less the turn still to come before this command is sent
                 away = max(0.0, person_speed * self.side)  # The person going further this way
