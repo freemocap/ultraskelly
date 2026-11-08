@@ -372,16 +372,16 @@ class WaistMonitor:
                 self.reading = (found.yaw, time.monotonic())
 
 
-def camera_settings(rows: list[tuple]) -> dict:
+def camera_settings(rows: list[tuple], cap: float = 0.010) -> dict:
     """Manual settings from auto-exposure's recent frames (FrameKeeper rows): the same brightness with the
-    exposure at most LONGEST_EXPOSURE, ISO raised to 1600 before the exposure grows (to 10 ms at most)."""
+    exposure at most LONGEST_EXPOSURE, ISO raised to 1600 before the exposure grows (to `cap` at most)."""
     middle = sorted(rows, key=lambda row: row[4])[len(rows) // 2]
     exposure, iso = middle[4], middle[5]
     light = exposure * iso
     short = min(exposure, LONGEST_EXPOSURE)
     needed = light / short
     if needed > 1600:
-        needed, short = 1600, min(light / 1600, 0.010)
+        needed, short = 1600, min(light / 1600, cap)
     return {"auto_exposure": exposure, "auto_iso": iso, "exposure": short, "iso": int(round(max(100, needed))),
             "lens_position": int(middle[6]), "colour_temperature": int(middle[7])}
 
@@ -391,6 +391,8 @@ def main() -> None:
     parser.add_argument("--waist-top", type=float, default=0.8, help="Largest waist drive held (the limits allow 0.8)")
     parser.add_argument("--seed", type=int, default=20261107)
     parser.add_argument("--dry-run", action="store_true", help="Print the plan's length and exit")
+    parser.add_argument("--exposure-cap", type=float, default=0.010,
+                        help="Longest exposure (s) the camera may lock at in a dim room: sharper below, darker")
     parser.add_argument("--camera-only", action="store_true",
                         help="Lock the camera and record 5 s still, without opening the motor boards")
     args = parser.parse_args()
@@ -471,7 +473,7 @@ def main() -> None:
         except Exception as error:
             session_info["device_calibration"] = {"error": repr(error)}
         time.sleep(4.0)  # Auto-exposure, focus and white balance settle
-        settings = camera_settings(keeper.rows[-15:])
+        settings = camera_settings(keeper.rows[-15:], args.exposure_cap)
         control = dai.CameraControl()
         control.setManualExposure(int(settings["exposure"] * 1e6), settings["iso"])
         if settings["lens_position"] > 0:  # A lens position the frames report: hold it

@@ -221,12 +221,12 @@ class RotationTracker:
 
     def __init__(self, camera: Camera, reference: np.ndarray, reference_mask: np.ndarray | None = None, *,
                  self_mask: np.ndarray | None = None, refine: bool = True, new_keyframe_beyond: float = math.inf,
-                 min_inliers: int = 25, features: int = 2000, seed: int = 0) -> None:
+                 min_inliers: int = 25, features: int = 2000, attempts: int = 3, seed: int = 0) -> None:
         import cv2
 
         self.cv2, self.camera, self.refine = cv2, camera, refine
         self.self_mask = self_mask  # 0 where the robot itself is in the picture, in every frame (see `self_mask`)
-        self.new_keyframe_beyond, self.min_inliers = new_keyframe_beyond, min_inliers
+        self.new_keyframe_beyond, self.min_inliers, self.attempts = new_keyframe_beyond, min_inliers, attempts
         self.orb = cv2.ORB_create(nfeatures=features)
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
         self.undistort = _Undistorter(cv2, camera)
@@ -252,32 +252,44 @@ class RotationTracker:
         rays, descriptors = self._features(image, mask)
         self.keyframes.append(Keyframe(self.undistort.image(image), self.undistort.mask(mask), rays, descriptors, rotation))
 
-    def _nearest(self, guess: np.ndarray) -> int:
-        return min(range(len(self.keyframes)), key=lambda k: turned_by(self.keyframes[k].orientation.T @ guess))
+    def _nearest(self, guess: np.ndarray) -> list[int]:
+        """Keyframes in order of how near they are to `guess`."""
+        return sorted(range(len(self.keyframes)), key=lambda k: turned_by(self.keyframes[k].orientation.T @ guess))
 
-    def measure(self, image: np.ndarray, mask: np.ndarray | None = None, guess: np.ndarray | None = None) -> Measurement:
-        """The rotation of the camera that took `image` (grey, the camera's size); `mask` (0: ignore) keeps
-        moving things out, and `guess` (an orientation) picks the keyframe, by default from the last two."""
-        if guess is None:
-            guess = self.last @ self.before.T @ self.last  # The last frame's turn, carried on
-        index = self._nearest(guess)
-        keyframe = self.keyframes[index]
-        mask = self._with_self(mask)
-        rays, descriptors = self._features(image, mask)
-        failed = Measurement(math.nan, math.nan, math.nan, np.full((3, 3), math.nan), 0, 0, math.nan, math.nan, index, False)
-        if descriptors is None or keyframe.descriptors is None or len(rays) < 3:
-            return failed
+    def _match(self, keyframe: Keyframe, rays: np.ndarray, descriptors) -> tuple[np.ndarray | None, int, int]:
+        """The turn from the keyframe's rays to this frame's, with the matches and inliers behind it."""
+        if keyframe.descriptors is None:
+            return None, 0, 0
         pairs = self.matcher.knnMatch(keyframe.descriptors, descriptors, k=2)
         good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < RATIO * p[1].distance]
         if len(good) < self.min_inliers:
-            failed.matches = len(good)
-            return failed
+            return None, len(good), 0
         a = keyframe.rays[[m.queryIdx for m in good]]
         b = rays[[m.trainIdx for m in good]]
-        turn, inliers = rotation_ransac(a, b, self.threshold, self.rng)  # Takes keyframe rays to this frame's
+        turn, inliers = rotation_ransac(a, b, self.threshold, self.rng)
         count = int(inliers.sum())
-        if count < self.min_inliers:
-            failed.matches, failed.inliers = len(good), count
+        return (turn if count >= self.min_inliers else None), len(good), count
+
+    def measure(self, image: np.ndarray, mask: np.ndarray | None = None, guess: np.ndarray | None = None) -> Measurement:
+        """The rotation of the camera that took `image` (grey, the camera's size); `mask` (0: ignore) keeps
+        moving things out, and `guess` (an orientation) picks the keyframe to try first, by default from the
+        last two frames. A frame the nearest keyframe cannot place tries the next nearest, up to `attempts`."""
+        if guess is None:
+            guess = self.last @ self.before.T @ self.last  # The last frame's turn, carried on
+        order = self._nearest(guess)
+        mask = self._with_self(mask)
+        rays, descriptors = self._features(image, mask)
+        failed = Measurement(math.nan, math.nan, math.nan, np.full((3, 3), math.nan), 0, 0, math.nan, math.nan, order[0], False)
+        if descriptors is None or len(rays) < 3:
+            return failed
+        for index in order[:self.attempts]:
+            keyframe = self.keyframes[index]
+            turn, matched, count = self._match(keyframe, rays, descriptors)
+            if turn is not None:
+                break
+            if matched > failed.matches:
+                failed.matches, failed.inliers, failed.keyframe = matched, count, index
+        else:
             return failed
         correlation, moved = math.nan, 0.0
         if self.refine:
@@ -288,10 +300,14 @@ class RotationTracker:
                 turn = better
         rotation = keyframe.orientation @ turn.T
         self.before, self.last = self.last, rotation
-        if turned_by(turn) > self.new_keyframe_beyond and count >= 3 * self.min_inliers:
+        # A new keyframe where this one is turned far from, or barely recognised any more (the scene changed),
+        # while this frame is still well placed
+        fading = count < 0.25 * len(keyframe.rays)
+        if (turned_by(turn) > self.new_keyframe_beyond or (fading and self.new_keyframe_beyond < math.inf)) \
+                and count >= 2 * self.min_inliers:
             self._add_keyframe(image, mask, rotation)  # Already holds the self mask; adding it again changes nothing
         yaw, pitch, roll = angles(rotation)
-        return Measurement(yaw, pitch, roll, rotation, len(good), count, correlation, moved, index, True)
+        return Measurement(yaw, pitch, roll, rotation, matched, count, correlation, moved, index, True)
 
     def _ecc(self, keyframe: Keyframe, image: np.ndarray, mask: np.ndarray | None,
              turn: np.ndarray) -> tuple[float, np.ndarray] | None:
