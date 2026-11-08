@@ -271,7 +271,10 @@ def test_a_driven_board_that_stops_answering_is_an_error_until_it_answers(tmp_pa
         await asyncio.sleep(0.3)
         seen.append(launcher.health.get("servo_board"))
         boards[0x40] = servo_board()
-        await asyncio.sleep(0.2)
+        for _ in range(20):  # Up to 1 s: the readback confirms the pulses at a diagnostics pass after the board is back
+            await asyncio.sleep(0.05)
+            if launcher.health.get("servo_board").message.startswith("Answers;"):
+                break
         seen.append(launcher.health.get("servo_board"))
         await stop(launcher, task)
         return seen
