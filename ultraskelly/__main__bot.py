@@ -7,7 +7,6 @@ Tracks people with an OAK USB camera and YOLOv8 pose on the Hailo-8 AI HAT+.
 import asyncio
 import logging
 from ultraskelly.bot_launcher import LaunchConfig, BotLauncher
-from ultraskelly.core.bot.motor.head_aim import HeadAimParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams
 from ultraskelly.core.bot.recording.run_recorder_node import RunRecorderParams
 from ultraskelly.core.bot.sensory.hailo_pose_node import HailoPoseDetectorParams
@@ -60,22 +59,19 @@ def launch_config(
     config.runtime_server.depth_previews = depth_previews
     config.tracking = not zed_only
     config.runtime_server.port = port
-    # The head runs its defaults: its aim tuned on the simulated robot fitted to the motors recorded on
-    # 2026-11-06 (simulator/tuning.py), and checked by the closed-loop scenarios (tests/test_scenarios_tuning.py),
-    # which run what launches here. It follows over the servos' whole measured travel (pan 10-170, tilt 10-140;
-    # the owner, 2026-11-07: "head servos should move their FULL range of motion"), and the hard limits are the
-    # servos' own 0-180, so motor tests reach every angle.
-    # Two changes from the tuned head (the owner, 2026-11-07): a gentler acceleration, 25 degrees a second squared
-    # instead of 34, at full speed ("I just need a less aggressive acceleration"; a 30 degree a second cap on pan's
-    # servo was "way too slow"), and a deadband of 0.12, so a still head moves again for a face about 0.4 degrees off
-    # (deadband / reach), 3 px, where 0.39 waited for 1.3, 10 px ("tighten that range"). The head battery passes
-    # with both, no new reversals, median settle 1.67 s against 1.53 (tests/test_scenarios_tuning.py).
-    # The waist follows too, untuned with this head (the owner, 2026-11-07: "Turn on as is"): in the full scenarios
-    # it swings 14-20 degrees past someone far to the side, and it starts a move only once the head has held still
-    # for 0.3 s, which the tighter deadband makes rarer. The roll levels the followed face (the owner, 2026-11-07:
-    # "start the face leveling head roll support work"): on the simulated robot it straightens a tilted face only
-    # about 1.5 degrees, all its linkage gives within `span` (tests/test_scenarios.py, the "tilt" scenarios).
-    config.orientation = OrientationNodeParams(follow=follow, aim=HeadAimParams())
+    # The head and waist run their defaults, tuned together on the simulated robot fitted to the motors recorded on
+    # 2026-11-06 (simulator/tuning.py, 2026-11-07; docs/control-design.md) and checked by the closed-loop scenarios
+    # (tests/test_scenarios.py, tests/test_scenarios_tuning.py), which run what launches here. The head is the
+    # "calm" tuning: its acceleration at most 25 degrees of view per second squared, as the owner asked on
+    # 2026-11-07 ("I just need a less aggressive acceleration"), and robust on 59 random plants and the corners of
+    # gearing and pixel scale 15 % either way. The "responsive" tuning (head_aim.RESPONSIVE) centres a 20-degree
+    # step within 1 s, but overshoots 2.4-3 degrees with pan geared 15 % above the fit (it has measured 0.26-0.36),
+    # so it does not launch until the gearing is measured. The head follows over the servos' whole measured travel
+    # (the owner, 2026-11-07: "head servos should move their FULL range of motion"), and the hard limits are the
+    # servos' own 0-180, so motor tests reach every angle. The roll levels the followed face (the owner,
+    # 2026-11-07: "start the face leveling head roll support work"); it straightens a tilted face only about 1.5
+    # degrees, all its linkage gives within `span`.
+    config.orientation = OrientationNodeParams(follow=follow)
     return config
 
 

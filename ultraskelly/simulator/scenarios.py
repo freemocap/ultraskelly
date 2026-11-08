@@ -241,6 +241,17 @@ LOW_FACE = Scenario("low-face", "A person 12 degrees left whose face stays low i
                     "middle and still 204 once tilt has turned down as far as it can", 4.0, still(12.0, -24.5),
                     aim=False)
 
+# Scenarios the tuner (simulator/tuning.py) adds to the batteries: the owner's target, a 20-degree step centred
+# within 1 s by the head alone (the head reaches 19.2 degrees inside pan's servo window, so it settles within
+# SETTLE_DEGREES of it), and walkers who stop, whom a head that leads them may overshoot.
+TUNING_HEAD = [  # A head geared 15 % low reaches only 16.3 degrees: then 20 is beyond it, so only calm is asked
+    Scenario("step-20", "A person steps in 20 degrees to the left", 4.0, still(20.0), aim=False),
+    Scenario("step-20-right", "A person steps in 20 degrees to the right", 4.0, still(-20.0), aim=False),
+    Scenario("walk-stop", "A person 6 degrees left walks to 16 at 15 deg/s and stops", 4.0, walking(6.0, 16.0, 15.0, pause=1.0)),
+    Scenario("walk-stop-right", "A person 4 degrees right walks to -14 at 12 deg/s and stops", 4.0,
+             walking(-4.0, -14.0, 12.0, pause=1.0)),
+]
+
 # Frozen held-out sets (2026-11-07): new amplitudes, timings, speeds and fault patterns, never used while tuning
 # (simulator/tuning.py), only to check a tuning afterwards. Refresh them only with a new tuning campaign.
 HELD_OUT_HEAD = [  # The head alone, as HEAD_BATTERY

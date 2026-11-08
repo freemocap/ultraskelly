@@ -1,19 +1,21 @@
 """The robot's head as launched, on the simulated robot as recorded on 2026-11-06.
 
 The plant (simulator/plant.py) replays the recorded motor-response run within the fidelity bounds of
-tests/test_plant_fidelity.py; the battery (scenarios.HEAD_BATTERY) is the robot's present setup, the head
-alone. The launched aim is the one simulator/tuning.py found best on its stated cost: here it must pass
-the battery on the measured plant, and stay calm on the stressed plants the tuner weighed (pan gearing
-15 % either way, 1.5 and 2 times, a head that rings at 45 % instead of 22-32 %, 1.5 times the dead time)
-and on others it did not.
+tests/test_plant_fidelity.py; the battery (scenarios.HEAD_BATTERY) is the head alone, waist braked. The
+launched aim is one simulator/tuning.py found on its stated cost: here it must pass the battery on the
+measured plant, and stay calm on plants that differ from the fit: the corners the tuner weighed (gearing
+and pixels per degree 15 % either way), pan's gearing anywhere from 0.85 to 1.4 times the fit (it measured
+0.26-0.36 between runs), a head that rings at 45 % instead of 22-32 %, 1.5 times the dead time, and others
+it did not weigh. The release check on 59 random plants is `python -m ultraskelly.simulator.tuning check`;
+a few of those plants run here.
 """
 import dataclasses
 
 import pytest
 
 from ultraskelly.__main__bot import launch_config
+from ultraskelly.simulator import plant, robustness
 from ultraskelly.simulator import scenarios as S
-from ultraskelly.simulator.tuning import PLANTS
 
 CALM = ("overshoot", "oscillation", "runaway", "chased")  # Failures that mean the head swings or chases
 
@@ -29,7 +31,13 @@ UNWEIGHED = {
     "tilt barely turns": {"tilt_ratio": 0.02},
     "tilt loose": {"tilt_backlash": 20.0},
 }
-STRESSED = {**{name: settings for name, (settings, _) in PLANTS.items() if name != "measured"}, **UNWEIGHED}
+STRESSED = {
+    **robustness.CORNERS,
+    **{f"pan gearing x{ratio}": {"pan_ratio": plant.PAN.gain * ratio} for ratio in (0.85, 1.15, 1.3, 1.4)},
+    "less damped (45 % overshoot)": {"pan_damping": 0.25, "pan_damping_down": 0.18},
+    "slower (1.5 x dead time)": {"delay_scale": 1.5},
+    **UNWEIGHED,
+}
 
 
 def launched(sim):
@@ -52,6 +60,16 @@ def test_the_launched_head_stays_calm_on_stressed_plants(plant):
         trace, verdict = S.run(dataclasses.replace(scenario, settings={**scenario.settings, **STRESSED[plant]}), launched)
         swinging += [f"{scenario.name}: {failure}" for failure in verdict.failures if failure.startswith(CALM)]
     assert not swinging
+
+
+@pytest.mark.parametrize("index", range(4))
+def test_the_launched_head_passes_its_battery_on_random_plants(index):
+    plants = robustness.plants(4, seed=7)  # A screen; the release check runs 59 (simulator/tuning.py)
+    failing = []
+    for scenario in S.HEAD_BATTERY:
+        trace, verdict = S.run(dataclasses.replace(scenario, settings={**scenario.settings, **plants[index]}), launched)
+        failing += [f"{scenario.name}: {failure}" for failure in verdict.failures]
+    assert not failing
 
 
 def yaw_settle(trace: S.Trace) -> float | None:
