@@ -128,7 +128,9 @@ target, rates, node health and the OAK chip's load. The browser decodes them wit
 draws the overlay itself; [the stream guide](docs/stream.md) describes every field.
 On the Pi, the control panel on port 80 serves the same page with big buttons that turn
 the bot on and off, restart it and switch following
-([Control panel](docs/dashboard.md#control-panel)); `scripts/open-dashboard.sh` opens it
+([Control panel](docs/dashboard.md#control-panel)), and a Tune window that sets the
+controllers' settings live and saves them in `~/.config/ultraskelly/tuning.json` for the
+next start ([Tune](docs/dashboard.md#tune)); `scripts/open-dashboard.sh` opens it
 full-screen on the Pi's monitor. The UltraSkelly icon on the Pi's desktop starts the bot,
 unless it runs, and opens the dashboard (`scripts/start-ultraskelly.sh`).
 [The dashboard layout](docs/dashboard.md) describes its panels and sizing.

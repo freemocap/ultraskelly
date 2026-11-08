@@ -49,6 +49,7 @@ from ultraskelly.core.bot.motor.motor_boards import (
     open_servo_board,
 )
 from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
+from ultraskelly.core.bot.motor.tuning import Tuning, TuningParams
 from ultraskelly.core.bot.motor.motor_watchdog import MotorWatchdog
 from ultraskelly.core.bot.motor.mouth_node import MouthNode, MouthNodeParams
 from ultraskelly.core.bot.motor.orientation_node import OrientationNodeParams, OrientationNode
@@ -142,6 +143,11 @@ class LaunchConfig(NodeParams):
         default_factory=StallMonitorParams,
         description="Stop the bot, for its service to restart it, when camera frames or pose results stop",
     )
+    tuning: TuningParams = Field(
+        default_factory=TuningParams,
+        description="The settings saved from the dashboard's Tune window, merged over the controllers' at start "
+                    "(launch_config), and the controllers' own before them",
+    )
 
 
 @dataclass
@@ -187,6 +193,8 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    # The controllers' settings as the dashboard tunes them; None until nodes are created, and without motors.
+    tuning: SkipValidation[Tuning | None] = Field(default=None, exclude=True)
     # Brakes the DC motors from its own thread if the control loop stalls; None until nodes are created.
     motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(default=None, exclude=True)
     shutting_down: bool = Field(default=False, exclude=True)
@@ -257,6 +265,8 @@ class BotLauncher(BaseModel):
             orientation=orientation, mouth=mouth, limits=self.config.motor_tests, unavailable=self._unavailable,
             simulated=self.config.simulate_motors,
         )
+        # The controllers were given the configuration's own params objects, so tuning them tunes the running controllers.
+        self.tuning = Tuning(self.config, self.config.tuning, on_change=orientation.retune)
         if not self.config.orientation.follow:
             logger.info("Not following the target (--no-follow): the head and waist move only for motor tests")
         self.motor_watchdog = MotorWatchdog({"waist": orientation.waist_motor, "mouth": mouth.mouth_motor})
@@ -279,6 +289,7 @@ class BotLauncher(BaseModel):
             # The Hailo detector reports which OAK frame each pose came from.
             pose_camera=OAK_FEED,
             motor_tests=self.motor_tester,
+            tuning=self.tuning,
             # The OAK's own chip finds faces in the same frames.
             # Only while the OAK runs its models: without them no frame would ever get its results.
             # An OAK brought back later sets it (_oak_started); its results and status follow the newest OAK.

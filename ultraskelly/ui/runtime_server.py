@@ -9,7 +9,8 @@ and newest-wins: a slow browser receives fewer, newer messages and never blocks 
 bot's event loop. A viewer may say what it draws (display feedback); it then receives
 only that, and a feed nobody draws is not encoded (docs/stream.md). Motor values are the
 commands sent, not measured positions.
-Dashboard motor tests are separate commands with their own replies; see motor_test_routes.
+Dashboard motor tests are separate commands with their own replies; see motor_test_routes. So is tuning the
+controllers' settings from the dashboard's Tune window; see tuning_routes.
 """
 import asyncio
 import json
@@ -39,6 +40,7 @@ from pydantic import Field, SkipValidation
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.health import Health
 from ultraskelly.core.bot.motor.motor_test import MotorTester
+from ultraskelly.core.bot.motor.tuning import Tuning
 from ultraskelly.core.bot.motor.simulated_actuators import CommandRecorder
 from ultraskelly.core.bot.sensory.pose_common import SKELETON_CONNECTIONS, CocoKeypoint
 from ultraskelly.core.pubsub.bot_topics import (
@@ -64,6 +66,7 @@ from ultraskelly.ui.oak_stream import oak_trackers
 from ultraskelly.core.pubsub.pubsub_manager import PubSubTopicManager
 from ultraskelly.ui.dashboard_assets import ASSETS
 from ultraskelly.ui.motor_test_routes import add_motor_test_routes
+from ultraskelly.ui.tuning_routes import add_tuning_routes
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +375,7 @@ class RuntimeServerNode(Node):
     health_stream: SkipValidation[Latest] = Field(default_factory=Latest, exclude=True)  # health messages
     health_sequence: int = Field(default=0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    tuning: SkipValidation[Tuning | None] = Field(default=None, exclude=True)
     results_camera: str | None = Field(default=None, description="Camera whose frames the OAK's own models read")
     results_for: SkipValidation[Callable[[int], OakResultsMessage | None]] = Field(default=lambda number: None, exclude=True)
     oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
@@ -395,6 +399,7 @@ class RuntimeServerNode(Node):
         pose_camera: str | None = None,
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
         motor_tests: MotorTester | None = None,
+        tuning: Tuning | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         results_camera: str | None = None,
@@ -407,7 +412,8 @@ class RuntimeServerNode(Node):
         Cameras named in `overlays` report the aim point and jaw zone the dashboard draws.
         `pose_camera`'s frames travel with the poses detected in them, and `results_camera`'s with
         the faces and hands the OAK found in them, which `results_for` gives by frame number. With
-        `motor_tests`, the dashboard can run motor tests through /api/motor-test. A stereo camera's
+        `motor_tests`, the dashboard can run motor tests through /api/motor-test, and with `tuning`, tune the
+        controllers through /api/tuning. A stereo camera's
         two images travel together in one frame message, as cameras `<name>_left` and
         `<name>_right`; a depth frame's as `<name>_rectified` and, with `depth_previews`,
         `<name>_depth`, the depth drawn in colour. `oak_status` reports the OAK's model rates and
@@ -422,6 +428,7 @@ class RuntimeServerNode(Node):
             encode_jpeg=encode_jpeg,
             pose_camera=pose_camera,
             motor_tests=motor_tests,
+            tuning=tuning,
             results_camera=results_camera,
             oak_status=oak_status,
             health=health,
@@ -459,6 +466,8 @@ class RuntimeServerNode(Node):
         app.router.add_get("/stream", self._stream)
         if self.motor_tests is not None:
             add_motor_test_routes(app, self.motor_tests)
+        if self.tuning is not None:
+            add_tuning_routes(app, self.tuning)
         return app
 
     def robot_state(self) -> dict:

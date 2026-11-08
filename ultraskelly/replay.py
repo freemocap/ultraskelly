@@ -174,14 +174,20 @@ async def synthetic_camera(bus: PubSubTopicManager, people: int, results: dict[i
         await asyncio.sleep(max(0.0, start + (number + 1) / SYNTHETIC_FPS - time.monotonic()))
 
 
-async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.0.1") -> None:
+async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.0.1", tuning: Path | None = None) -> None:
     """Loop the scripted targets through the controllers and serve the dashboard on `host`.
-    With `people`, a synthetic camera's people drive the controllers instead."""
+    With `people`, a synthetic camera's people drive the controllers instead. With `tuning`, the
+    dashboard's tuning is kept in that file and loaded from it at start, as the bot keeps its own."""
+    from types import SimpleNamespace
+
     from ultraskelly.core.bot.motor.motor_test import MotorTester, MotorTestLimits
+    from ultraskelly.core.bot.motor.tuning import Tuning, load_tuning
     from ultraskelly.ui.runtime_server import RuntimeServerNode, RuntimeServerParams, TrackingOverlay
 
     recorder = CommandRecorder()
     bus, orientation, mouth = create_controllers(recorder)
+    settings = SimpleNamespace(orientation=orientation.params, mouth=mouth.params)  # Where the bot's tuning finds them
+    started = load_tuning(settings, tuning) if tuning is not None else None  # In place, as the controllers hold them
     tasks: dict[str, asyncio.Task] = {}
 
     def node_status() -> list[dict]:
@@ -204,6 +210,7 @@ async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.
         motors_simulated=True,
         node_status=node_status,
         motor_tests=MotorTester(orientation=orientation, mouth=mouth, limits=MotorTestLimits()),
+        tuning=Tuning(settings, started, on_change=orientation.retune),  # Without a file, tuned live only
         **(camera or dict(cameras={})),
     )
     for node in (orientation, mouth, server):
@@ -211,7 +218,7 @@ async def serve(port: int, interval: float, people: int = 0, host: str = "127.0.
     if people:
         tasks["SyntheticCamera"] = asyncio.create_task(synthetic_camera(bus, people, results))
     source = f"a synthetic camera with {people} people" if people else "scripted targets"
-    print(f"Replay dashboard: http://{host}:{port} ({source}, simulated motor tests, no hardware). "
+    print(f"Replay dashboard: http://{host}:{port} ({source}, simulated motor tests and tuning, no hardware). "
           "Ctrl+C to stop.", flush=True)
     try:
         step = 0
@@ -243,6 +250,9 @@ def main():
                         help="Interface to serve on with --serve; 0.0.0.0 lets other computers connect")
     parser.add_argument("--people", type=int, default=0,
                         help="With --serve: a synthetic camera shows this many people (1-8), not scripted targets")
+    parser.add_argument("--tuning", type=Path, default=None,
+                        help="With --serve: keep the dashboard's tuning in this file, and start with it (default: tuned "
+                             "live only, nothing saved)")
     args = parser.parse_args()
     interval = args.interval if args.interval is not None else (SERVE_INTERVAL if args.serve else REPLAY_INTERVAL)
     if args.steps <= 0 or interval <= 0:
@@ -252,7 +262,7 @@ def main():
 
     if args.serve:
         try:
-            asyncio.run(serve(args.port, interval, people=args.people, host=args.host))
+            asyncio.run(serve(args.port, interval, people=args.people, host=args.host, tuning=args.tuning))
         except KeyboardInterrupt:
             pass
         return

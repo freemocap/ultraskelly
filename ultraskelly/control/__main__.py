@@ -4,7 +4,8 @@
                                                         managing ultraskelly-bot.service through systemd
     python -m ultraskelly.control --port 8000 --local-bot
                                                         development: runs `python -m ultraskelly.replay --serve
-                                                        --people 3` as the bot, which moves nothing
+                                                        --people 3` as the bot, which moves nothing and keeps
+                                                        its tuning in var/control/tuning.json
     python -m ultraskelly.control --port 8000 --local-bot python my_bot.py
                                                         the same with another command as the bot; it must serve
                                                         the dashboard's /stream and /api/motor-test on --bot-port
@@ -38,7 +39,7 @@ def main() -> None:
     parser.add_argument(
         "--local-bot", nargs=argparse.REMAINDER, default=None, metavar="COMMAND",
         help="Development without systemd, given last: run COMMAND as the bot, by default "
-             "`python -m ultraskelly.replay --serve --people 3`",
+             "`python -m ultraskelly.replay --serve --people 3`, its tuning kept in var/control/tuning.json",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -54,7 +55,8 @@ def main() -> None:
     local = args.local_bot is not None
     if local:
         command = args.local_bot or [sys.executable, "-m", "ultraskelly.replay", "--serve", "--people", "3",
-                                     "--port", str(args.bot_port), "--host", "127.0.0.1"]
+                                     "--port", str(args.bot_port), "--host", "127.0.0.1",
+                                     "--tuning", str(REPO / "var" / "control" / "tuning.json")]
         server = ControlServer(None, options=options, bot_port=args.bot_port, local=True)
         server.bot = LocalBot(command, probe=server.probe)
     else:

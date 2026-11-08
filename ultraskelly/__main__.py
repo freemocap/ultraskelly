@@ -91,6 +91,7 @@ def main() -> None:
     cv2.setNumThreads(1)
     from ultraskelly.__main__bot import launch_config
     from ultraskelly.bot_launcher import BotLauncher
+    from ultraskelly.core.bot.motor.tuning import TUNING_FILE
 
     async def run_bot() -> None:
         # Building the nodes opens the hardware before the first await, so a boot service
@@ -101,6 +102,7 @@ def main() -> None:
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
             port=args.port, oak_models=not args.no_oak_models, follow=args.follow is not False,
+            tuning=TUNING_FILE,  # What the owner saved from the dashboard's Tune window
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

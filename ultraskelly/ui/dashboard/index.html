@@ -24,7 +24,7 @@
 </header>
 <main class="layout">
   <!-- The control column (panel.js), shown when the control panel serves the page. It moves the motor tests and the
-       nodes cards into itself, under the follow switch and the status lamps. -->
+       nodes cards into itself, under the Tune key and the status lamps. -->
   <aside id="control" class="control" aria-label="Robot controls" hidden>
     <button id="control-rail" class="control-rail" title="Show the robot controls" aria-controls="control" aria-expanded="false">
       <i class="beacon" aria-hidden="true"></i><span id="control-rail-state" class="rail-word">Checking</span><b aria-hidden="true">›</b>
@@ -48,6 +48,10 @@
     <button id="control-follow" class="switch" role="switch" aria-checked="true">
       <b class="switch-text">Follow people</b>
       <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
+    </button>
+    <button id="control-tune" class="big tune" aria-haspopup="dialog" aria-controls="tune" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+      <b>Tune</b>
     </button>
     <div id="control-parts" class="control-parts" role="group" aria-label="What works on the robot" hidden></div>
     <p id="control-error" class="control-error" hidden></p>
@@ -145,6 +149,19 @@
     </section>
   </div>
 </main>
+<!-- The Tune window (tune.js), opened from the control column: the controllers' settings, drawn from the bot's schemas. -->
+<dialog id="tune" class="tune" aria-labelledby="tune-title">
+  <div class="tune-frame">
+    <div class="tune-head">
+      <h2 id="tune-title" tabindex="-1" autofocus>Tune</h2>
+      <span class="tune-status" role="status" aria-live="polite"></span>
+      <button type="button" class="tune-reset" title="Every setting back to its default, live; Save keeps it" disabled>Reset</button>
+      <button type="button" class="tune-save primary" disabled>Save</button>
+      <button type="button" class="tune-close" title="Close (Esc)" aria-label="Close">×</button>
+    </div>
+    <div class="tune-groups"></div>
+  </div>
+</dialog>
 <div id="error" role="alert" hidden></div>
 <script type="module" src="/dashboard.js"></script>
 </body></html>

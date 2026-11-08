@@ -489,6 +489,20 @@ to 153. The camera column has the plain dashboard's width again, so the OAK draw
 1920×1080 (on and off), 1280×720, the bot's own page and a phone: nothing overflows.
 Not yet seen on the Pi.
 
+Then the owner asked for "the controls that I would need to tune it myself", in a pop-over
+window. Tune, under the follow switch, opens it ([docs/dashboard.md](dashboard.md#tune)).
+It is drawn from the controllers' own pydantic params (head aim, roll, waist and jaw:
+70 settings today), so the controllers being rebuilt to docs/control-design.md bring
+their new settings with them. A change is checked against the controller's whole model
+and set on the running params objects; Save keeps what differs from `launch_config` in
+`~/.config/ultraskelly/tuning.json`, merged over it at every start. A gear ratio halved
+in mid-turn moved the simulated head's pan command by under 2 degrees, because the head
+carries on from the angles last sent; without that it jumped more than 5
+(`tests/test_tuning.py`). Checked in headless Chrome against the stand-in bot with the
+real routes: four edits marked and unsaved, an out-of-bounds 50 refused with its reason
+and the box restored, Save writing only the four, and the bot restarted with them. Not
+yet seen on the Pi; nothing tuned there yet.
+
 ## Motion: waist drive, motor writes and motor tests (2026-11-02)
 
 **Why the waist pulsed.** The orientation controller drove the waist at 0.7-0.8 for at most

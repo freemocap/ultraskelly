@@ -36,12 +36,12 @@ bot's own server on port 8080 serves the same page without the column.
 │ │ ● RUNNING 1 h ‹ │ │ 3D scene                          │ │                  │ │
 │ │ [Turn off][Rest]│ │                                   │ │                  │ │
 │ │ Follow people ON│ │                                   │ │                  │ │
-│ │ Motor tests     │ │                                   │ │                  │ │
-│ │  Pan Tilt Roll  │ │                                   │ ├ ZED i ───────────┤ │
-│ │  Waist  Jaw     │ │                                   │ │ L        R       │ │
-│ │ ● status lamps  │ │ [Cloud Mesh Gaze] [Orbit…Top]     │ │ heat map  Face   │ │
-│ │ Nodes           │ │                                   │ │                  │ │
-│ └─────────────────┘ └───────────────────────────────────┘ │                  │ │
+│ │ [     Tune    ] │ │                                   │ │                  │ │
+│ │ Motor tests     │ │                                   │ ├ ZED i ───────────┤ │
+│ │  Pan Tilt Roll  │ │                                   │ │ L        R       │ │
+│ │  Waist  Jaw     │ │ [Cloud Mesh Gaze] [Orbit…Top]     │ │ heat map  Face   │ │
+│ │ ● status lamps  │ │                                   │ │                  │ │
+│ └ Nodes ──────────┘ └───────────────────────────────────┘ │                  │ │
 │ ┌ Head cmd · Drive cmd · Target · Face · Accel · Gyro ─i┐ │                  │ │
 │ │                                                       │ │                  │ │
 │ └───────────────────────────────────────────────────────┘ └──────────────────┘ │
@@ -55,8 +55,8 @@ readout, a lamp, the follow switch, a rate or the last error. Commanded values k
 short "cmd" (see Time series).
 
 The column holds, top to bottom and packed: the readout, Turn on/off and Restart, the
-follow switch, the motor tests, the status lamps, the nodes card (which takes what is
-left) and the last error. While those fit beside the 3D scene, as on the Pi's 1080 px,
+follow switch, Tune, the motor tests, the status lamps, the nodes card (which takes what
+is left) and the last error. While those fit beside the 3D scene, as on the Pi's 1080 px,
 the time series runs under both, across from the left edge; when they do not, on a
 shorter window or with the strip dragged tall, the column keeps the full height
 (`panel.js` measures it). Folded, the time series always runs under it. The camera
@@ -75,6 +75,7 @@ column has the dashboard's own width, at which the OAK draws 1:1.
   `--no-follow` in `/var/lib/ultraskelly-control/bot-options`. The bot's service passes
   it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
   bot is off, the switch shows which way its next start goes; its tooltip says so.
+- **Tune:** opens the Tune window over the page (see Tune, below), while the bot runs.
 - **‹ (fold):** folds the column, motor tests and nodes included, to a 44 px strip that
   keeps the bot's lamp and state word; a click on the strip opens it again, at the width
   it was dragged to, if any (see Sizing). The browser keeps the choice (`localStorage`),
@@ -97,7 +98,8 @@ column has the dashboard's own width, at which the OAK draws 1:1.
 While the bot is not running, the views keep what they last showed, nothing covers
 them, the motor test buttons are greyed out, and the header says "Bot off" (or
 "Bot starting") instead of listing every part as failed. The live views read the bot's `/stream` straight from port 8080, so
-the panel adds no second copy of the video. Motor tests pass through the panel to the bot.
+the panel adds no second copy of the video. Motor tests and tuning pass through the panel
+to the bot.
 
 How it runs:
 
@@ -136,9 +138,67 @@ python -m ultraskelly.control --port 8000 --local-bot
 ```
 
 runs `python -m ultraskelly.replay --serve --people 3` as the bot, started and stopped
-by the panel's buttons; it moves nothing. `--local-bot COMMAND...`, given last, runs
+by the panel's buttons; it moves nothing, and keeps its tuning in
+`var/control/tuning.json`. `--local-bot COMMAND...`, given last, runs
 another command as the bot, which must serve the dashboard's `/stream` and
 `/api/motor-test` on `--bot-port` (default 8080).
+
+### Tune
+
+The owner asked to tune the controllers from the page, in "a pop-over modal that sort of
+exposes all the controls" (2026-11-07): the one window on this page that opens over it. It shows every setting of four groups side by side: Head aim
+(`OrientationNodeParams.aim`), Roll (`.roll`), Waist (`.waist`) and Jaw (the mouth node).
+
+```text
+┌ Tune · 2 changes not saved ───────────────────────────────────────────── [Reset] [Save] [×] ┐
+│ ┌ Head aim ────────────── Reset ┐ ┌ Roll ────────────────── Reset ┐ ┌ Waist ──┐ ┌ Jaw ────┐ │
+│ │ Pan ratio  ─●── 0.26 °/servo° │ │ Enabled        (● ) ON        │ │ …       │ │ …       │ │
+│ │ Pan direction    [+1]  −1     │ │ Direction       +1  [−1]      │ │         │ │         │ │
+│ │ Pan range  [ 10] [170] servo° │ │•Max speed  ─●─   20 °/s   ↺   │ │         │ │         │ │
+│ │•Deadband   ●──── 0.2        ↺ │ │ …                             │ │         │ │         │ │
+│ └───────────────────────────────┘ └───────────────────────────────┘ └─────────┘ └─────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Drawn from the controllers' own params.** The bot sends each group's pydantic JSON
+  schema (`GET /api/tuning`); the window draws a slider and a number box within each
+  number's bounds, a switch for each on/off, a pair of buttons for a direction's +1 or −1,
+  and two boxes for a range. A controller's new or renamed settings appear without a
+  change to the page or to `ultraskelly/core/bot/motor/tuning.py`, which only lists where
+  each group's params sit (`GROUPS`). Not shown: servo and motor channels (`*_channel`),
+  the jaw's startup test, and any setting marked `json_schema_extra={"tuning": False}`.
+- **Units and tooltips.** A setting's unit is its `json_schema_extra={"unit": ...}`, else
+  what its description or name says ("Servo degrees …" is `servo°`, "… degrees per
+  second" `°/s`, a name ending in `_seconds` or `_lag` `s`). Its description, default and
+  unit are its tooltip. A setting read only as the bot starts (the waist's `slow_decay`,
+  or one marked `{"tuning": "start"}`) says "Applies when the bot next starts".
+- **Live.** A change goes to the bot as it is let go (a slider released, a number
+  entered, a switch flipped). The bot checks it against the controller's whole model,
+  its cross-field rules included (the waist's throttles in order, say), and applies it
+  all or nothing to the running params objects, which the controllers read every control
+  step. A refused change shows its reason on the status line and the control goes back.
+  After a head aim or roll change the head carries on from the angles last sent, as
+  after a motor test, so a new gear ratio cannot make it jump. The hard limits
+  (`ActuatorLimits`) still clamp every command.
+- **Marks.** A setting that differs from its default is drawn in the accent colour with
+  ↺ to put it back; a dot marks one not yet saved. The default is the launch
+  configuration's value (`launch_config`, such as the head's 0.12 deadband), not the
+  class's.
+- **Save** keeps the settings that differ from their defaults in
+  `~/.config/ultraskelly/tuning.json` of the bot's user, replaced whole (written beside
+  it, flushed, renamed), and `launch_config` merges them over its own values at every
+  start. A saved setting that no longer fits a controller (renamed, or out of its new
+  bounds) is skipped with a warning in the bot's log and on the status line; the rest
+  apply. **Reset** puts every setting back to its default, live; a group's Reset, its
+  own; Save then keeps that.
+
+The routes (`ultraskelly/ui/tuning_routes.py`) answer as the motor tests' do: JSON
+only, 400 with the reason, nothing changed.
+
+    GET  /api/tuning           each group's schema and values, which differ, which are not saved
+    POST /api/tuning           {"aim": {"deadband": 0.2}, "waist": {"enabled": false}}
+    POST /api/tuning/reset     {} everything, {"group": "aim"}, {"group": "aim", "setting": "deadband"}
+    POST /api/tuning/save      {}
 
 ## Panels
 
