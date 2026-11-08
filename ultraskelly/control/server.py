@@ -4,7 +4,8 @@
     GET  /api/panel              {"bot_port", "local", "unit", "host"}: where the bot's stream is
     GET  /api/bot                {"bot": BotStatus, "last_error", "start": the options it starts with, "action", "time"}
     POST /api/bot/start, /api/bot/stop, /api/bot/restart     {}
-    POST /api/follow             {"following": bool}: kept for every start, and switched in the running bot
+    POST /api/follow             {"following": bool} and/or {"axes": {"pan": bool, ...}} (pan, tilt, roll, waist):
+                                 kept for every start, and switched in the running bot
     GET  /api/motor-test, POST /api/motor-test, POST /api/motor-test/stop: passed to the bot
     GET  /api/tuning, POST /api/tuning, POST /api/tuning/reset, POST /api/tuning/save: passed to the bot
 
@@ -22,10 +23,40 @@ from dataclasses import asdict
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from ultraskelly.control.bots import VERBS, ActionFailed, BotStatus, last_error
-from ultraskelly.control.options import StartOptions
+from ultraskelly.control.options import AXES, StartOptions
 from ultraskelly.ui.dashboard_assets import ASSETS
 
 logger = logging.getLogger(__name__)
+
+FOLLOW_USAGE = 'Send {"following": true or false}, {"axes": {"waist": false}} naming any of pan, tilt, roll and waist, or both'
+
+
+def follow_change(body) -> tuple[bool | None, dict[str, bool] | None] | None:
+    """The switches a POST /api/follow asks for, (following, joints by name), or None when it asks for nothing
+    or for anything else: true and false only, known joints only."""
+    if not isinstance(body, dict) or not body or set(body) - {"following", "axes"}:
+        return None
+    on, axes = body.get("following"), body.get("axes")
+    if (on is not None and not isinstance(on, bool)) or "following" in body and on is None:
+        return None
+    if "axes" in body and (not isinstance(axes, dict) or not axes or set(axes) - set(AXES)
+                           or not all(isinstance(value, bool) for value in axes.values())):
+        return None
+    return on, axes
+
+
+def change_words(on: bool | None, axes: dict[str, bool] | None) -> str:
+    """The switches in words: "Following off; waist off", "Pan and tilt on"."""
+    def listed(names: list[str]) -> str:
+        return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    parts = [] if on is None else [f"Following {'on' if on else 'off'}"]
+    for state in (True, False):
+        names = [name for name in AXES if (axes or {}).get(name) is state]
+        if names:
+            parts.append(f"{listed(names)} {'on' if state else 'off'}")
+    text = "; ".join(parts)
+    return text[:1].upper() + text[1:]
+
 
 STATUS_TTL = 0.5  # Seconds one systemctl answer serves every page that asks (each asks once a second)
 ERROR_TTL = 5.0  # Seconds before the log is read again, unless the bot's state changes first
@@ -167,41 +198,46 @@ class ControlServer:
 
     async def _follow(self, request: web.Request) -> web.Response:
         try:
-            on = (await request.json())["following"]
-        except (ValueError, KeyError, TypeError):
-            on = None
-        if not isinstance(on, bool):
-            return web.json_response({"ok": False, "error": 'Send {"following": true} or {"following": false}'}, status=400)
+            body = await request.json()
+        except ValueError:
+            body = None
+        change = follow_change(body)
+        if change is None:
+            return web.json_response({"ok": False, "error": FOLLOW_USAGE}, status=400)
+        on, axes = change
         try:
-            self.options.set_following(on)
+            if on is not None:
+                self.options.set_following(on)
+            if axes:
+                self.options.set_axes(axes)
         except OSError as error:
             message = f"Could not keep the switch in {self.options.path}: {error}"
             return web.json_response({**self._did("follow", False, message), "error": message}, status=500)
         status = await self.status(fresh=True)
         applied = "next start"
         if status.state == "running":
-            reply = await self.bot_post("/api/follow", {"following": on})
+            reply = await self.bot_post("/api/follow", {key: value for key, value in (("following", on), ("axes", axes)) if value is not None})
             if reply is not None and reply[0] == 200:
                 applied = "now"
-            elif reply is not None and reply[0] == 404:  # A bot from before the live switch: restart it with the new option
+            elif reply is not None and reply[0] in (400, 404):  # A bot from before this switch: restart it with the new options
                 await self.bot.act("restart")
                 applied = "restart"
-        elif status.state == "starting":  # Started with the old option: switch it once it is up
-            self._spawn(self._follow_once_up(on))
+        elif status.state == "starting":  # Started with the old options: switch it once it is up
+            self._spawn(self._switch_once_up())
             applied = "once started"
-        word = "on" if on else "off"
-        message = {"now": f"Following {word}", "restart": f"Following {word}: restarting the bot to apply it",
-                   "once started": f"Following {word} once the bot has started",
-                   "next start": f"Following {word} from the bot's next start"}[applied]
-        return web.json_response({**self._did("follow", True, message), "following": on, "applied": applied})
+        words = change_words(on, axes)
+        message = {"now": words, "restart": f"{words}: restarting the bot to apply it",
+                   "once started": f"{words} once the bot has started",
+                   "next start": f"{words} from the bot's next start"}[applied]
+        return web.json_response({**self._did("follow", True, message), "following": self.options.follows(),
+                                  "axes": self.options.axes(), "applied": applied})
 
-    async def _follow_once_up(self, on: bool) -> None:
+    async def _switch_once_up(self) -> None:
         for _ in range(300):  # The bot has 2 min to start (TimeoutStartSec)
             await asyncio.sleep(0.5)
             status = await self.status()
-            if status.state == "running":
-                if self.options.follows() == on:  # Not switched again meanwhile
-                    await self.bot_post("/api/follow", {"following": on})
+            if status.state == "running":  # As switched last, should it have been switched again meanwhile
+                await self.bot_post("/api/follow", {"following": self.options.follows(), "axes": self.options.axes()})
                 return
             if status.state not in ("starting",):
                 return

@@ -252,3 +252,91 @@ def test_an_axis_held_at_its_end_while_following_is_reported_as_unable_to_reach(
     asyncio.run(scenario())
     assert head_finding(follow=False, pinned={}).status == Status.OFF
     assert head_finding(follow=True, pinned={"pan": 2.0}).status == Status.OK  # Briefly at the end is fine
+
+
+async def person_at(bus, node, now, x, y, seconds):
+    """Step on the fake clock `now` for `seconds`, the target at pixel (x, y) in a fresh frame every 30 ms."""
+    for tick in range(round(seconds * 100)):
+        if tick % 3 == 0:
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=x, y=y, captured=now[0]))
+        await node.step()
+        now[0] += 0.01
+
+
+def test_a_joint_switched_off_holds_still_while_the_others_follow_and_switched_on_turns_to_the_person():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        now = [0.0]
+        node.clock = lambda: now[0]
+        node.set_axes(pan=False, waist=False)  # The person tracker menu
+        await person_at(bus, node, now, 600, 400, 2.0)  # Right of and below the aim point
+        assert node.pan_angle == 90.0 and node.tilt_angle > 90.0  # Tilt follows them down; pan holds
+        assert node.waist_motor.throttle == 0.0
+        node.set_axes(pan=True)
+        await person_at(bus, node, now, 600, 400, 2.0)
+        assert node.pan_angle > 90.0  # On again: it turns to them
+        node.set_axes(tilt=False)
+        held = (node.pan_angle, node.tilt_angle)
+        await person_at(bus, node, now, 40, 40, 2.0)  # Now left of and above it
+        assert node.tilt_angle == held[1] and node.pan_angle < held[0]  # Pan follows; tilt holds
+        assert node.pinned(now[0]).get("tilt") is None  # Held, not stuck at an end
+        bus.close()
+    asyncio.run(scenario())
+
+
+def test_the_waist_switched_off_brakes_at_once_and_never_drives():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        now = [0.0]
+        node.clock = lambda: now[0]
+        node.waist_motor.throttle = 0.3  # As if the waist were turning
+        node.set_axes(waist=False)
+        assert node.waist_motor.throttle == 0.0  # At once, not at the next step
+        node.pan_angle = 160  # Far round: with the waist on this starts a move
+        for tick in range(100):
+            if tick % 10 == 0:
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=600, y=240, captured=now[0]))
+            await node.step()
+            now[0] += 0.01
+            assert node.waist_motor.throttle == 0.0
+        assert node.axes.model_dump() == {"pan": True, "tilt": True, "roll": True, "waist": False}
+        bus.close()
+    asyncio.run(scenario())
+
+
+def test_with_pan_switched_off_the_waist_turns_the_camera_onto_the_person():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        now = [0.0]
+        node.clock = lambda: now[0]
+        node.set_axes(pan=False)
+        throttles = []
+        for tick in range(150):  # Someone about 30 degrees right of where the camera points
+            if tick % 3 == 0:
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=600, y=240, captured=now[0]))
+            await node.step()
+            now[0] += 0.01
+            throttles.append(node.waist_motor.throttle)
+        assert node.pan_angle == 90.0
+        assert min(throttle or 0.0 for throttle in throttles) < 0.0  # Negative drive turns the torso toward positive pan
+        bus.close()
+    asyncio.run(scenario())
+
+
+def test_the_joints_that_follow_are_checked_and_launch_from_the_options():
+    from pydantic import ValidationError
+
+    from ultraskelly.__main__bot import launch_config
+    from ultraskelly.core.bot.motor.orientation_node import FollowAxes
+
+    assert launch_config().orientation.axes == FollowAxes()  # All of them
+    assert launch_config(follow_axes=("pan", "waist")).orientation.axes.on() == ["pan", "waist"]
+    assert launch_config(follow_axes=()).orientation.axes.on() == []
+    with pytest.raises(ValueError, match="No such joint: elbow"):
+        FollowAxes.only(["pan", "elbow"])
+    bus, node, _ = create_controllers()
+    for wrong in ({"elbow": False}, {"pan": "no"}, {"pan": 0}):
+        with pytest.raises(ValidationError):
+            node.set_axes(**wrong)
+    assert node.axes == FollowAxes()  # Nothing refused switched anything
+    bus.close()

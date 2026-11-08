@@ -4,7 +4,7 @@ The bot's service reads them from an environment file after its own options from
 /etc/default/ultraskelly-bot (scripts/systemd/ultraskelly-bot.service), and puts them last on its
 command line, so the panel's choice wins:
 
-    ULTRASKELLY_PANEL_OPTIONS=--no-follow
+    ULTRASKELLY_PANEL_OPTIONS=--no-follow --follow-axes=pan,tilt,roll
 
 The file is replaced whole: written beside it, flushed to the card, then renamed over it, so a
 power cut leaves the old file or the new one and never a part of either.
@@ -15,6 +15,8 @@ from pathlib import Path
 PANEL_VARIABLE = "ULTRASKELLY_PANEL_OPTIONS"
 BOT_VARIABLE = "ULTRASKELLY_BOT_OPTIONS"
 BOT_DEFAULTS = Path("/etc/default/ultraskelly-bot")  # The service's own options, written by hand
+AXES = ("pan", "tilt", "roll", "waist")  # The joints the tracker turns (orientation_node.AXES), in the option's order
+AXES_OPTION = "--follow-axes="  # Followed by the joints on, comma-separated, or "none"
 
 
 def read_variable(path: Path, name: str) -> list[str] | None:
@@ -61,6 +63,22 @@ def following_in(options: list[str] | None) -> bool | None:
     return None
 
 
+def axes_option(axes: dict[str, bool]) -> str:
+    """The one word that starts the bot with these joints following: --follow-axes=pan,tilt, or =none."""
+    on = [name for name in AXES if axes.get(name, True)]
+    return AXES_OPTION + (",".join(on) if on else "none")
+
+
+def axes_in(options: list[str] | None) -> dict[str, bool] | None:
+    """What the last --follow-axes in `options` says, or None when there is none (or it names no known joint)."""
+    for word in reversed(options or []):
+        if word.startswith(AXES_OPTION):
+            names = {name for name in word[len(AXES_OPTION):].split(",") if name}
+            if names <= {*AXES, "none"}:
+                return {name: name in names for name in AXES}
+    return None
+
+
 class StartOptions:
     """The panel's options for the bot's next start, and the service's own, to say which way it will start."""
 
@@ -79,11 +97,26 @@ class StartOptions:
         panel, service = following_in(self.panel()), following_in(self.service())
         return panel if panel is not None else service if service is not None else True
 
+    def axes(self) -> dict[str, bool]:
+        """Which joints follow when the bot next starts: the panel's switches, else the service's options, else all."""
+        panel, service = axes_in(self.panel()), axes_in(self.service())
+        return panel if panel is not None else service if service is not None else {name: True for name in AXES}
+
     def set_following(self, on: bool) -> None:
         kept = [word for word in self.panel() if word not in ("--follow", "--no-follow")]
-        write_variable(self.path, PANEL_VARIABLE, [*kept, "--follow" if on else "--no-follow"],
+        self._write([*kept, "--follow" if on else "--no-follow"])
+
+    def set_axes(self, switches: dict[str, bool]) -> dict[str, bool]:
+        """Switch the joints named, keep the others; returns which follow now."""
+        axes = {**self.axes(), **switches}
+        kept = [word for word in self.panel() if not word.startswith(AXES_OPTION)]
+        self._write([*kept, axes_option(axes)])
+        return axes
+
+    def _write(self, words: list[str]) -> None:
+        write_variable(self.path, PANEL_VARIABLE, words,
                        note="Written by the control panel (ultraskelly/control); read by ultraskelly-bot.service at each start")
 
     def describe(self) -> dict:
-        return {"following": self.follows(), "panel": self.panel(), "service": self.service(),
+        return {"following": self.follows(), "axes": self.axes(), "panel": self.panel(), "service": self.service(),
                 "file": str(self.path)}

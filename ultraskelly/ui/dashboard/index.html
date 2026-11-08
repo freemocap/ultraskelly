@@ -45,10 +45,18 @@
         <b>Restart</b>
       </button>
     </div>
-    <button id="control-follow" class="switch" role="switch" aria-checked="true">
-      <b class="switch-text">Follow people</b>
-      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
-    </button>
+    <div class="follow-row">
+      <button id="control-follow" class="switch" role="switch" aria-checked="true">
+        <b class="switch-text">Follow people</b>
+        <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span><b class="switch-word">On</b>
+      </button>
+      <button id="control-axes-open" class="axes-open" aria-expanded="false" aria-controls="control-axes" title="Person tracker: which joints follow">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+    <div id="control-axes" class="control-axes" role="group" aria-label="Person tracker: the joints that follow" hidden>
+      <button data-axis="pan" aria-pressed="true">Pan</button><button data-axis="tilt" aria-pressed="true">Tilt</button><button data-axis="roll" aria-pressed="true">Roll</button><button data-axis="waist" aria-pressed="true">Waist</button>
+    </div>
     <button id="control-tune" class="big tune" aria-haspopup="dialog" aria-controls="tune" disabled>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
       <b>Tune</b>

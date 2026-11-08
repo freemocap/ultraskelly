@@ -12,6 +12,20 @@ def _stop_on_sigterm(_signum: int, _frame: object) -> None:
     signal.raise_signal(signal.SIGINT)  # Same clean shutdown as Ctrl+C
 
 
+JOINTS = ("pan", "tilt", "roll", "waist")  # The joints the tracker turns (orientation_node.AXES); no import here
+
+
+def follow_axes(text: str) -> tuple[str, ...]:
+    """--follow-axes's value: joints from JOINTS, comma-separated, or none."""
+    names = tuple(name for name in text.split(",") if name)
+    if names == ("none",):
+        return ()
+    unknown = [name for name in names if name not in JOINTS]
+    if unknown or not names:
+        raise argparse.ArgumentTypeError(f"name joints from {', '.join(JOINTS)}, comma-separated, or none")
+    return names
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="UltraSkelly robot controller")
     parser.add_argument(
@@ -60,16 +74,22 @@ def main() -> None:
         help="With --hardware: the head and waist follow the target (the default); --no-follow: they hold still and "
              "move only for dashboard motor tests until the control panel switches following on.",
     )
+    parser.add_argument(
+        "--follow-axes", type=follow_axes, default=None, metavar="JOINTS",
+        help="With --hardware: the joints that follow the target, comma-separated from pan, tilt, roll and waist, or "
+             "none (default: all); the others hold still for it. The control panel's person tracker menu switches them.",
+    )
     parser.add_argument("--port", type=int, default=8080, help="Dashboard port (default 8080).")
     args = parser.parse_args()
     if args.depth and not (args.zed or args.zed_only):
         parser.error("--depth is used together with --zed or --zed-only")
     if args.depth_previews and not args.depth:
         parser.error("--depth-previews is used together with --depth")
-    hardware_options = (args.simulate_motors, args.record, args.zed, args.no_oak_models, args.follow is not None)
+    hardware_options = (args.simulate_motors, args.record, args.zed, args.no_oak_models, args.follow is not None,
+                        args.follow_axes is not None)
     if any(hardware_options) and not args.hardware:
-        parser.error("--simulate-motors, --record, --zed, --no-oak-models and --follow or --no-follow are used "
-                     "together with --hardware")
+        parser.error("--simulate-motors, --record, --zed, --no-oak-models, --follow or --no-follow and --follow-axes "
+                     "are used together with --hardware")
     if args.microphone and not args.record:
         parser.error("--microphone is used together with --record")
     if args.zed_only and args.hardware:
@@ -102,7 +122,7 @@ def main() -> None:
             record=args.record, microphone=args.microphone,
             zed=args.zed, zed_only=args.zed_only, depth=args.depth, depth_previews=args.depth_previews,
             port=args.port, oak_models=not args.no_oak_models, follow=args.follow is not False,
-            tuning=TUNING_FILE,  # What the owner saved from the dashboard's Tune window
+            follow_axes=args.follow_axes, tuning=TUNING_FILE,  # What the owner saved from the dashboard's Tune window
         ))
         await run_with_heartbeat(launcher.run(), healthy=launcher.healthy)
 

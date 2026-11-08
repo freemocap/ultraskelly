@@ -4,7 +4,7 @@ import math
 import time
 from typing import Callable
 
-from pydantic import Field, SkipValidation
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from ultraskelly.core.bot.base_abcs import Node, NodeParams
 from ultraskelly.core.bot.motor.bridge_motor import FAST_DECAY, SLOW_DECAY, BridgeMotor
@@ -27,6 +27,30 @@ logger = logging.getLogger(__name__)
 
 ROLL_LEVEL = LEVEL  # Roll servo degrees at which the head stands upright
 PINNED_SLACK = 0.5  # Servo degrees from where the head stops short of an end stop that still count as at that end
+AXES = ("pan", "tilt", "roll", "waist")  # The joints the person tracker turns
+
+
+class FollowAxes(BaseModel):
+    """Which joints the person tracker turns; the dashboard's tracker menu switches each one live. One switched
+    off holds still for the tracker: pan and tilt where they were last sent, the roll upright, the waist braked.
+    Motor tests still move them all. With pan off, the waist turns the camera onto the person by itself."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)  # true or false only: no "no", 0 or "off"
+    pan: bool = True
+    tilt: bool = True
+    roll: bool = True
+    waist: bool = True
+
+    @classmethod
+    def only(cls, names) -> "FollowAxes":
+        """The joints in `names` on, the rest off."""
+        unknown = set(names) - set(AXES)
+        if unknown:
+            raise ValueError(f"No such joint: {', '.join(sorted(unknown))}; the tracker turns {', '.join(AXES)}")
+        return cls(**{name: name in names for name in AXES})
+
+    def on(self) -> list[str]:
+        return [name for name in AXES if getattr(self, name)]
 
 
 class OrientationNodeParams(NodeParams):
@@ -41,6 +65,10 @@ class OrientationNodeParams(NodeParams):
         default=True,
         description="Turn the head and waist toward the target from the start; off, they move only for motor tests "
                     "until following is switched on (OrientationNode.set_following)",
+    )
+    axes: FollowAxes = Field(
+        default_factory=FollowAxes,
+        description="The joints that follow the target from the start; switched while it runs (OrientationNode.set_axes)",
     )
 
     # Waist motor channel
@@ -110,6 +138,9 @@ class OrientationNode(Node):
     following: bool | None = Field(
         default=None, description="Whether the head and waist follow the target now: params.follow at start, then switched",
     )
+    axes: FollowAxes | None = Field(
+        default=None, description="The joints that follow the target now: a copy of params.axes at start, then switched",
+    )
     motor_watchdog: SkipValidation[MotorWatchdog | None] = Field(
         default=None, exclude=True, description="Ticked every control step; brakes the DC motors if the steps stop",
     )
@@ -158,6 +189,19 @@ class OrientationNode(Node):
             self.roll_level = RollLevel(self.params.roll, self.roll_angle)
         if self.following is None:
             self.following = self.params.follow
+        if self.axes is None:
+            self.axes = self.params.axes.model_copy()
+
+    def set_axes(self, **switches: bool) -> None:
+        """Switch joints of the tracker on or off by name (pan, tilt, roll, waist). Pan and tilt switched off hold
+        where they are, and switched on again make a planned move to the person; the roll levels; the waist brakes
+        at once, unless a motor test drives it, and its next move starts from rest. Runs on the event loop, between
+        control steps."""
+        self.axes = FollowAxes(**{**self.axes.model_dump(), **switches})  # Checked: known joints, true or false
+        if "waist" in switches or "pan" in switches:  # The waist's move was planned with the old joints
+            if not self.manual:
+                self.waist_motor.throttle = 0.0
+            self.waist_drive = WaistDrive(self.params.waist)
 
     def set_following(self, on: bool) -> None:
         """Follow the target, or hold still: the head stays where it was last sent and the waist brakes at once,
@@ -295,22 +339,30 @@ class OrientationNode(Node):
         # The body's turn from the waist's model, run on the drive sent (no sensor measures it), so the head
         # counter-rotates at once, and each frame is placed where the camera was then. Negative drive turns
         # the torso toward positive pan.
-        drive = self.waist_drive
+        drive, axes = self.waist_drive, self.axes
         drive.advance(now)
         self._command_head(*self.head_aim.update(
             now=now, body=drive.model.angle, body_at=lambda when: drive.ahead(when).angle, body_steady=drive.steady(),
+            active=(axes.pan, axes.tilt),
         ))
-        self._track_pinned(now, errors)
-        self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
+        # A joint switched off cannot reach anyone, but it is not stuck: only the ones following say so
+        self._track_pinned(now, None if errors is None else (errors[0] if axes.pan else None, errors[1] if axes.tilt else None))
+        rolling = self.params.roll.enabled and axes.roll
+        self._command_roll(self.roll_level.update(now=now) if rolling else ROLL_LEVEL)
         # The waist takes up the head's offset from the middle of its reach (mid-ranging), in planned moves;
         # without a person for target_timeout it brakes (a frame or two without one is no loss).
         seen = self.target_seen_at is not None and now - self.target_seen_at <= self.params.target_timeout
-        if self.params.waist.enabled:
+        if self.params.waist.enabled and axes.waist:
             track = self.head_aim.tracks[0] if self.head_aim.tracks is not None else None
             idle = drive.phase is WaistState.IDLE
+            demand = self.head_aim.demand() if seen else None
+            if axes.pan:
+                offset, settled, planning = self.head_aim.pan_offset(), self.head_aim.settled[0], self.head_aim.planning()
+            else:  # Pan holds: the waist turns the camera, wherever pan points it, onto the person by itself
+                demand = None if demand is None else demand - self.head_aim.pan_offset()
+                offset, settled, planning = demand, True, False
             self.waist_motor.throttle = drive.update(
-                now=now, demand=self.head_aim.demand() if seen else None, offset=self.head_aim.pan_offset(),
-                settled=self.head_aim.settled[0], planning=self.head_aim.planning(),
+                now=now, demand=demand, offset=offset, settled=settled, planning=planning,
                 person_speed=0.0 if track is None else track.velocity,
             )
             if idle and drive.phase is not WaistState.IDLE:

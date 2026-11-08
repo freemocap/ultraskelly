@@ -409,6 +409,7 @@ class HeadAim:
     def __init__(self, params: HeadAimParams, pan: float = MIDDLE, tilt: float = MIDDLE) -> None:
         self.params = params
         self.models = [AxisModel(params, 0, pan), AxisModel(params, 1, tilt)]
+        self.active = [True, True]  # Which axes follow the person; one switched off holds its servo (update's `active`)
         self.place(pan, tilt)
 
     @property
@@ -713,12 +714,30 @@ class HeadAim:
         low, high = self._range(axis)
         self.servos[axis] = min(max(servo, low), high)
 
+    def _hold(self, axis: int) -> None:
+        """A switched-off axis: its servo stays where it was last sent, and its plan and feedback start from there
+        when it is switched on again. Pan's plan is in the base's frame, so it follows the body's turn: a held pan
+        does not counter-rotate."""
+        view = self._view(axis, self.servos[axis])
+        self.plan[axis] = self.plan_end[axis] = self.plan_target[axis] = view + self.shift[axis]
+        self.plan_rate[axis] = self.correction[axis] = self.correction_rate[axis] = self.span_rate[axis] = 0.0
+        self.shifted[axis] = self.shift[axis]
+        self.view[axis] = self.shaped[axis] = self.extreme[axis] = view
+        self.pushing[axis], self.settled[axis], self.retarget[axis] = 0, True, False
+        if axis == 0:
+            self.replanning = False
+
     def update(self, *, now: float, body: float = 0.0, body_at: Callable[[float], float] | None = None,
-               body_steady: bool = True) -> tuple[float, float]:
+               body_steady: bool = True, active: tuple[bool, bool] = (True, True)) -> tuple[float, float]:
         """This tick's pan and tilt servo commands, for a body turned `body` degrees now by the waist's model;
         `body_at(time)` says where the waist's model and plan put it a little ahead (None: still);
         `body_steady`: whether it turns steadily or not at all, rather than breaking loose or stopping, where
-        its model is least sure."""
+        its model is least sure. `active`: whether pan and tilt follow the person; one that does not holds its
+        servo where it is, and switched on again it makes a planned move to the person."""
+        for axis in (0, 1):
+            if active[axis] and not self.active[axis] and self.tracks is not None:
+                self.retarget[axis] = True
+        self.active = list(active)
         dt = 0.0 if self.last_update is None else min(max(now - self.last_update, 0.0), MAX_STEP)
         self.last_update = now
         if abs(body - self.body) > BODY_JUMP:
@@ -734,11 +753,15 @@ class HeadAim:
         self.shaped_shift = self._shift(self.params.prediction_lead + self.shaper_lead())
         if self.tracks is not None:
             for axis in (0, 1):
-                self._turn(axis, now, dt)
-        else:
+                if self.active[axis]:
+                    self._turn(axis, now, dt)
+        elif self.active[0]:
             self.view[0] = self.plan[0] + self.correction[0] - self.shift[0]
         self._shape(now)
         for axis, model in enumerate(self.models):
-            self._command(axis)
+            if self.active[axis]:
+                self._command(axis)
+            else:
+                self._hold(axis)
             model.command(now, self.servos[axis])
         return self.pan, self.tilt

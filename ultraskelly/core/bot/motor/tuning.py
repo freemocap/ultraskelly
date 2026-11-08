@@ -18,7 +18,7 @@ A setting's default is the launch configuration's own value (launch_config), bef
 tuning: what Reset returns to, and what the Tune window marks a setting as differing from. Save
 keeps the settings that differ from their defaults in TUNING_FILE,
 
-    {"saved_at": "2026-11-07T21:14:03", "groups": {"aim": {"pan_settle": 0.2}, "waist": {"enabled": false}}}
+    {"saved_at": "2026-11-07T21:14:03", "groups": {"aim": {"pan_settle": 0.2}, "waist": {"start_offset": 12.0}}}
 
 replaced whole (written beside it, flushed, then renamed over it), so a power cut leaves the old
 file or the new one. As the bot starts, launch_config merges it over its own values (load_tuning).
@@ -59,8 +59,10 @@ class Group:
 
 GROUPS = (
     Group("aim", "Head aim", ("orientation", "aim")),
-    Group("roll", "Roll", ("orientation", "roll")),
-    Group("waist", "Waist", ("orientation", "waist"), at_start=frozenset({"slow_decay"})),  # Set on the motor as it opens
+    # The roll and the waist are switched on and off in the person tracker menu (OrientationNode.axes), not here
+    Group("roll", "Roll", ("orientation", "roll"), hidden=frozenset({"enabled"})),
+    Group("waist", "Waist", ("orientation", "waist"), hidden=frozenset({"enabled"}),
+          at_start=frozenset({"slow_decay"})),  # Set on the motor as it opens
     Group("jaw", "Jaw", ("mouth",), hidden=frozenset({"startup_test"})),  # A test that runs only at start
 )
 

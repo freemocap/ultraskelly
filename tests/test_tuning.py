@@ -79,7 +79,8 @@ def test_each_group_is_its_controllers_params_less_channels_and_what_runs_only_a
         assert found["values"] == params.model_dump(mode="json", include=set(expected))
         assert found["changed"] == found["unsaved"] == []
     by_key = {group["key"]: group["schema"]["properties"] for group in state["groups"]}
-    assert "enabled" in by_key["roll"] and "enabled" in by_key["waist"]  # The switches stay
+    # The roll and the waist are switched on and off in the person tracker menu (OrientationNode.axes), not here
+    assert "enabled" not in by_key["roll"] and "enabled" not in by_key["waist"]
     assert "startup_test" not in by_key["jaw"] and "mouth_motor_channel" not in by_key["jaw"]
     assert by_key["waist"]["slow_decay"]["tuning"] == "start"  # Set on the motor as it opens
 
@@ -197,19 +198,20 @@ def test_the_controllers_take_a_change_at_their_next_step():
     async def scenario():
         sim = Simulation(Settings(scenario="manual", yaw=30, pitch=5))  # Someone well to the side: the waist turns
         tuning = Tuning(SimpleNamespace(orientation=sim.head.params, mouth=sim.mouth.params), on_change=sim.head.retune)
-        tuning.set({"waist": {"enabled": False}, "jaw": {"lock_timeout": 0.5}, "aim": {"pan_settle": 0.4}})
-        assert sim.head.waist_drive.params.enabled is False and sim.mouth.params.lock_timeout == 0.5
+        # A waist that starts no move for anyone within 60 degrees of the head's middle or 90 of the body's front
+        tuning.set({"waist": {"start_offset": 60.0, "start_now": 90.0}, "jaw": {"lock_timeout": 0.5}, "aim": {"pan_settle": 0.4}})
+        assert sim.head.waist_drive.params.start_now == 90.0 and sim.mouth.params.lock_timeout == 0.5
         assert sim.head.head_aim.params.pan_settle == 0.4
         throttles = []
         for _ in range(600):
             await sim.step()
             throttles.append(sim.head.waist_motor.throttle)
-        assert set(throttles) <= {0.0, None}  # Off: braked
-        tuning.set({"waist": {"enabled": True}})
+        assert set(throttles) <= {0.0, None}  # No move: braked
+        tuning.reset("waist")  # Its launch values
         for _ in range(600):
             await sim.step()
             throttles.append(sim.head.waist_motor.throttle)
-        assert any(throttle not in (0.0, None) for throttle in throttles[600:])  # On again: it turns toward them
+        assert any(throttle not in (0.0, None) for throttle in throttles[600:])  # Now it turns toward them
         sim.close()
     asyncio.run(scenario())
 
@@ -242,18 +244,18 @@ def test_saved_settings_are_merged_over_the_launch_values_at_the_next_start(tmp_
     assert config.tuning.file == str(path) and config.tuning.saved == {} and config.tuning.problems == []
     tuning = Tuning(config, config.tuning)
     launched = config.orientation.aim.pan_settle
-    tuning.set({"aim": {"pan_settle": 0.25, "pan_range": [20, 160]}, "waist": {"enabled": False}})
+    tuning.set({"aim": {"pan_settle": 0.25, "pan_range": [20, 160]}, "waist": {"min_move": 8.0}})
     asyncio.run(tuning.save())
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["groups"] == {"aim": {"pan_settle": 0.25, "pan_range": [20.0, 160.0]}, "waist": {"enabled": False}}
+    assert saved["groups"] == {"aim": {"pan_settle": 0.25, "pan_range": [20.0, 160.0]}, "waist": {"min_move": 8.0}}
     assert list(path.parent.iterdir()) == [path]  # Written whole: no draft left beside it
 
     again = launch_config(tuning=path)
-    assert (again.orientation.aim.pan_settle, again.orientation.aim.pan_range, again.orientation.waist.enabled) == (0.25, (20.0, 160.0), False)
+    assert (again.orientation.aim.pan_settle, again.orientation.aim.pan_range, again.orientation.waist.min_move) == (0.25, (20.0, 160.0), 8.0)
     assert again.tuning.defaults["aim"]["pan_settle"] == launched  # What Reset returns to: the launch value
     assert again.tuning.saved_at == saved["saved_at"]
     state = Tuning(again, again.tuning).state()
-    assert [group["changed"] for group in state["groups"]] == [["pan_range", "pan_settle"], [], ["enabled"], []]
+    assert [group["changed"] for group in state["groups"]] == [["pan_range", "pan_settle"], [], ["min_move"], []]
     assert all(group["unsaved"] == [] for group in state["groups"])  # The next start runs what is running
 
 

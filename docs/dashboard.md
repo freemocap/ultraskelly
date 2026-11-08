@@ -75,6 +75,14 @@ column has the dashboard's own width, at which the OAK draws 1:1.
   `--no-follow` in `/var/lib/ultraskelly-control/bot-options`. The bot's service passes
   it after the options in `/etc/default/ultraskelly-bot`, so the switch wins. While the
   bot is off, the switch shows which way its next start goes; its tooltip says so.
+- **Person tracker menu (the chevron beside the switch):** opens a row under the switch
+  with one switch per joint the tracker turns: Pan, Tilt, Roll, Waist. One switched off
+  holds still for the tracker (pan and tilt where they are, the roll upright, the waist
+  braked); motor tests still move it. With pan off, the waist turns the camera onto the
+  person by itself. Closed, the chevron turns orange while any joint is off. Each switch
+  reaches the running bot at once (`POST /api/follow` `{"axes": {"waist": false}}`) and
+  is kept for every later start as `--follow-axes=pan,tilt,roll` in the same file. These
+  are the roll's and the waist's only on/off switches: Tune does not show them.
 - **Tune:** opens the Tune window over the page (see Tune, below), while the bot runs.
 - **‹ (fold):** folds the column, motor tests and nodes included, to a 44 px strip that
   keeps the bot's lamp and state word; a click on the strip opens it again, at the width
@@ -196,7 +204,7 @@ The routes (`ultraskelly/ui/tuning_routes.py`) answer as the motor tests' do: JS
 only, 400 with the reason, nothing changed.
 
     GET  /api/tuning           each group's schema and values, which differ, which are not saved
-    POST /api/tuning           {"aim": {"pan_settle": 0.2}, "waist": {"enabled": false}}
+    POST /api/tuning           {"aim": {"pan_settle": 0.2}, "waist": {"start_offset": 12.0}}
     POST /api/tuning/reset     {} everything, {"group": "aim"}, {"group": "aim", "setting": "pan_settle"}
     POST /api/tuning/save      {}
 

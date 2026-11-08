@@ -46,8 +46,8 @@ def test_the_bot_follows_by_default_and_the_panels_switch_wins_over_the_services
     options.set_following(False)
     assert not options.follows() and options.panel() == ["--no-follow"]  # Replaced, not added to
     assert [path.name for path in kept.parent.iterdir()] == ["bot-options"]  # No draft left beside it
-    assert options.describe() == {"following": False, "panel": ["--no-follow"], "service": ["--record", "--no-follow"],
-                                  "file": str(kept)}
+    assert options.describe() == {"following": False, "axes": {"pan": True, "tilt": True, "roll": True, "waist": True}, "panel": ["--no-follow"],
+                                  "service": ["--record", "--no-follow"], "file": str(kept)}
 
 
 def test_environment_files_are_read_as_systemd_reads_them(tmp_path):
@@ -248,7 +248,7 @@ def bot_routes(heard: list, *, live_switch: bool) -> web.Application:
     async def follow(request):
         body = await request.json()
         heard.append(("follow", body))
-        return web.json_response({"ok": True, "following": body["following"]})
+        return web.json_response({"ok": True, **body})
 
     async def tests(request):
         return web.json_response({"enabled": True, "following": True})
@@ -377,7 +377,7 @@ def test_following_switched_while_the_bot_starts_reaches_it_once_it_runs(tmp_pat
             return bool(heard)
 
         assert await until(heard_it, 5.0)
-        assert heard == [("follow", {"following": False})]
+        assert heard == [("follow", {"following": False, "axes": {"pan": True, "tilt": True, "roll": True, "waist": True}})]  # All of it, as switched last
     panel(scenario, tmp_path, state="starting")
 
 
@@ -529,3 +529,45 @@ def test_the_polkit_rule_allows_the_panel_exactly_start_stop_and_restart_of_the_
     done = subprocess.run([NODE, "-e", POLKIT, str(rule), json.dumps(cases)], capture_output=True, encoding="utf-8",
                           check=True, timeout=60)
     assert json.loads(done.stdout) == ["yes", "yes", "yes", None, None, None, None, None, None, None]
+
+
+def test_the_joints_that_follow_are_kept_for_every_start(tmp_path):
+    from ultraskelly.control.options import axes_in
+
+    defaults, kept = tmp_path / "ultraskelly-bot", tmp_path / "bot-options"
+    options = StartOptions(kept, bot_defaults=defaults)
+    assert options.axes() == {"pan": True, "tilt": True, "roll": True, "waist": True}  # All, without a word
+    defaults.write_text("ULTRASKELLY_BOT_OPTIONS=--follow-axes=pan,tilt\n", encoding="utf-8")
+    assert options.axes() == {"pan": True, "tilt": True, "roll": False, "waist": False}  # The service's
+    options.set_following(False)
+    assert options.set_axes({"roll": True}) == {"pan": True, "tilt": True, "roll": True, "waist": False}
+    options.set_axes({"pan": False})
+    assert options.panel() == ["--no-follow", "--follow-axes=tilt,roll"]  # Replaced, not added to; following kept
+    options.set_axes({"tilt": False, "roll": False})
+    assert options.panel()[-1] == "--follow-axes=none" and not any(options.axes().values())
+    assert axes_in(["--follow-axes=pan", "--follow-axes=elbow"]) == {"pan": True, "tilt": False, "roll": False, "waist": False}
+
+
+def test_the_joints_switch_the_running_bot_at_once_and_say_which(tmp_path):
+    async def scenario(client, server, service, heard):
+        reply = await (await client.post("/api/follow", json={"axes": {"waist": False}})).json()
+        assert (reply["applied"], reply["message"]) == ("now", "Waist off")
+        assert heard == [("follow", {"axes": {"waist": False}})]
+        assert (tmp_path / "bot-options").read_text(encoding="utf-8").endswith(f"{PANEL_VARIABLE}=--follow-axes=pan,tilt,roll\n")
+        assert (await (await client.get("/api/bot")).json())["start"]["axes"]["waist"] is False
+        reply = await (await client.post("/api/follow", json={"following": False, "axes": {"pan": False, "waist": True}})).json()
+        assert reply["message"] == "Following off; waist on; pan off" and reply["following"] is False
+        for body in ({"axes": {"elbow": True}}, {"axes": {"pan": 1}}, {"axes": {}}, {"axes": ["pan"]}, {"following": None},
+                     {"following": True, "now": True}):
+            assert (await client.post("/api/follow", json=body)).status == 400, body
+        assert StartOptions(tmp_path / "bot-options").axes() == {"pan": False, "tilt": True, "roll": True, "waist": True}
+    panel(scenario, tmp_path)
+
+
+def test_the_switches_are_said_in_words():
+    from ultraskelly.control.server import change_words
+
+    assert change_words(False, None) == "Following off"
+    assert change_words(None, {"pan": True, "tilt": True}) == "Pan and tilt on"
+    assert change_words(None, {"pan": False, "tilt": False, "roll": False}) == "Pan, tilt and roll off"
+    assert change_words(True, {"waist": False, "pan": True}) == "Following on; pan on; waist off"

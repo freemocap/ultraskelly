@@ -3,7 +3,7 @@
 
     GET  /api/tuning           {"groups": [{"key", "title", "schema", "values", "changed", "unsaved"}],
                                 "file", "saved_at", "problems"}
-    POST /api/tuning           {"aim": {"deadband": 0.2}, "waist": {"enabled": false}}: set live, all or nothing
+    POST /api/tuning           {"aim": {"pan_settle": 0.2}, "waist": {"start_offset": 12.0}}: set live, all or nothing
     POST /api/tuning/reset     {} every group to its defaults, {"group": "aim"} one group,
                                {"group": "aim", "setting": "deadband"} one setting; live
     POST /api/tuning/save      {}: keep the settings that differ from their defaults for the bot's next start

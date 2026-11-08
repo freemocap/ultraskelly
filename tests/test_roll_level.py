@@ -203,3 +203,19 @@ def test_s_curve_ramps_limit_rate_and_jerk_and_settle_exactly():
     assert levels[-1] == 0.6 and max(rates) <= 1.5 + 1e-9 and min(rates) >= 0  # Never overshoots
     assert max(abs(r) for r in steps(rates[:-1])) <= 10.0 * tick + 1e-9  # Rate changes no faster than the jerk limit
     assert rates[0] <= 10.0 * tick + 1e-9  # Starts gently
+
+
+def test_switched_off_in_the_tracker_menu_the_roll_holds_upright():
+    async def scenario():
+        bus, node, _ = create_controllers()
+        node.set_axes(roll=False)
+        now = [0.0]
+        node.clock = lambda: now[0]
+        for tick in range(100):
+            await bus.publish(TargetLocationTopic, TargetLocationMessage(x=320, y=240, captured=now[0]))
+            await bus.publish(OakResultsTopic, faces_message(20.0))
+            await node.step()
+            now[0] += 0.01
+        assert node.roll_angle == LEVEL
+        bus.close()
+    asyncio.run(scenario())

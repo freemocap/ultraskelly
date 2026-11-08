@@ -112,6 +112,7 @@ class MotorTester:
             "last": self.last,
             "waist_travel": round(self.waist_travel, 3),
             "following": self.orientation.following,  # Whether tracking turns the head and waist, between tests
+            "axes": self.orientation.axes.model_dump(),  # Which joints it turns: pan, tilt, roll, waist
         }
 
     def check(self, request: MotorTestRequest) -> None:

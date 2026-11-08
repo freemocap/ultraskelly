@@ -335,8 +335,8 @@ def test_the_dashboard_tunes_the_running_controllers_starting_from_the_saved_tun
     assert orientation.params is launcher.config.orientation and mouth.params is launcher.config.mouth
     assert orientation.head_aim.params.pan_settle == 0.25 and mouth.params.lock_timeout == 0.5  # Saved, so started with
     assert launcher.server.tuning is launcher.tuning and launcher.tuning.file == saved
-    launcher.tuning.set({"aim": {"pan_speed": 20}, "waist": {"enabled": False}})
-    assert orientation.head_aim.params.pan_speed == 20 and orientation.waist_drive.params.enabled is False
+    launcher.tuning.set({"aim": {"pan_speed": 20}, "waist": {"min_move": 8.0}})
+    assert orientation.head_aim.params.pan_speed == 20 and orientation.waist_drive.params.min_move == 8.0
     assert launcher.tuning.state()["groups"][0]["unsaved"] == ["pan_speed"]
 
 

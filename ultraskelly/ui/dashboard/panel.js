@@ -8,6 +8,9 @@ import { setProperty, setText } from '/dom.js';
 import { Tune } from '/tune.js';
 
 const FOLDED = 'ultraskelly.control.folded';  // localStorage: '1' while the column is folded to its strip
+const AXES_OPEN = 'ultraskelly.control.axes';  // localStorage: '1' while the person tracker menu is open
+// The joints the person tracker turns (orientation_node.AXES), as the menu names them
+const AXES = {pan: 'Pan', tilt: 'Tilt', roll: 'Roll', waist: 'Waist'};
 // localStorage, which a locked-down browser may refuse; the column then opens at every load.
 function stored(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function store(key, value) { try { localStorage.setItem(key, value); } catch { /* Not kept */ } }
@@ -111,6 +114,15 @@ export class ControlPanel {
       const on = this.$('control-follow').getAttribute('aria-checked') !== 'true';
       this.send('/api/follow', {following: on}, on ? 'Switching following on…' : 'Switching following off…');
     };
+    // The person tracker menu: which joints follow, opened in place under the switch
+    this.$('control-axes-open').onclick = () => this.openAxes(this.$('control-axes').hidden);
+    for (const button of this.$('control-axes').querySelectorAll('[data-axis]')) {
+      button.onclick = () => {
+        const axis = button.dataset.axis, on = button.getAttribute('aria-pressed') !== 'true';
+        this.send('/api/follow', {axes: {[axis]: on}}, `Switching ${axis} ${on ? 'on' : 'off'}…`);
+      };
+    }
+    this.openAxes(stored(AXES_OPEN) === '1', false);
     this.tune = new Tune(this.$('tune'));
     this.$('control-tune').onclick = () => this.tune.open();
     this.$('control-collapse').onclick = () => this.fold(true);
@@ -123,6 +135,13 @@ export class ControlPanel {
     this.fold(stored(FOLDED) === '1', false);
     this.poll();
     setInterval(() => this.poll(), 1000);
+  }
+
+  // Open or close the person tracker menu; `remember` keeps the choice for the next load, as fold does.
+  openAxes(open, remember = true) {
+    setProperty(this.$('control-axes'), 'hidden', !open);
+    this.$('control-axes-open').setAttribute('aria-expanded', String(open));
+    if (remember) store(AXES_OPEN, open ? '1' : '0');
   }
 
   // Fold the column to its strip, or open it; `remember` keeps the choice for the next load (the Pi's window
@@ -201,8 +220,8 @@ export class ControlPanel {
   // Each robot_state from the bot's stream, and the dashboard's health model of it.
   update(state, model) {
     const tests = state?.motor_test;
-    this.live = tests ? {following: tests.following ?? null, simulated: Boolean(tests.simulated || state.motors?.simulated)}
-                      : {following: null, simulated: Boolean(state?.motors?.simulated)};
+    this.live = tests ? {following: tests.following ?? null, axes: tests.axes ?? null, simulated: Boolean(tests.simulated || state.motors?.simulated)}
+                      : {following: null, axes: null, simulated: Boolean(state?.motors?.simulated)};
     this.healthModel = model;
     this.renderFollow(); this.renderParts();
   }
@@ -232,6 +251,7 @@ export class ControlPanel {
     setProperty(power, 'disabled', busy || bot.state === 'missing');
     setProperty(this.$('control-restart'), 'disabled', busy || !on);
     setProperty(this.$('control-follow'), 'disabled', busy);
+    for (const button of this.$('control-axes').querySelectorAll('[data-axis]')) setProperty(button, 'disabled', busy);
     setProperty(this.$('control-tune'), 'disabled', this.lost || !running);
     setProperty(this.$('control-tune'), 'title', running ? 'Tune the controllers as the bot runs' : 'The controllers are tuned while the bot runs');
     // The reply to this page's last command, else the newest command from any screen
@@ -276,6 +296,19 @@ export class ControlPanel {
     setProperty(button, 'title', liveFollowing != null
       ? following ? 'The head and waist turn toward people' : 'The head and waist hold still; motor tests still move them'
       : `${following ? 'On' : 'Off'} when the bot starts`);
+    // The person tracker menu: each joint's switch, live while the bot runs, else as it will start
+    const liveAxes = running ? this.live?.axes : null, axes = liveAxes ?? this.status.start?.axes ?? {};
+    for (const toggle of this.$('control-axes').querySelectorAll('[data-axis]')) {
+      const axis = toggle.dataset.axis, on = axes[axis] !== false;
+      if (toggle.getAttribute('aria-pressed') !== String(on)) toggle.setAttribute('aria-pressed', String(on));
+      setProperty(toggle, 'title', `${AXES[axis]} ${on ? 'follows people' : 'holds still for the tracker; motor tests still move it'}`
+        + (liveAxes ? '' : ', from the bot\'s start'));
+    }
+    // Closed, the opener still says which joints are off
+    const off = Object.keys(AXES).filter(axis => axes[axis] === false).map(axis => AXES[axis].toLowerCase());
+    const opener = this.$('control-axes-open');
+    setProperty(opener, 'className', `axes-open${off.length ? ' some-off' : ''}`);
+    setProperty(opener, 'title', `Person tracker: which joints follow${off.length ? ` (${off.join(', ')} off)` : ''}`);
   }
 
   // The status lamps: one per part the bot checks, in its groups' order, its message on hover. None while the bot is

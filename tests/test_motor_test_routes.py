@@ -90,7 +90,7 @@ def test_the_dashboard_panel_is_served():
 
 def test_following_switches_live_and_only_for_true_or_false():
     async def scenario(client, server, recorder):
-        assert await (await client.get("/api/follow")).json() == {"following": True}
+        assert await (await client.get("/api/follow")).json() == {"following": True, "axes": {"pan": True, "tilt": True, "roll": True, "waist": True}}
         reply = await client.post("/api/follow", json={"following": False})
         assert reply.status == 200 and (await reply.json())["following"] is False
         assert (await (await client.get("/api/motor-test")).json())["following"] is False
@@ -100,4 +100,21 @@ def test_following_switches_live_and_only_for_true_or_false():
         assert server.motor_tests.orientation.following is False  # Nothing refused switched it
         reply = await client.post("/api/follow", json={"following": True})
         assert (await reply.json())["following"] is True
+    serve(scenario)
+
+
+def test_the_joints_that_follow_switch_live_by_name():
+    async def scenario(client, server, recorder):
+        reply = await client.post("/api/follow", json={"axes": {"waist": False, "roll": False}})
+        body = await reply.json()
+        assert reply.status == 200 and body["following"] is True
+        assert body["axes"] == {"pan": True, "tilt": True, "roll": False, "waist": False}
+        assert (await (await client.get("/api/motor-test")).json())["axes"] == body["axes"]  # As the stream sends it
+        for wrong in ({"axes": {"elbow": True}}, {"axes": {"pan": 1}}, {"axes": {"pan": "no"}}, {"axes": {}},
+                      {"axes": {"pan": None}}, {"axes": []}, {"following": None}):
+            assert (await client.post("/api/follow", json=wrong)).status == 400, wrong
+        assert server.motor_tests.orientation.axes.on() == ["pan", "tilt"]  # Nothing refused switched any
+        reply = await client.post("/api/follow", json={"following": False, "axes": {"waist": True}})
+        body = await reply.json()
+        assert body["following"] is False and body["axes"]["waist"] is True
     serve(scenario)
