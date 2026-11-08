@@ -376,6 +376,9 @@ class RuntimeServerNode(Node):
     health_sequence: int = Field(default=0, exclude=True)
     motor_tests: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
     tuning: SkipValidation[Tuning | None] = Field(default=None, exclude=True)
+    aligner: SkipValidation[object | None] = Field(
+        default=None, exclude=True, description="The face locator, whose align() the dashboard's Align button runs",
+    )
     results_camera: str | None = Field(default=None, description="Camera whose frames the OAK's own models read")
     results_for: SkipValidation[Callable[[int], OakResultsMessage | None]] = Field(default=lambda number: None, exclude=True)
     oak_status: SkipValidation[Callable[[], dict] | None] = Field(default=None, exclude=True)
@@ -400,6 +403,7 @@ class RuntimeServerNode(Node):
         encode_jpeg: Callable[[np.ndarray, int], bytes] = encode_jpeg_with_opencv,
         motor_tests: MotorTester | None = None,
         tuning: Tuning | None = None,
+        aligner: object | None = None,
         stereo_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         depth_cameras: dict[str, type[PubSubTopicABC]] | None = None,
         results_camera: str | None = None,
@@ -413,7 +417,8 @@ class RuntimeServerNode(Node):
         `pose_camera`'s frames travel with the poses detected in them, and `results_camera`'s with
         the faces and hands the OAK found in them, which `results_for` gives by frame number. With
         `motor_tests`, the dashboard can run motor tests through /api/motor-test, and with `tuning`, tune the
-        controllers through /api/tuning. A stereo camera's
+        controllers through /api/tuning; with `aligner` (the face locator), the Align button runs its align
+        through /api/align. A stereo camera's
         two images travel together in one frame message, as cameras `<name>_left` and
         `<name>_right`; a depth frame's as `<name>_rectified` and, with `depth_previews`,
         `<name>_depth`, the depth drawn in colour. `oak_status` reports the OAK's model rates and
@@ -429,6 +434,7 @@ class RuntimeServerNode(Node):
             pose_camera=pose_camera,
             motor_tests=motor_tests,
             tuning=tuning,
+            aligner=aligner,
             results_camera=results_camera,
             oak_status=oak_status,
             health=health,
@@ -468,7 +474,19 @@ class RuntimeServerNode(Node):
             add_motor_test_routes(app, self.motor_tests)
         if self.tuning is not None:
             add_tuning_routes(app, self.tuning)
+        app.router.add_post("/api/align", self._align)
         return app
+
+    async def _align(self, request: web.Request) -> web.Response:
+        """POST /api/align {}: turn the OAK-ZED alignment to fit the person in front of the robot (face_locator_node's
+        align); 200 with how it went, 409 while one runs, 503 without depth to align with."""
+        if request.content_type != "application/json":
+            return web.json_response({"ok": False, "error": "Send the request as JSON"}, status=415)
+        if self.aligner is None:
+            return web.json_response({"ok": False, "message": "Not aligned: no depth to align with (the ZED and "
+                                      "its depth are not running)"}, status=503)
+        result = await self.aligner.align()
+        return web.json_response(result, status=409 if result.get("busy") else 200)
 
     def robot_state(self) -> dict:
         """The `robot_state` payload. Ages are seconds since this server received a value.

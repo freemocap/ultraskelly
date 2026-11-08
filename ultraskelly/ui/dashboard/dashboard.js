@@ -53,11 +53,31 @@ for (const button of viewButtons) button.onclick = () => {
   for (const other of viewButtons) other.setAttribute('aria-pressed', String(other === button));
   scene?.setView(button.dataset.view);
 };
-for (const button of document.querySelectorAll('.layers button')) button.onclick = () => {
+for (const button of document.querySelectorAll('.layers button[data-layer]')) button.onclick = () => {
   const on = button.getAttribute('aria-pressed') !== 'true', layer = button.dataset.layer;
   button.setAttribute('aria-pressed', String(on));
   if (layer === 'gaze') scene?.gaze.setVisible(on);
   else { scene?.depth.setVisible({[layer]: on}); sendViews(); }
+};
+
+// Align: once, the OAK's turn from the ZED fitted to the person in front of the robot (POST /api/align, the face
+// locator's align). The button says how it went for a few seconds, the whole answer on hover.
+const alignButton = $('align-cameras'), ALIGN_TITLE = alignButton.title;
+alignButton.onclick = async () => {
+  alignButton.disabled = true;
+  setText(alignButton, 'Aligning…');
+  let answer;
+  try {
+    const reply = await fetch('/api/align', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    answer = await reply.json().catch(() => ({ok: false, message: `Refused (HTTP ${reply.status})`}));
+  } catch (problem) { answer = {ok: false, message: `No answer: ${problem.message ?? problem}`}; }
+  const done = answer.ok && answer.changed !== undefined;
+  setText(alignButton, done ? (answer.changed ? `Aligned ${answer.yaw >= 0 ? '+' : ''}${answer.yaw.toFixed(1)}°` : 'Aligned ✓') : 'Not aligned');
+  alignButton.classList.toggle('refused', !done);
+  alignButton.title = answer.message ?? answer.error ?? ALIGN_TITLE;
+  setTimeout(() => {
+    setText(alignButton, 'Align'); alignButton.classList.remove('refused'); alignButton.disabled = false;
+  }, 6000);
 };
 
 // Camera tiles; any tile enlarges over the 3D scene, which stops rendering while covered.

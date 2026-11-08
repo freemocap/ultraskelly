@@ -8,6 +8,7 @@
                                  kept for every start, and switched in the running bot
     GET  /api/motor-test, POST /api/motor-test, POST /api/motor-test/stop: passed to the bot
     GET  /api/tuning, POST /api/tuning, POST /api/tuning/reset, POST /api/tuning/save: passed to the bot
+    POST /api/align              {}: aligns the OAK to the ZED on the person in front of the robot; passed to the bot
 
 Every POST must send JSON and reach the panel by the robot's own name or address, so another
 web page can neither send one nor reach this service through a name of its own (DNS rebinding).
@@ -104,7 +105,7 @@ class ControlServer:
         app.router.add_post("/api/motor-test", self._to_bot)
         app.router.add_post("/api/motor-test/stop", self._to_bot)
         app.router.add_get("/api/tuning", self._to_bot)
-        for path in ("/api/tuning", "/api/tuning/reset", "/api/tuning/save"):
+        for path in ("/api/tuning", "/api/tuning/reset", "/api/tuning/save", "/api/align"):
             app.router.add_post(path, self._to_bot)
         app.on_startup.append(self._open)
         app.on_cleanup.append(self._close)

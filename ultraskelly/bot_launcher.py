@@ -193,6 +193,7 @@ class BotLauncher(BaseModel):
     # Commands sent to the motors, simulated or real; None until nodes are created.
     command_recorder: SkipValidation[CommandRecorder | None] = Field(default=None, exclude=True)
     motor_tester: SkipValidation[MotorTester | None] = Field(default=None, exclude=True)
+    face_locator: SkipValidation[FaceLocatorNode | None] = Field(default=None, exclude=True)  # Its align(): the Align button
     # The controllers' settings as the dashboard tunes them; None until nodes are created, and without motors.
     tuning: SkipValidation[Tuning | None] = Field(default=None, exclude=True)
     # Brakes the DC motors from its own thread if the control loop stalls; None until nodes are created.
@@ -290,6 +291,7 @@ class BotLauncher(BaseModel):
             pose_camera=OAK_FEED,
             motor_tests=self.motor_tester,
             tuning=self.tuning,
+            aligner=self.face_locator,
             # The OAK's own chip finds faces in the same frames.
             # Only while the OAK runs its models: without them no frame would ever get its results.
             # An OAK brought back later sets it (_oak_started); its results and status follow the newest OAK.
@@ -548,7 +550,8 @@ class BotLauncher(BaseModel):
             if self.config.tracking:
                 # It uses only pose results that carry the OAK frame they came from (its size and time),
                 # so any detector of OAK images feeds it and the others are ignored.
-                self.nodes.append(FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator))
+                self.face_locator = FaceLocatorNode.create(pubsub=self.pubsub, params=self.config.face_locator)
+                self.nodes.append(self.face_locator)  # The dashboard's Align button runs its align()
         return feeds
 
     def _watch_head(self, orientation: OrientationNode) -> Callable[[], None]:
