@@ -138,43 +138,45 @@ speed in 0.16 s; its six recorded pulses replay within 0.5°. Negative mouth thr
 jaw toward 28° and zero allows spring return, limited to 90°/s. Geometry is a schematic
 armature with fixed arms and legs; the head's tilt offset at rest is not modelled.
 
-The head turns through `HeadAim` (`motor/head_aim.py`), its aim tuned on this plant ("Tuning
-the head" below). It works out where the person is from where the camera pointed when the
-frame was captured (the commands of 60 ms before, about pan's dead time), aims 30% of the way
-per frame (so the goal approaches without passing the person while the real gearing is under
-3.3 times what it assumes), takes 69% of each new estimate into its goal, turns at most 15°/s
-of view along S-curves that accelerate at most 34°/s² (a change of acceleration that large
-starts ringing of about a/ωₙ² = 34/11.84² = 0.24° in pan's 1.9 Hz mode, under the deadband, so
-the input shaper it has is left off), keeps 5 servo degrees inside its servo windows (pan
-20-160, tilt 20-130), and moves
-only once its goal is more than 0.39° away. A goal more than 8° from the last (someone new, or
-a false detection), and any within 40 px of the picture's left or right edge, must show up five
-times with no more than 0.2 s between sightings before the head turns to it. Not the bottom
-edge: the head cannot look down to a standing person, whose face then sits low in the picture
-(`scenarios.LOW_FACE`, 204-238 px below the middle, pans as one at eye level does). It counter-rotates against the waist's estimated
-turn at once, and commands each servo half its linkage's slack past the view in the way it
-is moving, so a reversal takes the play up at once instead of leaving the head still. The
-roll (`motor/roll_level.py`) levels the followed face in the picture the same calm way, and
-eases back upright a second after the face is gone. Controllers retain lock across normal gaps between samples, but expire
-missing input after 350 ms. Explicit loss or leaving the square immediately removes jaw
-power. Negative drive holds the spring-loaded jaw open for as long as lock remains valid;
-zero drive allows spring return. Opening/closing state durations are estimates, not feedback.
-The waist has one yaw axis and participates in the shared tracking controller
-through `WaistDrive` (`motor/waist_drive.py`). When the person's bearing from the body is
-more than 15 degrees, and the head has held still for 0.3 s (or the person is beyond
-40 degrees), the waist turns toward them in one continuous move while the head
-counter-rotates; the move continues until the bearing is within 5 degrees; a stopping
-move never resumes, so the waist rests between the two angles instead of hunting. A move starts at 0.15 drive and follows
-S-curves (rate up to 1.0 per second rising and 2 falling, its change limited to 10
-per second squared) toward a running drive of 0.5 at 15 degrees, up to 0.6. While
-the bearing shows no progress (2 degrees within 0.5 s at the running drive), the drive
-rises 0.3 per second toward 0.7 to break the waist loose, and eases off as soon as
-the bearing shrinks again. A stopping move ramps down, releases the motor to coast at 0.2,
-and brakes it 0.3 s later. Reversing passes through that stop. A move lasting 6 s
-ramps down and rests 2 s. Target loss ramps the waist to a stop. On the robot the
-waist motor brakes between PWM pulses (slow decay). These levels follow published
-guidance and round 1's measurements (see the audit), not yet a run on the robot.
-The state display shows idle, turning, stopping or resting.
+The head turns through `HeadAim` (`motor/head_aim.py`; the design and its reasons are in
+[control-design.md](control-design.md)). Where the person is comes from an internal model of the
+head, the fitted chain above driven by the servo commands it sent (an efference copy, a Smith
+predictor in angle space): where that model says the camera pointed at each frame's capture time,
+plus the person's angle in the picture and the waist model's turn, is their direction in the base's
+frame. An alpha-beta tracker follows it and predicts it across the head's own 0.1 s, learning the
+person's speed only while they hold their place in the picture (never during a planned move, when
+the estimate drifts with the model's errors). Someone new is believed once seen in 4 of the last 5
+frames, more than the robot's false detections, which came 1-3 frames at a time; detections more
+than 0.2 s old are dropped. Each axis's command is a planned move to someone newly believed (`reach`
+of the way, at the axis's acceleration, split by a zero-vibration input shaper so pan's 1.9 Hz mode
+cancels its own ringing) plus a proportional feedback, `pan_gain` per second, on what the plan
+leaves, with the person's own speed fed forward and never faster than it can stop from. A hysteresis
+band (settled within 0.3 degrees, moving again past 0.6 on pan) keeps a settled head still. Pan is
+planned in the base's frame and commanded less the body's turn as the waist plans it, shaped the same
+way, so the head counter-rotates as the waist turns, start and stop included. It keeps 5 servo
+degrees inside its servo windows, and commands each servo half its linkage's slack past the view in
+the way it moves, so a reversal takes the play up at once. Within 40 px of the picture's left or right
+edge every sighting is confirmed as someone new is. Not the bottom edge: the head cannot look down to
+a standing person, whose face then sits low in the picture (`scenarios.LOW_FACE`, 204-238 px below the
+middle, pans as one at eye level does). The roll (`motor/roll_level.py`) levels the followed face in
+the picture the old calm way, and eases back upright a second after the face is gone. Controllers
+retain lock across normal gaps between samples, but expire missing input after 350 ms. Explicit loss
+or leaving the square immediately removes jaw power. Negative drive holds the spring-loaded jaw open
+for as long as lock remains valid; zero drive allows spring return. Opening/closing state durations
+are estimates, not feedback.
+The waist has one yaw axis and moves through `WaistDrive` (`motor/waist_drive.py`), mid-ranging on
+the head: it starts a move once the head's pan has settled more than 15 degrees of view off its middle
+for 0.47 s, or at once when the person is further than 21 degrees off and the head's own planned move
+has landed. A move is planned through the waist's model (breakaway, stall, a speed each
+way): a 46 ms kick at 0.8 drive to break loose, a run at the drive the model needs for the speed wanted
+(the person's own speed away plus 0.84 degrees a second per degree still to go, at least 0.53, above
+the stall), and a brake once the model says braking now stops it facing them (half a second's lead on
+a walker). The distance still to go comes from the picture (the waist model's errors cancel out of
+it), the stopping distance from the model, so the camera's delay no longer carries the waist past the
+person. Each command is decided 0.17 s before it is sent, so the head counter-rotates against the
+body's planned turn as its own commands reach the camera. No move under 6.4 degrees, 0.6 s of rest
+after each, two seconds before turning back the other way; no integral action. On the robot the waist motor brakes
+between PWM pulses (slow decay). The state display shows idle, kick, turning, stopping or resting.
 The Pi launcher's 120-second restart workaround was removed on 2026-11-02;
 the simulator does not run that launcher.
 
@@ -201,12 +203,13 @@ uv run --locked python -m pytest -q tests/test_scenarios.py tests/test_scenarios
 ```
 
 `tests/test_scenarios.py` runs the whole robot, head, waist and roll, on the measured
-plant. The waist is not tuned on it yet (it breaks loose only above 0.65 drive and turns
-50°/s one way, 21.5°/s the other), and a person 20° off is beyond the head's reach inside its
-servo window, so "left", "right" and "far" are expected to fail, strictly: they must start
-passing once the waist is tuned. So is "tilt-noisy": the roll, also untuned on this plant,
-reaches about 1.3° of picture and stops within its 1° deadband of that, just short of the
-degree nearer level the judge asks of a noisy face. With its ratio anywhere in the fit's spread
+plant. Three are expected to fail, strictly, so that a pass shows: "walk-away" (toward positive pan
+the waist cannot run slower than about 26 degrees a second, so it follows a 15 degree a second walker
+in moves, each turning the head back and out again), "far" (with the calm head someone 8 degrees
+beyond its reach on the waist's fast side is reached just after the waist stops, a third small head
+turn; the responsive head passes it) and "tilt-noisy" (the roll reaches about 1.3 degrees of picture
+and stops within its 1-degree deadband, just short of the degree nearer level the judge asks of a
+noisy face). With its ratio anywhere in the fit's spread
 (0.050-0.083), 8-16 servo degrees of slack and a nod of 0-0.3 the roll must stay calm: never
 turning back and forth or a face past level, and upright again once the face has gone. A
 reversed pan servo must be caught as a runaway, and a reversed roll by the faces it leaves tilted.
@@ -228,29 +231,23 @@ a head that swings and one that adds up false detections. `scenarios.run(scenari
 returns the trace and the verdict, so a tuning change can be checked the same way; `prepare`
 receives the `Simulation` before the run to change controller parameters.
 
-## Tuning the head
+## Tuning
 
-`python -m ultraskelly.simulator.tuning [samples] [checkpoint.json]` tunes the head's aim
-(`HeadAimParams`: reach, smoothing, top speed, acceleration, deadband, servo lag, jump
-samples, the input shaper on or off) on the head battery. Each candidate runs all seventeen
-scenarios on the measured plant (weight 1) and on six stressed ones (weight ½ each): pan
-gearing 15% either way, 1.5 and 2 times (a tracking run once looked like twice), a head that
-rings at 45% instead of 22-32%, and 1.5 times every dead time. A run costs
-
-    5 × overshoot (°) + 3 × reversals beyond the scenario's allowance
-    + settle time (s; the whole run if it never settles) + 2 × final error (°)   [still people within reach]
-    + 0.002 × servo travel (°) + 5 × wander (°)   [false detections only]
-    + 30 × each hard failure (runaway, a person lost, chasing false detections, aim)
-
-The search samples the space at random, then refines the best setting one parameter at a
-time, the step halving from 15% of each range to under 1%. A candidate takes about 4 s on
-one worker; 120 samples and the refinement take a few minutes on eight. After every round
-the checkpoint holds the best setting and the step, and a run given that checkpoint carries
-on from it. Each worker reuses one event loop for all its runs: on Windows a new loop opens a
-loopback socket pair whose port is held for about two minutes after it closes, and eight
-workers' thousands of runs a minute would use up the machine's 16,384 ports. The pool stalled
-twice before that change (and before workers stopped being replaced after 40 tasks); a batch
-that stalls now stops the tuner, its checkpoint kept.
+`python -m ultraskelly.simulator.tuning STAGE [SETTING.json]` tunes with CMA-ES (pycma) on
+parameters scaled to [0, 10]: `calm` and `responsive` tune `HeadAimParams` with the head alone,
+`waist` tunes `WaistDriveParams` and the counter-rotation with the whole robot and the head frozen.
+Every verdict is a constraint (a failure costs 100); among feasible settings a run's score adds the
+camera's error integral, settle time, reversals, servo travel, waist moves and wander. Each candidate
+runs its battery (the head battery plus 20-degree steps and walkers who stop, `scenarios.TUNING_HEAD`,
+or the full scenarios) on the measured plant, the four corners of gearing and pixels per degree 15 %
+either way, two stress plants (gearing x1.3; 1.5 x the dead time with a 0.1 s camera) and two fresh
+random plants per generation, shared by the generation's candidates; a scenario costs its mean over
+plants plus half its worst. A generation of 12 candidates takes 15-30 s on 15 workers.
+`python -m ultraskelly.simulator.tuning check SETTING.json` is the release check: the batteries and
+the frozen held-out sets on the measured plant, the corners and 59 random plants
+(`simulator/robustness.py`; all 59 passing means a failure rate under 5 % with 95 % confidence). Each
+worker reuses one event loop for all its runs: on Windows a new loop opens a loopback socket pair whose
+port is held for about two minutes after it closes, which thousands of runs would use up.
 
 ## Develop and verify
 

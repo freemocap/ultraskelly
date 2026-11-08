@@ -33,8 +33,8 @@ UNCERTAINTY = {  # Simulator setting: (low, high)
     "pan_damping_down": (0.20, 0.36),
     "camera_hfov": (64.0, 74.0),
     "noise_px": (0.0, 1.0),
-    "waist_breakaway": (0.58, 0.72),
-    "waist_stall": (0.38, 0.52),
+    "waist_breakaway": (plant.WAIST.breakaway * 0.9, plant.WAIST.breakaway * 1.1),  # From the fit: refit plant.WAIST only
+    "waist_stall": (plant.WAIST.stall * 0.85, plant.WAIST.stall * 1.15),
     "waist_speed": (plant.WAIST.speed_negative * 0.8, plant.WAIST.speed_negative * 1.2),
     "waist_speed_positive": (plant.WAIST.speed_positive * 0.8, plant.WAIST.speed_positive * 1.2),
     "waist_time_constant": (0.10, 0.25),
