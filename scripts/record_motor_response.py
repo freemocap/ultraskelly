@@ -129,26 +129,33 @@ class WaistPart:
     name: str
     way: int  # 1: positive drive, -1: negative
     profile: list[tuple[float, float | None]]  # (seconds, drive magnitude; None coasts, 0 brakes)
+    until_turned: float | None = None  # A ramp: rise until the waist is seen turned this many degrees, then fall
+
+
+RAMP = (0.2, 0.02, 0.04, 0.1, 0.1)  # A ramp's first drive, its rise and fall each step, its step (s), where it ends
+HOLD = 0.7  # Seconds a constant drive is held: past spin-up (0.16 s), short of the guard at full speed
 
 
 def waist_plan(top: float) -> list[WaistPart]:
-    """Ramps, holds with their stops, and validation moves, alternating ways."""
+    """Ramps that rise until the waist breaks loose and fall until it stalls; holds at constant drives each
+    way, each ended once by coasting and once by braking; validation moves. Alternating ways.
+
+    On 2026-11-07 the waist broke loose at about 0.35 drive and turned about 30 degrees a second at 0.6, far
+    lighter than its 2026-11-06 model, so ramps stop rising once it moves and holds are short."""
     parts = []
     for repeat in range(3):
         for way in (-1, 1):
-            rise = [(0.1, 0.3 + 0.025 * k) for k in range(1, int((top - 0.3) / 0.025) + 1)]  # 0.25 drive a second
-            parts.append(WaistPart(f"waist ramp {way:+d} #{repeat + 1}", way, rise + rise[-2::-1] + [(1.5, 0.0)]))
-    levels = [round(0.5 + 0.1 * k, 1) for k in range(int(round((top - 0.5) / 0.1)) + 1)]
+            parts.append(WaistPart(f"waist ramp {way:+d} #{repeat + 1}", way, [(1.5, 0.0)], until_turned=3.0))
+    levels = [round(0.4 + 0.1 * k, 1) for k in range(int(round((top - 0.4) / 0.1)) + 1)]
     for level in levels:
         for way in (-1, 1):
             for stop, after in (("coast", None), ("brake", 0.0)):
-                hold = 1.2 if way < 0 else 2.0  # Negative drive turns faster
                 parts.append(WaistPart(f"waist hold {way * level:+.1f} then {stop}", way,
-                                       [(WAIST_KICK[1], WAIST_KICK[0]), (hold, level), (1.5, after), (0.1, 0.0)]))
+                                       [(WAIST_KICK[1], WAIST_KICK[0]), (HOLD, level), (1.5, after), (0.1, 0.0)]))
     for repeat in range(2):
         for way in (-1, 1):
             parts.append(WaistPart(f"waist validation {way:+d} #{repeat + 1}", way,
-                                   [(0.08, 0.8), (1.0, 0.55), (1.5, 0.0)]))
+                                   [(0.08, 0.8), (0.6, 0.5), (1.5, 0.0)]))
     return parts
 
 
@@ -231,6 +238,20 @@ class Session:
             self.clock.sleep(0.1)
             waited += 0.1
 
+    def _ramp(self, part: WaistPart, before: float) -> bool:
+        """Raise the drive until the waist is seen turned `until_turned` degrees (or the drive reaches the top
+        the limits allow), then lower it, twice as fast, to RAMP's end. False if the guard stopped it."""
+        first, rise, fall, step, last = RAMP
+        drive, top, rising = first, WAIST_KICK[0], True
+        while rising or drive > last:
+            if not self._drive(part.way * drive, step):
+                return False
+            seen, _ = self.turn()
+            if rising and (drive >= top or (seen is not None and abs(seen - before) >= part.until_turned)):
+                rising = False
+            drive = min(top, drive + rise) if rising else drive - fall
+        return True
+
     def recentre(self, timeout: float = 4.0) -> None:
         """Drive the waist back toward where it started, braking within RECENTRE_WITHIN degrees. A turn that
         grows instead (the drive's sign not what the first part showed) brakes and ends the waist's parts."""
@@ -286,7 +307,9 @@ class Session:
             before = self._fresh_turn()
             if before is None:
                 break
-            with self.part(part.name, way=part.way, profile=part.profile):
+            with self.part(part.name, way=part.way, profile=part.profile, until_turned=part.until_turned):
+                if part.until_turned is not None and not self._ramp(part, before):
+                    self.segments[-1]["stopped"] = "waist past its limit or unseen"
                 for seconds, drive in part.profile:
                     if not self._drive(None if drive is None else part.way * drive, seconds):
                         self.segments[-1]["stopped"] = "waist past its limit or unseen"

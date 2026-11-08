@@ -2,6 +2,7 @@
 keeps every servo inside its window and the session short, and its waist stays near where it started."""
 import bisect
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -23,8 +24,9 @@ from ultraskelly.simulator import plant
 class FakeRobot:
     """The simulated waist on a fake clock; the camera reports its turn `latency` seconds late."""
 
-    def __init__(self, sign: int = 1, latency: float = 0.25, silent_after: float = float("inf"), blind: bool = False) -> None:
-        self.waist, self.sign, self.blind = plant.Waist(plant.WAIST), sign, blind
+    def __init__(self, sign: int = 1, latency: float = 0.25, silent_after: float = float("inf"), blind: bool = False,
+                 model: plant.WaistModel = plant.WAIST) -> None:
+        self.waist, self.sign, self.blind = plant.Waist(model), sign, blind
         self.pan = 90.0
         self.time, self.latency, self.silent_after = 0.0, latency, silent_after
         self.drive: float | None = 0.0
@@ -75,15 +77,34 @@ def test_the_head_plan_stays_in_its_windows_and_steps_every_size_both_ways():
         assert all((size, way) in moves for size in LADDERS[servo] for way in (True, False)), servo
 
 
+def test_ramps_stop_rising_once_the_waist_moves():
+    robot = FakeRobot(model=LIGHT)
+    session = Session(send=robot.send, turn=robot.turn, clock=robot)
+    session.waist(waist_plan(0.8)[:2])
+    ramps = [part for part in session.segments if part["name"].startswith("waist ramp")]
+    drives = [abs(value) for at, name, value in robot.commands
+              if name == "waist" and value and any(part["start"] <= at < part["end"] for part in ramps)]
+    assert max(drives) < 0.6  # It breaks loose at 0.35
+    for part in ramps:
+        before = [a for t, a in zip(robot.times, robot.history) if t <= part["start"]][-1][1]
+        turned = max(abs(a[1] - before) for t, a in zip(robot.times, robot.history) if part["start"] <= t <= part["end"])
+        assert 3.0 <= turned < 30.0, part["name"]
+
+
 def test_the_session_is_short():
     seconds = plan_seconds(head_plan(random.Random(1)), waist_plan(0.8))
     recentring = 26 * 4.0  # At most this much per waist part, from the simulated robot below
     assert seconds + recentring + session_script.NOISE_FLOOR < 10 * 60
 
 
+# As measured 2026-11-07: it broke loose at about 0.35 drive and turned about 30 degrees a second at 0.6
+LIGHT = replace(plant.WAIST, breakaway=0.35, stall=0.25, speed_negative=60.0, speed_positive=40.0)
+
+
 @pytest.mark.parametrize("sign", [1, -1])
-def test_the_waist_stays_near_its_start_and_finds_its_drive_sign(sign):
-    robot = FakeRobot(sign=sign)
+@pytest.mark.parametrize("model", [plant.WAIST, LIGHT], ids=["2026-11-06", "light"])
+def test_the_waist_stays_near_its_start_and_finds_its_drive_sign(sign, model):
+    robot = FakeRobot(sign=sign, model=model)
     session = Session(send=robot.send, turn=robot.turn, clock=robot)
     session.waist(waist_plan(0.8))
     assert session.waist_ok
