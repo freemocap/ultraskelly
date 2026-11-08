@@ -1,26 +1,35 @@
-"""The robot's head servos and waist as measured on 2026-11-06, for the simulator and its fidelity test.
+"""The robot's head servos and waist as measured, for the simulator and its fidelity tests.
 
-Each head servo is a chain fitted to tests/data/motor-response-20261106 (recorded with
-scripts/record_motor_response.py, analysed by scripts/analyze_motor_response.py; fit in
-tests/test_plant_fidelity.py):
+Each head servo is a chain, fitted by simulator/identify.py to an open-loop identification session
+(scripts/record_motor_response.py; the camera's turn measured against a fixed reference by
+scripts/analyze_motor_response.py; checked by tests/test_plant_fidelity.py):
 
-    command --dead time--> servo (slew-limited) --slack--> linkage x gain --> head mode --> view
+    command --dead time--> servo (slew-limited) --slack--> linkage --map--> head mode --> view
 
-- dead time: the picture starts moving this long after a command;
+- dead time: the picture starts moving this long after a command, the frame timed at its middle row's
+  mid-exposure;
 - slew: the servo's top speed, servo degrees per second;
 - slack: servo degrees of play the servo crosses after a reversal before the linkage follows;
-- gain: degrees of view per servo degree once the slack is taken up;
-- mode: the head's own ringing, a second-order system of natural frequency `frequency` (rad/s)
-  and damping ratio `damping`: a step overshoots by exp(-damping pi / sqrt(1 - damping^2)).
+- map: degrees of view the linkage holds, `gain` per servo degree from the middle (and `curvature`
+  per servo degree squared, a linkage whose leverage changes along its travel);
+- mode: the head's own ringing, a second-order system of natural frequency `frequency` (rad/s) and
+  damping ratio `damping` (`damping_down` toward smaller views), with dry friction: a still head stays
+  put until the spring's pull passes `stick`, then slides against `friction`.
 
-Views are degrees from where the axis looks with its servo at 90. The waist is a first-order
-motor with static friction and a different speed each way.
+Views are degrees as the simulator's camera and the head controller count them: 464 px per radian, 8.1 px
+per degree at the middle of the picture (a 69-degree pinhole), from where the axis looks with its servo at
+90. The OAK's frames themselves say 516 px per radian (63.6 degrees across; their own calibration,
+2026-11-07; the device has no factory calibration), so a measured yaw or pitch is CAMERA_SCALE times one
+here, and the picture moves exactly as many pixels per servo degree on the simulator as on the robot. A
+roll, a turn within the picture, is the same in both. The waist is a first-order motor with static
+friction and a different speed each way.
 """
 import math
 from collections import deque
 from dataclasses import dataclass
 
 MIDDLE = 90.0
+CAMERA_SCALE = 516.15 / 464.0  # The simulator's degrees of yaw or pitch per degree the OAK's own pinhole measures
 
 
 def play(output: float, driver: float, slack: float) -> float:
@@ -38,6 +47,14 @@ class AxisModel:
     damping: float = 1.0  # Damping ratio of that mode
     friction: float = 0.0  # Dry friction on the head, degrees per second squared: damps small swings most
     damping_down: float | None = None  # Damping ratio while the view moves toward smaller views; None: `damping`
+    curvature: float = 0.0  # Degrees of view per servo degree squared: a linkage whose leverage changes along its travel
+    stick: float | None = None  # Dry friction a still head must overcome to move, degrees per second squared;
+    # None: `friction`. Above `friction`, a head that breaks loose slides on past where it would have stopped
+
+    def view_of(self, linkage: float) -> float:
+        """The view (degrees) the linkage at `linkage` servo degrees holds, the head at rest."""
+        offset = linkage - MIDDLE
+        return self.gain * offset + self.curvature * offset * offset
 
 
 class Axis:
@@ -47,7 +64,7 @@ class Axis:
         self.model = model
         self.commands: deque[tuple[float, float]] = deque([(-math.inf, start)])  # (time sent, servo degrees)
         self.servo = self.linkage = start
-        self.view = model.gain * (start - MIDDLE)
+        self.view = model.view_of(start)
         self.velocity = 0.0  # Of the view, degrees per second
 
     def command(self, time: float, value: float) -> None:
@@ -69,10 +86,10 @@ class Axis:
         step = m.slew * dt
         self.servo += min(max(target - self.servo, -step), step)
         self.linkage = play(self.linkage, self.servo, m.slack)
-        goal = m.gain * (self.linkage - MIDDLE)
+        goal = m.view_of(self.linkage)
         if m.frequency <= 0.0:
             self.view, self.velocity = goal, 0.0
-        elif m.friction > 0.0 or m.damping_down is not None:
+        elif m.friction > 0.0 or m.damping_down is not None or m.stick is not None:
             self.view, self.velocity = with_friction(self.view - goal, self.velocity, m, dt)
             self.view += goal
         else:
@@ -83,15 +100,16 @@ class Axis:
 
 def with_friction(offset: float, velocity: float, m: AxisModel, dt: float, step: float = 0.001) -> tuple[float, float]:
     """The head's mode with dry friction, and damping that may differ by the way it moves, in steps of at
-    most `step` seconds. A still head stays put while the spring's pull is within the friction."""
+    most `step` seconds. A still head stays put while the spring's pull is within its sticking friction."""
     steps = max(1, math.ceil(dt / step))
     h = dt / steps
     spring = m.frequency ** 2
     up, down = 2.0 * m.damping * m.frequency, 2.0 * (m.damping if m.damping_down is None else m.damping_down) * m.frequency
+    stick = m.friction if m.stick is None else m.stick
     for _ in range(steps):
         pull = -spring * offset - (up if velocity >= 0.0 else down) * velocity
         if velocity == 0.0:
-            if abs(pull) <= m.friction:
+            if abs(pull) <= stick:
                 continue  # Stuck
             pull -= math.copysign(m.friction, pull)
         else:
@@ -150,13 +168,17 @@ class Waist:
         return self.angle
 
 
-# The robot as measured on 2026-11-06 (tests/data/motor-response-20261106), fitted by least squares on
-# each labelled segment's view and the big steps' overshoot, settling and dead time (tests/test_plant_fidelity.py).
-PAN = AxisModel(gain=0.2607, dead_time=0.044, slew=576.0, slack=2.48, frequency=11.84, damping=0.407,
-                friction=19.1, damping_down=0.281)
-TILT = AxisModel(gain=0.0809, dead_time=0.040, slew=830.0, slack=1.80, frequency=37.97, damping=0.641,
-                 friction=21.7, damping_down=0.368)
-ROLL = AxisModel(gain=0.0634, dead_time=0.043, slew=375.0, slack=11.99, frequency=82.07, damping=0.296, friction=7.14)
+# Tilt and roll as identified on 2026-11-07 (tests/data/motor-response-20261107): standard errors of gain 0.0002
+# and 0.0008, dead time 1 and 2 ms, slack 0.09 and 0.22 servo degrees. Roll's mode (13 Hz) is past what 30 frames a
+# second show: it keeps 2026-11-06's. Yaw and pitch figures are the measured ones times CAMERA_SCALE.
+# Pan as the 2026-11-06 recording shows it measured against a fixed reference: that evening it slid freely. On
+# 2026-11-07 it stuck instead, still while the servo went 15-40 degrees, then jumping (tests/test_plant_fidelity.py).
+PAN = AxisModel(gain=0.2488, dead_time=0.029, slew=417.0, slack=2.06, frequency=12.59, damping=0.639,
+                friction=6.1, damping_down=0.295, stick=30.6)
+TILT = AxisModel(gain=0.1015, dead_time=0.020, slew=712.0, slack=1.58, frequency=31.16, damping=0.331,
+                 friction=219.0, damping_down=0.394, curvature=-0.00011)
+ROLL = AxisModel(gain=0.0891, dead_time=0.031, slew=429.0, slack=13.42, frequency=82.07, damping=0.296, friction=7.14,
+                 curvature=-0.00001)
 # Six pulses: 0.6 drive did not move it in 0.5 s; 0.7 for 0.5 s turned it 13.3 degrees (top 36 deg/s) with
 # negative drive and 5.7 (top 15) with positive. The stall drive of a turning waist was not measured.
 WAIST = WaistModel(breakaway=0.65, stall=0.45, speed_negative=50.4, speed_positive=21.5, time_constant=0.16)

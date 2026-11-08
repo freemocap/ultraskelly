@@ -14,8 +14,7 @@ from ultraskelly.simulator.scenarios import BY_NAME, SCENARIOS, Scenario, revers
 # 1.3 degrees of picture and stops within its 1-degree deadband of where it aims, so a noisy face can end
 # just short of the degree nearer level the judge asks for.
 WAIST_UNTUNED = "beyond the head's reach, and the waist is not tuned on the measured plant yet"
-ROLL_UNTUNED = "the roll is not tuned on the measured plant yet: it stops just short of a degree nearer level"
-FAILING_NOW = {"left": WAIST_UNTUNED, "right": WAIST_UNTUNED, "far": WAIST_UNTUNED, "tilt-noisy": ROLL_UNTUNED}
+FAILING_NOW = {"left": WAIST_UNTUNED, "right": WAIST_UNTUNED, "far": WAIST_UNTUNED}
 
 
 def marked(scenario: Scenario):

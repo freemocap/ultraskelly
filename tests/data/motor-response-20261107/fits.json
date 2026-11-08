@@ -1,0 +1,40 @@
+{
+ "offsets": {
+  "pan": 0.0,
+  "tilt": -0.0022,
+  "roll": -0.3697
+ },
+ "note": "Each axis view with its linkage at the middle, as simulator/identify.py fitted it, in the simulator degrees (plant.CAMERA_SCALE): where the reference frame caught the linkage within its slack. Pan stuck and slipped in this session; its offset is not fitted.",
+ "fitted": {
+  "tilt": {
+   "steps": 85,
+   "rms_degrees": 0.095,
+   "fit_percent": 76.7,
+   "held_out_rms_degrees": 0.146,
+   "held_out_fit_percent": 93.9,
+   "standard_errors": {
+    "gain": 0.00015,
+    "dead_time": 0.00125,
+    "slew": 26.7,
+    "slack": 0.095,
+    "frequency": 1.05,
+    "damping": 0.012,
+    "damping_down": 0.012,
+    "friction": 16.0
+   }
+  },
+  "roll": {
+   "steps": 68,
+   "rms_degrees": 0.211,
+   "fit_percent": 54.8,
+   "held_out_rms_degrees": 0.211,
+   "held_out_fit_percent": 77.0,
+   "standard_errors": {
+    "gain": 0.00077,
+    "dead_time": 0.00247,
+    "slew": 21.8,
+    "slack": 0.22
+   }
+  }
+ }
+}

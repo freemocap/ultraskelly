@@ -163,7 +163,8 @@ def test_the_robot_launches_with_the_calmer_tuning():
         launched["aim"][key] = defaults["aim"][key]
     assert launched == defaults  # The defaults the closed-loop scenarios check
     # Tuned on the measured plant (simulator/tuning.py, 2026-11-06) to reach 0.30 and 15 deg/s, inside these
-    # bounds: the head battery passes calm with pan geared 1.5 and 2 times the fit (worst overshoot 0.51 degrees).
+    # bounds: the head battery passes calm with pan geared 1.5 times the fit. Twice it did on the 2026-11-06 fit
+    # (worst overshoot 0.51 degrees), not on the plant measured 2026-11-07 (test_scenarios_tuning.GEARED_TWICE).
     assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
     # Following uses the servos' whole measured travel (scripts/check_servo_travel.py, 2026-11-06), as the owner asked
     # on 2026-11-07; the hard limits are the servos' own 0-180, so motor tests reach every angle.

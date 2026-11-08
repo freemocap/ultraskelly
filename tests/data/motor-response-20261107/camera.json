@@ -1,0 +1,74 @@
+{
+ "camera": {
+  "used": "self-calibrated",
+  "matrix": [
+   [
+    516.150252369107,
+    0.0,
+    318.7437750660738
+   ],
+   [
+    0.0,
+    516.150252369107,
+    236.5543832423135
+   ],
+   [
+    0.0,
+    0.0,
+    1.0
+   ]
+  ],
+  "distortion": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "horizontal_degrees": 63.595715761605796
+ },
+ "noise_floor_degrees": {
+  "yaw": 0.0006005659503406668,
+  "pitch": 0.0008336064990192395,
+  "roll": 0.0009912855418624596
+ },
+ "readout": 0.01652,
+ "readout_note": "sensor mode (1352, 1012): taken as 1080p's",
+ "registered": 0.9860293268675673,
+ "session": {
+  "camera": {
+   "auto_exposure": 0.030008,
+   "auto_iso": 1599,
+   "exposure": 0.015,
+   "iso": 1600,
+   "lens_position": 133,
+   "colour_temperature": 2468,
+   "applied": {
+    "exposure": 0.015,
+    "iso": 1600,
+    "lens_position": 133
+   }
+  },
+  "windows": {
+   "pan": [
+    30.0,
+    150.0
+   ],
+   "tilt": [
+    30.0,
+    130.0
+   ],
+   "roll": [
+    60.0,
+    120.0
+   ]
+  },
+  "waist_limit": 60.0,
+  "seed": 20261107,
+  "motor_pwm_hz": 1600.0,
+  "size": [
+   640,
+   480
+  ]
+ }
+}

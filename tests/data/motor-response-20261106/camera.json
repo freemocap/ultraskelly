@@ -1,0 +1,23 @@
+{
+ "camera": {
+  "used": "the 2026-11-07 self-calibration (516.15 px across 640) at these 320x240 frames",
+  "matrix": [
+   [
+    258.075,
+    0,
+    159.37
+   ],
+   [
+    0,
+    258.075,
+    118.28
+   ],
+   [
+    0,
+    0,
+    1
+   ]
+  ]
+ },
+ "note": "Measured again on 2026-11-07 against a fixed reference (the still frames of pan settle), the robot rim masked; it replaces the views once chained frame to frame. Frames carry DepthAI stamps only: auto-exposure, exposure not logged."
+}

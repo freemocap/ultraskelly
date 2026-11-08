@@ -50,11 +50,13 @@ class Settings(BaseModel):
     waist_speed_positive: float = Field(default=plant.WAIST.speed_positive, ge=0, le=180)
     waist_breakaway: float = Field(default=plant.WAIST.breakaway, ge=0, le=1)
     waist_stall: float = Field(default=plant.WAIST.stall, ge=0, lt=1)
-    # The camera as on the robot: the OAK-1 sees 69 degrees across its 4:3 sensor, and pose results
-    # reach the controller about 0.06 s after capture (2026-11-06).
+    # The camera as the head controller counts it: 69 degrees across, 8.1 px per degree at the middle. The OAK's
+    # frames say 63.6 (516 px per radian; their own calibration, 2026-11-07): the plant's views are expressed in
+    # these degrees (plant.CAMERA_SCALE), so the picture moves as on the robot. Pose results reach the controller
+    # about 0.06 s after capture (2026-11-06).
     camera_hfov: float = Field(default=69.0, gt=10, lt=170)
     camera_latency: float = Field(default=0.06, ge=0, le=0.5)
-    # The head's servos as measured on 2026-11-06 (plant.PAN, TILT, ROLL; tests/test_plant_fidelity.py):
+    # The head's servos as measured (plant.PAN, TILT, ROLL; tests/test_plant_fidelity.py):
     # each turns the view by its gain per servo degree once it has crossed its slack, a dead time after
     # the command, no faster than its slew, through the head's own ringing mode. These settings vary
     # the measured models, for robustness tests: gains (`*_ratio`), slacks (`*_backlash`), every dead
@@ -70,12 +72,16 @@ class Settings(BaseModel):
     pan_damping_down: float = Field(default=plant.PAN.damping_down, gt=0, le=2)  # And toward smaller ones
     delay_scale: float = Field(default=1.0, ge=0, le=5)  # Multiplies every servo's dead time
     # The roll turns the picture's content clockwise for a larger angle (roll_sign -1; +1 turns it
-    # anticlockwise), and nods the camera down roll_nod degrees per servo degree as it does (the OAK
-    # sits off the roll's axis): 25 servo degrees moved the picture 27-29 px (2026-11-06).
+    # anticlockwise), and nods the camera down roll_nod degrees per servo degree as it does: on 2026-11-07,
+    # measured against a fixed reference, up a little (-0.0148; the 0.18 once read off chained shifts was not).
     roll_ratio: float = Field(default=plant.ROLL.gain, gt=0, le=1)
     roll_sign: Literal[1, -1] = -1
     roll_backlash: float = Field(default=plant.ROLL.slack, ge=0, le=40)  # Servo degrees
-    roll_nod: float = Field(default=0.18, ge=-1, le=1)
+    roll_nod: float = Field(default=-0.0148, ge=-1, le=1)
+    # The pan's axis leans about 12 degrees from the camera's upright, so turning the view right also turns
+    # the picture's content clockwise, pan_roll degrees per degree (2026-11-07, still frames: 0.217 per degree of
+    # the OAK's own pinhole, RMS 0.04; 0.195 per degree here).
+    pan_roll: float = Field(default=0.195, ge=-1, le=1)
     noise_px: float = Field(default=0.0, ge=0, le=50)  # Detection jitter, standard deviation in pixels
     landmark_noise_px: float = Field(default=0.0, ge=0, le=20)  # The face detector's own jitter on eyes, nose, mouth
     dropout: float = Field(default=0.0, ge=0, lt=1)  # Share of samples in which the detector finds nobody
@@ -133,11 +139,13 @@ class Simulation:
         s, scale = self.settings, self.settings.delay_scale
         def varied(model: AxisModel, **changes) -> Axis:
             return Axis(AxisModel(**{**model.__dict__, "dead_time": model.dead_time * scale, **changes}))
+        def geared(model: AxisModel, ratio: float) -> dict:  # The whole static map scales with the gearing
+            return {"gain": ratio, "curvature": model.curvature * ratio / model.gain}
         return {
-            "pan": varied(plant.PAN, gain=s.pan_ratio, slack=s.pan_backlash, frequency=s.pan_frequency,
+            "pan": varied(plant.PAN, **geared(plant.PAN, s.pan_ratio), slack=s.pan_backlash, frequency=s.pan_frequency,
                           damping=s.pan_damping, damping_down=s.pan_damping_down),
-            "tilt": varied(plant.TILT, gain=s.tilt_ratio, slack=s.tilt_backlash),
-            "roll": varied(plant.ROLL, gain=s.roll_ratio, slack=s.roll_backlash),
+            "tilt": varied(plant.TILT, **geared(plant.TILT, s.tilt_ratio), slack=s.tilt_backlash),
+            "roll": varied(plant.ROLL, **geared(plant.ROLL, s.roll_ratio), slack=s.roll_backlash),
         }
 
     def build_waist(self) -> Waist:
@@ -206,8 +214,9 @@ class Simulation:
         return s.pan_sign * self.axes["pan"].view, -s.tilt_sign * self.axes["tilt"].view
 
     def picture_roll(self) -> float:
-        """How far the roll servo has turned the picture's content anticlockwise, degrees."""
-        return self.settings.roll_sign * self.axes["roll"].view
+        """How far the roll servo, and the pan's leaning axis, have turned the picture's content anticlockwise, degrees."""
+        s = self.settings
+        return s.roll_sign * self.axes["roll"].view - s.pan_roll * s.pan_sign * self.axes["pan"].view
 
     def camera_pose(self) -> tuple[float, float]:
         """The camera's bearing from the base (yaw, pitch in degrees), from the plant's views."""
