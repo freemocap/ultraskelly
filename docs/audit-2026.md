@@ -914,6 +914,60 @@ wrap left the error at 0.4 ms against 629 s before. The charts' window ends at t
 state time, and samples outside it are not drawn. The `zed_imu` health check reports timestamps
 more than 2 s off the Pi's clock.
 
+## The motors identified from the camera alone (2026-11-07)
+
+**Measurement.** `simulator/camera_rotation.py` measures the camera's turn in every frame against a
+fixed reference: ORB features, rotation-only RANSAC over undistorted rays, then ECC refinement on
+the picture, projected back onto a rotation by what it does to the picture. No frame is chained to
+the one before. The robot's own rim in the picture's corner pulled ECC up to 7° off at large pans
+until a self-mask found it (an edge that stays put while the camera turns). The OAK-1 has no factory
+intrinsics: its frames' rotation-only self-calibration gives 516 px per radian (63.6° across; spec
+66°). Each frame is timed at its middle row's mid-exposure; the 1352×1012 sensor mode's readout is
+taken as 1080p's, 16.5 ms. Synthetic frames are recovered to 0.001°
+(tests/test_camera_rotation.py); the session's still frames show a 0.0006-0.0010° noise floor.
+
+**Session.** `scripts/record_motor_response.py`, run at 20:46 with the bot stopped: exposure locked
+at 15 ms (the room was dim), then staircases with reversals, jittered step ladders, one-way steps
+and a held-out random staircase for each head servo. All of them completed, with 8661 frames and
+8 missed. The waist ran 3.3 s of one ramp: it broke loose at 0.325 drive or less and turned about
+100° past its 60° guard, because the online monitor read an uncalibrated device's placeholder
+intrinsics (focal length 0.47 px) as its lens and saw no turn at all. The monitor now replaces such
+a lens, and before the waist may move it must see a known head turn (tests/test_record_motor_response.py).
+
+**Fits.** `simulator/identify.py`: output-error least squares (soft L1), every step from the view
+measured before it. In the simulator's degrees (the controller's 8.1 px per degree, 1.112 times the
+measured):
+- tilt: gain 0.1015 ± 0.0002, dead time 20 ± 1 ms, slack 1.58 ± 0.09 servo degrees, mode 31 rad/s;
+- roll: gain 0.0891 ± 0.0008, dead time 31 ± 2 ms, slack 13.4 ± 0.2.
+
+On the held-out staircases run free, tilt fits 94 % at 0.15° RMS and roll 77 % at 0.21°.
+
+**Couplings, measured on still frames:**
+- Panning the view right turns the picture's content clockwise 0.217° per degree (the pan's axis
+  leans about 12°). The simulator now does this (`pan_roll`).
+- Rolling tips the camera up 0.0133° per servo degree, not down 0.18, which was read off chained shifts.
+
+**Pan degraded through the day, one way only.** The 2026-11-06 recording, measured again, shows pan
+sliding freely: it is the plant's pan now, and runs free over that evening within 0.86°. The
+afternoon's following runs (15:09, 16:17), replayed open loop, and tonight's session show pan
+sticking whenever it turns toward smaller views (left in the picture). It sticks 1-2° at 15:09,
+holds while the commands move 18° at 16:17, and is still for 15-40 servo degrees tonight, each time
+before jumping; the other way it follows within a degree. Neither a symmetric nor a one-way friction
+model has fitted tonight's pan; its fidelity gates are strict expected failures until the neck is
+looked at.
+
+**Waist.** Replaying the afternoon runs through `plant.WAIST` (breakaway 0.65) turns the waist for
+1 of 23 moves the camera measured at 26-71° each. The waist model waits for its own session
+(`--waist-only`), now with ramps that stop rising once it moves.
+
+**Closed loop.** `simulator/recorded_runs.py` places each recorded detection in the simulator's
+world from the measured camera turn and eye spacing, and replays the production controller with
+the run's own settings. While the waist stays still and pan tracks, it follows the recording.
+With the waist moving, the replays part, because the plant's waist and pan are not today's robot.
+
+**Not done:** the waist's identification, pan's fault, and the switch of the controller and the
+simulator to the measured 9.0 px per degree.
+
 ## Recovering from lost connections (2026-11-02)
 
 A lost board, camera or detector now ends the bot the same way: it stops every node,

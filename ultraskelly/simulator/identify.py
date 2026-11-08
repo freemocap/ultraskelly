@@ -145,7 +145,9 @@ def simulate(model: AxisModel, shots: Shots, offset: float = 0.0, step: float = 
             for _ in range(sub):
                 pull = -spring * offset_mode - np.where(velocity >= 0.0, up, down) * velocity
                 still = velocity == 0.0
-                stuck = still & (np.abs(pull) <= (m.friction if m.stick is None else m.stick))
+                stick = m.friction if m.stick is None else m.stick
+                stick_down = stick if m.stick_down is None else m.stick_down
+                stuck = still & (pull <= stick) & (pull >= -stick_down)
                 pull = pull - np.where(still, np.sign(pull), np.sign(velocity)) * m.friction
                 moved = velocity + pull * h
                 moved = np.where(~still & (moved * velocity < 0.0), 0.0, moved)  # Friction stops it, never reverses it
@@ -187,10 +189,11 @@ def rms(predicted: np.ndarray, measured: np.ndarray) -> float:
 
 
 # The parameters fitted, their bounds, and how each sits in AxisModel (None: the view offset)
-FIELDS = ("gain", "dead_time", "slew", "slack", "frequency", "damping", "damping_down", "friction", "curvature", "stick")
+FIELDS = ("gain", "dead_time", "slew", "slack", "frequency", "damping", "damping_down", "friction", "curvature", "stick",
+          "stick_down")
 BOUNDS = {"gain": (0.01, 1.0), "dead_time": (0.0, 0.15), "slew": (50.0, 2000.0), "slack": (0.0, 30.0),
           "frequency": (2.0, 200.0), "damping": (0.05, 2.0), "damping_down": (0.05, 2.0), "friction": (0.0, 500.0),
-          "curvature": (-0.01, 0.01), "stick": (0.0, 5000.0), "offset": (-5.0, 5.0)}
+          "curvature": (-0.01, 0.01), "stick": (0.0, 5000.0), "stick_down": (0.0, 5000.0), "offset": (-5.0, 5.0)}
 
 
 def axis_fit(start: AxisModel, shots: Shots, *, held_out: Shots | None = None, fixed: tuple[str, ...] = (),
@@ -203,7 +206,9 @@ def axis_fit(start: AxisModel, shots: Shots, *, held_out: Shots | None = None, f
 
     free = [name for name in FIELDS if name not in fixed] + ["offset"]
     base = replace(start, damping_down=start.damping if start.damping_down is None else start.damping_down,
-                   stick=start.stick if "stick" in fixed or start.stick is not None else start.friction)  # Fixed: as given
+                   stick=start.stick if "stick" in fixed or start.stick is not None else start.friction,  # Fixed: as given
+                   stick_down=start.stick_down if "stick_down" in fixed or start.stick_down is not None
+                   else (start.friction if start.stick is None else start.stick))
     have = np.isfinite(shots.measured)
 
     def unpack(x):

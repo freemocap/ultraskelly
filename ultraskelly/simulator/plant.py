@@ -50,6 +50,7 @@ class AxisModel:
     curvature: float = 0.0  # Degrees of view per servo degree squared: a linkage whose leverage changes along its travel
     stick: float | None = None  # Dry friction a still head must overcome to move, degrees per second squared;
     # None: `friction`. Above `friction`, a head that breaks loose slides on past where it would have stopped
+    stick_down: float | None = None  # The same, pulled toward smaller views; None: `stick` (a head binding one way)
 
     def view_of(self, linkage: float) -> float:
         """The view (degrees) the linkage at `linkage` servo degrees holds, the head at rest."""
@@ -89,7 +90,7 @@ class Axis:
         goal = m.view_of(self.linkage)
         if m.frequency <= 0.0:
             self.view, self.velocity = goal, 0.0
-        elif m.friction > 0.0 or m.damping_down is not None or m.stick is not None:
+        elif m.friction > 0.0 or m.damping_down is not None or m.stick is not None or m.stick_down is not None:
             self.view, self.velocity = with_friction(self.view - goal, self.velocity, m, dt)
             self.view += goal
         else:
@@ -106,10 +107,11 @@ def with_friction(offset: float, velocity: float, m: AxisModel, dt: float, step:
     spring = m.frequency ** 2
     up, down = 2.0 * m.damping * m.frequency, 2.0 * (m.damping if m.damping_down is None else m.damping_down) * m.frequency
     stick = m.friction if m.stick is None else m.stick
+    stick_down = stick if m.stick_down is None else m.stick_down
     for _ in range(steps):
         pull = -spring * offset - (up if velocity >= 0.0 else down) * velocity
         if velocity == 0.0:
-            if abs(pull) <= stick:
+            if -stick_down <= pull <= stick:
                 continue  # Stuck
             pull -= math.copysign(m.friction, pull)
         else:

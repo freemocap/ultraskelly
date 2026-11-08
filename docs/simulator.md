@@ -94,39 +94,53 @@ display the error. Reset is required to resume after a fault.
 
 ## Plant assumptions
 
-The head-mounted synthetic camera sees as the OAK-1 does: a 640×480 image with a
-69° horizontal field of view (`camera_hfov`), a pinhole with square pixels (8.1 px per
-degree near the middle). The projection uses the same world target position, head
-transforms, and face-mounted camera origin as the viewer frustum. It does not render or
-infer a human pose: each sample reports the person the pose node would follow
-(`choose_person`, shared with it), optionally with pixel noise (`noise_px`) and dropped
-detections (`dropout`, from a seeded random generator). Frames reach the controller
-`camera_latency` after capture (default 60 ms, measured 50-70 ms on the Pi).
+The head-mounted synthetic camera sees as the head controller assumes the OAK-1 does: a 640×480
+image with a 69° horizontal field of view (`camera_hfov`), a pinhole with square pixels (8.1 px
+per degree near the middle). The OAK's own frames say 63.6° (516 px per radian, their
+self-calibration on 2026-11-07; the device has no factory intrinsics), so the plant's yaw and
+pitch are expressed in the controller's degrees, `plant.CAMERA_SCALE` (1.112) times the
+measured ones: the picture moves as many pixels per servo degree as on the robot. Switching
+both the controller and the simulator to 9.0 px per degree is a separate, joint change. The
+projection uses the same world target position, head transforms, and face-mounted camera
+origin as the viewer frustum. It does not render or infer a human pose: each sample reports the
+person the pose node would follow (`choose_person`, shared with it), optionally with pixel noise
+(`noise_px`) and dropped detections (`dropout`, from a seeded random generator). Frames reach the
+controller `camera_latency` after capture (default 60 ms, measured 50-70 ms on the Pi).
 
-The head's servos and the waist are the robot as measured (`simulator/plant.py`): each
-servo is a chain fitted to a recorded run (tests/data/motor-response-20261106) of steps,
-staircases and ramps watched by the camera,
+The head's servos and the waist are the robot as measured (`simulator/plant.py`). Each servo is
+a chain fitted to an open-loop identification session (`scripts/record_motor_response.py`, the
+camera's turn in every frame measured against a fixed reference by
+`scripts/analyze_motor_response.py` and `simulator/camera_rotation.py`, noise floor 0.001°):
 
-    command --dead time--> servo (slew-limited) --slack--> linkage x gain --> head mode --> view
+    command --dead time--> servo (slew-limited) --slack--> linkage --map--> head mode --> view
 
-where the head mode is the head's own ringing: a second-order system with dry friction and
-damping that differs by the way it turns. Fitted by least squares on every segment's view and
-the big steps' overshoot, settling and dead time:
+The map is `gain` per servo degree (plus `curvature` per servo degree squared); the head mode is
+the head's own ringing, a second-order system with damping that differs by the way it turns and
+dry friction: a still head stays put until the pull passes `stick` (`stick_down` toward smaller
+views), then slides against `friction`. Fitted by `simulator/identify.py` as output-error least
+squares (soft L1) over every step of the staircases, ladders and one-way steps, each from the
+view measured just before it; the random staircase that ends each servo's parts is held out. In
+the simulator's degrees:
 
 | | gain (view °/servo °) | dead time | slew | slack | mode | damping up / down | friction |
 |---|---|---|---|---|---|---|---|
-| pan | 0.261 | 44 ms | 576 °/s | 2.5° | 11.8 rad/s (1.9 Hz) | 0.41 / 0.28 | 19 °/s² |
-| tilt | 0.081 | 40 ms | 830 °/s | 1.8° | 38 rad/s | 0.64 / 0.37 | 22 °/s² |
-| roll | 0.063 | 43 ms | 375 °/s | 12° | 82 rad/s | 0.30 | 7 °/s² |
+| pan | 0.249 | 29 ms | 417 °/s | 2.1° | 12.6 rad/s (2.0 Hz) | 0.64 / 0.30 | 6 °/s² (sticks at 31) |
+| tilt | 0.102 | 20 ms | 712 °/s | 1.6° | 31 rad/s | 0.33 / 0.39 | 219 °/s² |
+| roll | 0.089 | 31 ms | 429 °/s | 13.4° | 82 rad/s (not seen at 30 fps) | 0.30 | 7 °/s² |
 
-Replaying every recorded command through the plant gives the recorded views within 1.01° RMS
-(pan), 0.58° (tilt) and 0.40° (roll), each big step's overshoot within 8 points and its settling
-within 0.25 s (tests/test_plant_fidelity.py, the gate any tuning on the simulator relies on).
-Inside the servo windows the robot uses (pan 20-160, tilt 20-130) the head reaches about ±17°
-of pan and 5° up and 2.7° down of tilt; beyond them the real linkages jam or go over centre,
-which the plant does not model. The roll turns the picture's content clockwise for a larger
-angle (`roll_sign` -1) and nods the camera down `roll_nod` (0.18) degrees per servo degree as it
-does. The settings vary the measured models for robustness tests: `pan_ratio`, `tilt_ratio`,
+Tilt and roll are the 2026-11-07 session's (tests/data/motor-response-20261107): their held-out
+staircases run free within 0.15° RMS (94 % fit) and 0.21° (77 %). Pan is the 2026-11-06
+recording's, measured again against a fixed reference: that evening it slid freely. During
+2026-11-07 it came to stick whenever it turned toward smaller views, still while the servo moved
+15-40 degrees, then jumping; its gates there are strict expected failures until it is looked at.
+Run free over every part of 2026-11-06, the plant follows within 0.86° (pan), 0.52° (tilt) and
+0.55° (roll) (tests/test_plant_fidelity.py, the gates any tuning on the simulator relies on).
+Turning the view right also turns the picture's content clockwise, `pan_roll` (0.195) degrees per
+degree: the pan's axis leans about 12° from the camera's upright. The roll turns the picture's
+content clockwise for a larger angle (`roll_sign` -1) and tips the camera up slightly as it does
+(`roll_nod` -0.0148 degrees per servo degree). The servos' commanded ranges stay inside the
+travel the linkages allow; beyond it they jam or go over centre, which the plant does not model.
+The settings vary the measured models for robustness tests: `pan_ratio`, `tilt_ratio`,
 `roll_ratio` (gains), `*_backlash` (slacks), `pan_frequency`, `pan_damping`, `pan_damping_down`
 (pan's mode), `delay_scale` (every dead time), and `pan_sign`/`tilt_sign`/`roll_sign` turn a
 servo the wrong way, to test polarity. Each sample also reports every visible face as the OAK's
@@ -134,7 +148,10 @@ face detector would: eyes, nose and mouth sized for the person's distance (eyes 
 tilted in the picture by the person's own tilt (`Person.roll`) less the head's roll, with their
 own jitter (`landmark_noise_px`). The waist (`plant.WAIST`) needs more than 0.6 drive to break
 loose and turns 50.4°/s at full negative drive but 21.5°/s at full positive drive, reaching
-speed in 0.16 s; its six recorded pulses replay within 0.5°. Negative mouth throttle opens the
+speed in 0.16 s, as six pulses on 2026-11-06 showed. The robot no longer does: on 2026-11-07 it
+broke loose at 0.33 drive or less and turned about 35°/s at 0.6 (negative drive), and replaying
+the afternoon's following runs through this model turns the waist for 1 of their 23 moves. Its
+identification session is still to run (`record_motor_response.py --waist-only`).5°. Negative mouth throttle opens the
 jaw toward 28° and zero allows spring return, limited to 90°/s. Geometry is a schematic
 armature with fixed arms and legs; the head's tilt offset at rest is not modelled.
 

@@ -29,8 +29,9 @@ def axis_replay(model: plant.AxisModel, servo: float, value: float, sent: float,
 
 
 @pytest.mark.parametrize("model", [plant.PAN, plant.TILT, plant.ROLL, replace(plant.TILT, curvature=0.0004),
-                                   replace(plant.PAN, friction=60.0, stick=700.0)],
-                         ids=["pan", "tilt", "roll", "curved", "sticking"])
+                                   replace(plant.PAN, friction=60.0, stick=700.0),
+                                   replace(plant.PAN, friction=60.0, stick=100.0, stick_down=900.0)],
+                         ids=["pan", "tilt", "roll", "curved", "sticking", "binding one way"])
 def test_the_fits_simulate_the_plant_exactly(model):
     steps = [(90.0, 120.0), (120.0, 60.0), (70.0, 72.0), (100.0, 95.0)]
     batch = shots(model, steps)
@@ -56,7 +57,7 @@ def test_a_known_plant_is_recovered_from_noisy_steps():
     batch.command_times += rng.uniform(0.0, 0.04, (len(steps), 1))  # Jittered, as the session sends them
     batch.measured = simulate(truth, batch) + rng.normal(0.0, 0.02, batch.measured.shape)
     held = rng.random(len(steps)) < 0.2  # Steps of every size kept back
-    report = axis_fit(plant.PAN, batch.pick(~held), held_out=batch.pick(held), noise=0.02)
+    report = axis_fit(plant.PAN, batch.pick(~held), held_out=batch.pick(held), noise=0.02, fixed=("stick", "stick_down"))
     model = report["model"]
     assert model.gain == pytest.approx(truth.gain, rel=0.01)
     assert model.dead_time == pytest.approx(truth.dead_time, abs=0.002)

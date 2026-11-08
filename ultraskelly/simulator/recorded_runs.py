@@ -318,7 +318,7 @@ def _series(times: np.ndarray, commands, actuator: str, default: float | None) -
 
 def idle_spans(run: Run, begin: float, end: float, quiet: float = 1.5, shortest: float = 4.0) -> list[tuple[float, float]]:
     """Spans of [begin, end] in which the waist was not driven, and had not been for `quiet` seconds."""
-    driven = sorted(t for t, name, v in run.commands if name == "waist" and v not in (None, 0.0))
+    driven = sorted(t for t, name, v in run.commands if name == "waist" and v not in (None, 0.0) and begin - quiet <= t <= end)
     stops = [t for t, name, v in run.commands if name == "waist" and v in (None, 0.0)]
     busy = []
     for t in driven:
@@ -327,7 +327,7 @@ def idle_spans(run: Run, begin: float, end: float, quiet: float = 1.5, shortest:
     spans, at = [], begin
     for a, b in sorted(busy):
         if a > at and a - at >= shortest:
-            spans.append((at, a))
+            spans.append((at, min(a, end)))
         at = max(at, b)
     if end - at >= shortest:
         spans.append((at, end))
