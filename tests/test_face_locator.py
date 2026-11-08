@@ -154,3 +154,33 @@ def test_robot_state_reports_the_newest_face():
     face = asyncio.run(scenario())["face"]
     assert face["position_head"] == [1.2, 0.0, -0.035] and face["distance"] == 1.2005
     assert (face["pixel"], face["alignment"]) == ([320, 240], "nominal") and face["age"] >= 0
+
+
+def test_the_followed_persons_keypoints_are_placed_on_the_depth_in_the_head_frame():
+    bus = PubSubTopicManager.create()
+    node = FaceLocatorNode.create(pubsub=bus, params=FaceLocatorParams(alignment=None))
+    node.alignment, node.alignment_source = nominal_alignment(), "nominal"
+    node.latest_depth = DepthFrameMessage(depth=scene(1.5), color=np.zeros((188, 336, 3), np.uint8),
+                                          rectification=HALF_VGA, frame_number=5, timestamp=10.0)
+    frame = FrameMessage(frame=np.zeros((480, 640, 3), np.uint8), frame_number=9, timestamp=10.05)
+    keypoints = np.zeros((2, 17, 3))
+    keypoints[1, :, 0] = np.linspace(200, 440, 17)  # The followed person, across the middle of the picture
+    keypoints[1, :, 1] = np.linspace(150, 400, 17)
+    keypoints[1, :, 2] = 0.9
+    keypoints[1, 4, 2] = 0.1  # An ear the detector is unsure of
+    keypoints[1, 16, :2] = (5000, 5000)  # A point off the picture, where the ZED has no depth
+    pose = PoseDataMessage(frame=frame, target=TargetLocationMessage(x=320, y=240), keypoints=keypoints, target_person=1)
+
+    face = node.locate(pose)
+    nobody = node.locate(PoseDataMessage(frame=frame, target=pose.target, keypoints=keypoints))
+    bus.close()
+
+    skeleton = face.skeleton_head
+    assert len(skeleton) == 17 and skeleton[4] is None and skeleton[16] is None
+    for index, point in enumerate(skeleton):
+        if point is None:
+            continue
+        camera = np.linalg.solve(np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], float), np.array(point) - (0, 0.0315, 0))
+        assert camera[2] == pytest.approx(1.5, abs=0.02), index  # On the wall, 1.5 m in front of the ZED
+    assert skeleton[0][1] > skeleton[15][1]  # The first keypoint, further left in the picture, is to the skull's left
+    assert nobody.skeleton_head is None  # Following nobody: no skeleton

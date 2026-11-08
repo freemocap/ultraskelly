@@ -9,6 +9,7 @@ import { OrbitControls } from '/vendor/OrbitControls.js';
 import { buildSkeleton } from '/skeleton.js';
 import { createDepthLayer } from '/depth3d.js';
 import { createGazeLayer } from '/gaze.js';
+import { createPersonLayer } from '/person3d.js';
 import { headAngles, waistTurn } from '/headpose.js';
 
 const deg = THREE.MathUtils.degToRad;
@@ -122,6 +123,7 @@ export function createScene(viewport, clock) {
   skeleton.waist.add(waistArrow);
   const depth = createDepthLayer({head: skeleton.tilt, origin: EYES, scale: SKELETON_SCALE, invalidate});
   const gaze = createGazeLayer({group: depth.group, invalidate});
+  const person = createPersonLayer({group: gaze.root, invalidate});  // The followed person's stick figure, with the gaze
 
   let view = 'orbit', jawShown = 0, jawGoal = 0, jawAt = 0;
   const eye = new THREE.Vector3(), look = new THREE.Vector3();
@@ -192,7 +194,7 @@ export function createScene(viewport, clock) {
     invalidate();
   }
 
-  return {scene, camera, renderer, skeleton, waistArrow, depth, gaze, update, setView, invalidate,
+  return {scene, camera, renderer, skeleton, waistArrow, depth, gaze, person, update, setView, invalidate,
           antialias: renderer.getContextAttributes().antialias,
           setPaused: value => { paused = value; if (!value) invalidate(); }};
 }

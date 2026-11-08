@@ -6,6 +6,10 @@ it first passes behind the surface the ZED sees: that is the face. The node publ
 point in the camera's frame and in the head frame (origin between the eye sockets, x
 forward, y to the skull's left, z up), and its distance from the head, with each pose
 result, using the newest depth frame taken close enough in time.
+
+The followed person's other keypoints are placed the same way, more cheaply (place_on_depth): each ray is
+taken to the face's distance, and the depth the ZED sees where it is there becomes the point's distance, twice
+over. The OAK and the ZED sit a few centimetres apart, so the second look lands within a pixel or two.
 """
 import logging
 import time
@@ -82,6 +86,28 @@ def first_crossing(
     return float(distances[first] + fraction * (distances[first + 1] - distances[first]))
 
 
+def place_on_depth(
+    origin: np.ndarray, directions: np.ndarray, depth: np.ndarray, rectification: StereoRectification,
+    guess: float, radius: int = 2, rounds: int = 2,
+) -> np.ndarray:
+    """Points (N, 3, ZED frame, metres) on rays from `origin` along `directions` (N, 3) where they meet the depth
+    the ZED sees: from `guess` metres along each ray, the depth seen where the ray is becomes how far forward
+    the point lies, `rounds` times. NaN rows where the ZED has no depth there."""
+    distances = np.full(len(directions), float(guess))
+    for _ in range(rounds):
+        points = origin[None, :] + distances[:, None] * directions
+        z = points[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            columns = rectification.focal_length * points[:, 0] / z + rectification.cx
+            rows = rectification.focal_length * points[:, 1] / z + rectification.cy
+        inside = (z > 0.05) & (columns >= 0) & (rows >= 0) & (columns <= depth.shape[1] - 1) & (rows <= depth.shape[0] - 1)
+        seen = np.full(len(directions), np.nan)
+        seen[inside] = depth_along(depth, np.rint(columns[inside]).astype(int), np.rint(rows[inside]).astype(int), radius)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            distances = np.where(directions[:, 2] > 1e-6, (seen - origin[2]) / directions[:, 2], np.nan)
+    return origin[None, :] + distances[:, None] * directions
+
+
 def locate_along_ray(
     origin: np.ndarray, direction: np.ndarray, depth: np.ndarray, rectification: StereoRectification,
     near: float = 0.3, far: float = 6.0, radius: int = 2,
@@ -105,6 +131,12 @@ class FaceLocatorParams(NodeParams):
                     "exists, else a nominal alignment from the skull's layout",
     )
     max_depth_age: float = Field(default=0.25, gt=0.0, description="Seconds between pose and depth frames, at most")
+    keypoint_score: float = Field(
+        default=0.4, ge=0.0, le=1.0, description="A keypoint the pose detector is less sure of is left out of the 3D skeleton",
+    )
+    skeleton_guess: float = Field(
+        default=2.0, gt=0.0, description="Metres the skeleton's rays start from when the face itself has no depth",
+    )
 
 
 class FaceLocatorNode(Node):
@@ -152,11 +184,14 @@ class FaceLocatorNode(Node):
             return empty
         origin, direction = self.alignment.ray((target.x, target.y))
         point = locate_along_ray(origin, direction, depth.depth, depth.rectification)
+        pose_in_head = nominal_camera_to_head(depth.rectification)
+        rotation, translation = np.array(pose_in_head["rotation"]), np.array(pose_in_head["translation_m"])
+        skeleton = self.skeleton(pose, depth, rotation, translation,
+                                 self.params.skeleton_guess if point is None else float(np.linalg.norm(point - origin)))
         if point is None:
             return FaceLocationMessage(pose_timestamp=pose_time, depth_timestamp=depth.timestamp,
-                                       pixel=(target.x, target.y), alignment=self.alignment_source)
-        pose_in_head = nominal_camera_to_head(depth.rectification)
-        in_head = np.array(pose_in_head["rotation"]) @ point + np.array(pose_in_head["translation_m"])
+                                       pixel=(target.x, target.y), alignment=self.alignment_source, skeleton_head=skeleton)
+        in_head = rotation @ point + translation
         return FaceLocationMessage(
             position_camera=tuple(float(value) for value in point),
             position_head=tuple(float(value) for value in in_head),
@@ -165,6 +200,23 @@ class FaceLocatorNode(Node):
             pose_timestamp=pose_time,
             depth_timestamp=depth.timestamp,
             alignment=self.alignment_source,
+            skeleton_head=skeleton,
+        )
+
+    def skeleton(self, pose: PoseDataMessage, depth: DepthFrameMessage, rotation: np.ndarray, translation: np.ndarray,
+                 guess: float) -> tuple[tuple[float, float, float] | None, ...] | None:
+        """The followed person's keypoints in the head frame, each None where the detector was unsure of it or
+        the ZED has no depth there; None without a followed person."""
+        if pose.keypoints is None or pose.target_person is None or not 0 <= pose.target_person < len(pose.keypoints):
+            return None
+        keypoints = np.asarray(pose.keypoints[pose.target_person], dtype=float)  # (17, 3): x, y, score
+        origin = self.alignment.ray((0.0, 0.0))[0]
+        directions = np.array([self.alignment.ray((x, y))[1] for x, y, _ in keypoints])
+        points = place_on_depth(origin, directions, depth.depth, depth.rectification, guess)
+        in_head = points @ rotation.T + translation
+        return tuple(
+            tuple(float(value) for value in point) if score >= self.params.keypoint_score and np.all(np.isfinite(point)) else None
+            for (_, _, score), point in zip(keypoints, in_head)
         )
 
     async def run(self) -> None:

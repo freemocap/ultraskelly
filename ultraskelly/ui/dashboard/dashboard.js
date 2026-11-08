@@ -106,6 +106,8 @@ const faceFresh = face => Boolean(face?.position_head && face.age < FACE_FRESH);
 function placeFace(state) {
   facePoint = faceFresh(state.face) ? state.face.position_head : null;
   scene?.gaze.update(gazeTarget, facePoint);
+  const recent = state.face && state.face.age < FACE_FRESH;  // The figure needs no depth at the nose, only some joints'
+  scene?.person.update(recent ? state.face.skeleton_head ?? null : null);
 }
 // Every view that waits on a part says why it is empty and what to do, from the bot's checks (health.js); with
 // the part well, the view's own words.

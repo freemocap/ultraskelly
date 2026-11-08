@@ -88,6 +88,9 @@ class FaceLocationMessage(TopicMessageABC):
     pose_timestamp: float | None = None  # The OAK frame's capture time
     depth_timestamp: float | None = None  # The depth frame's capture time
     alignment: str = "nominal"  # Which OAK-ZED alignment placed it: its file name, or "nominal"
+    # The followed person's 17 COCO keypoints in the head frame (metres), each None where the pose detector was
+    # unsure of it or the ZED has no depth there; None without a followed person
+    skeleton_head: tuple[tuple[float, float, float] | None, ...] | None = None
 
     model_config = ConfigDict(frozen=True)
 

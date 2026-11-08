@@ -527,6 +527,9 @@ class RuntimeServerNode(Node):
                 "pixel": None if message.pixel is None else list(message.pixel),
                 "alignment": message.alignment,
                 "age": now - face.at,
+                # The followed person's 17 COCO keypoints in the head frame, null where unknown
+                "skeleton_head": None if message.skeleton_head is None
+                else [None if point is None else list(point) for point in message.skeleton_head],
             }
         return state
 
