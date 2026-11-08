@@ -49,11 +49,11 @@ def test_a_person_beyond_the_heads_reach_starts_one_planned_waist_move():
         bus, node, _ = create_controllers()
         now = [100.0]
         node.clock = lambda: now[0]
-        node.pan_angle = 164.0  # The end of pan's span (19.2 degrees): the person 10 px further right is beyond its reach
+        node.pan_angle = 164.0  # The end of pan's span (19.2 degrees): the person 12 degrees further right is far beyond it
         commands = []
         for tick in range(150):
             if tick % 3 == 0:
-                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=330, y=240, captured=now[0]))
+                await bus.publish(TargetLocationTopic, TargetLocationMessage(x=420, y=240, captured=now[0]))
             await node.step()
             commands.append(node.waist_motor.throttle)
             now[0] += 0.01
@@ -150,31 +150,27 @@ def test_following_switched_off_holds_the_head_brakes_the_waist_and_comes_back_o
     asyncio.run(scenario())
 
 
-def test_the_robot_launches_with_the_calmer_tuning():
-    # 2026-11-06, the user: "turn down the aggressiveness". Gain 0.05 overshot 84 px on the robot.
+def test_the_robot_launches_the_calm_tuning():
+    # 2026-11-07, the owner: "I just need a less aggressive acceleration". The head and waist were tuned together on
+    # the simulated robot (simulator/tuning.py): "calm" launches, its acceleration at most 25 degrees of view per
+    # second squared; "responsive" centres a 20-degree step within 1 s but overshoots with the gearing 15 % high.
     from ultraskelly.__main__bot import launch_config
+    from ultraskelly.core.bot.motor.head_aim import RESPONSIVE, HeadAimParams
 
     head = launch_config().orientation
     assert head.follow
-    assert head.waist.enabled and head.roll.enabled  # Both back on (the owner, 2026-11-07)
-    launched, defaults = head.model_dump(), OrientationNodeParams().model_dump()
-    # The owner, 2026-11-07: "decrease max pan servo speed" and "tighten that range" (the centring dead zone). The
-    # head battery checks these launched values on the measured plant (tests/test_scenarios_tuning.py).
-    assert (head.aim.max_acceleration, head.aim.deadband) == (25.0, 0.12)
-    assert head.aim.pan_servo_speed == head.aim.servo_speed  # A 30 degree a second cap on pan was "way too slow"
-    for key in ("max_acceleration", "deadband"):
-        launched["aim"][key] = defaults["aim"][key]
-    assert launched == defaults  # The defaults the closed-loop scenarios check
-    # Tuned on the measured plant (simulator/tuning.py, 2026-11-06) to reach 0.30 and 15 deg/s, inside these
-    # bounds: the head battery passes calm with pan geared 1.5 and 2 times the fit (worst overshoot 0.51 degrees).
-    assert head.aim.reach <= 0.35 and head.aim.max_speed <= 15.0  # 1 - reach * g >= 0 for g up to 1 / 0.35 = 2.86
+    assert head.waist.enabled and head.roll.enabled  # Both on (the owner, 2026-11-07)
+    assert head.model_dump() == OrientationNodeParams().model_dump()  # The defaults are what launches
+    assert head.aim.pan_acceleration <= 25.0 and head.aim.tilt_acceleration <= 25.0 and head.aim.shaper
+    responsive = HeadAimParams(**RESPONSIVE)
+    assert responsive.pan_acceleration > 4 * head.aim.pan_acceleration and responsive.shaper
     # Following uses the servos' whole measured travel (scripts/check_servo_travel.py, 2026-11-06), as the owner asked
     # on 2026-11-07; the hard limits are the servos' own 0-180, so motor tests reach every angle.
     assert head.aim.pan_range == (10.0, 170.0) and head.aim.tilt_range == (10.0, 180.0)  # Tilt all the way down
     limits = launch_config().limits
     assert (limits.pan_min_degrees, limits.pan_max_degrees, limits.tilt_min_degrees, limits.tilt_max_degrees) == (
         0.0, 180.0, 0.0, 180.0)
-    assert head.waist.max_throttle <= 0.6 and head.waist.breakaway_throttle <= 0.7
+    assert max(head.waist.kick_throttle, head.waist.max_throttle) <= limits.waist_max_throttle
 
 
 def test_with_the_waist_off_following_never_drives_it():

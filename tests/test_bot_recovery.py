@@ -60,7 +60,7 @@ class FakeServoKit:
 
 
 class FakeCamera(Node):
-    """Every 10 ms a frame and a target just off center, until `quiet_after` seconds have passed."""
+    """Every 10 ms a frame and a target 100 px right of center, until `quiet_after` seconds have passed."""
 
     params: NodeParams = NodeParams()
     quiet_after: float | None = None
@@ -71,7 +71,7 @@ class FakeCamera(Node):
         while not self.stop_event.is_set():
             if self.quiet_after is None or loop.time() - started < self.quiet_after:
                 await self.pubsub.topics[FrameTopic].publish(FrameMessage(frame=np.zeros((2, 2, 3), dtype=np.uint8)))
-                await self.pubsub.topics[TargetLocationTopic].publish(TargetLocationMessage(x=330, y=240))
+                await self.pubsub.topics[TargetLocationTopic].publish(TargetLocationMessage(x=420, y=240))
             await asyncio.sleep(0.01)
 
 
@@ -90,10 +90,10 @@ class Bot:
             servo_kit=FakeServoKit(servo_board),
             waist_motor=self.waist,
             target_subscription=pubsub.get_subscription(TargetLocationTopic),
-            # Head at the end of its reach, and the fake camera's person always 10 px further: the waist turns at once
+            # Head at the end of its reach, and the fake camera's person always 12 degrees further: the waist turns at once
             pan_angle=164.0,
         )
-        mouth = MouthNode(
+        mouth = self.mouth = MouthNode(
             pubsub=pubsub,
             params=config.mouth,
             mouth_motor=self.jaw,
@@ -127,7 +127,7 @@ async def run_until(bot: Bot, *, fault_after: float, fault) -> None:
 def test_brief_i2c_faults_are_retried_without_ending_the_bot():
     bot = Bot(servo_board=FakeBoard(flaky_every=5), motor_board=FakeBoard(flaky_every=5))
     asyncio.run(run_until(bot, fault_after=1.0, fault=bot.camera.stop))  # A normal stop after 1 s of faults
-    assert bot.orientation.waist_motor.failed_writes > 0
+    assert bot.orientation.waist_motor.failed_writes + bot.mouth.mouth_motor.failed_writes > 0  # The motor board's, retried
     bot.assert_motors_were_driven_then_braked()
 
 

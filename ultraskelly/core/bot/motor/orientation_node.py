@@ -117,6 +117,9 @@ class OrientationNode(Node):
     # Target tracking state
     latest_target: TargetLocationMessage | None = Field(default=None, exclude=True)
     target_received_at: float | None = Field(default=None)
+    target_seen_at: float | None = Field(
+        default=None, exclude=True, description="When a message last brought a target; a frame without one is no loss yet",
+    )
     last_target_x: int | None = Field(default=None)
     last_target_y: int | None = Field(default=None)
     pinned_since: dict[str, float | None] = Field(
@@ -241,6 +244,8 @@ class OrientationNode(Node):
         while not self.target_subscription.empty():
             self.latest_target = await self.target_subscription.get()
             self.target_received_at = self.clock()
+            if self.latest_target.x is not None and self.latest_target.y is not None:
+                self.target_seen_at = self.target_received_at
             fresh = True
         fresh_faces = False
         while self.faces_subscription is not None and not self.faces_subscription.empty():
@@ -264,6 +269,8 @@ class OrientationNode(Node):
                  and now - self.target_received_at <= self.params.target_timeout)
         locked_x = locked_y = False
         errors = None
+        if fresh:
+            self.head_aim.frame(now=now, captured=msg.captured)  # Every frame, with anyone in it or not
         if valid:
             error_x, error_y = errors = self._target_errors(msg)
             if fresh:
@@ -286,12 +293,13 @@ class OrientationNode(Node):
         self._track_pinned(now, errors)
         self._command_roll(self.roll_level.update(now=now) if self.params.roll.enabled else ROLL_LEVEL)
         # The waist takes up the head's offset from the middle of its reach (mid-ranging), in planned moves;
-        # without a person it brakes.
+        # without a person for target_timeout it brakes (a frame or two without one is no loss).
+        seen = self.target_seen_at is not None and now - self.target_seen_at <= self.params.target_timeout
         if self.params.waist.enabled:
             track = self.head_aim.tracks[0] if self.head_aim.tracks is not None else None
             idle = drive.phase is WaistState.IDLE
             self.waist_motor.throttle = drive.update(
-                now=now, demand=self.head_aim.demand() if valid else None, offset=self.head_aim.pan_offset(),
+                now=now, demand=self.head_aim.demand() if seen else None, offset=self.head_aim.pan_offset(),
                 settled=self.head_aim.settled[0], planning=self.head_aim.planning(),
                 person_speed=0.0 if track is None else track.velocity,
             )

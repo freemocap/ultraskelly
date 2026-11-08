@@ -175,18 +175,18 @@ class HeadAimParams(NodeParams):
 
     # How the head turns. The defaults are the robot's launched tuning (simulator/tuning.py; docs/control-design.md).
     pan_gain: float = Field(
-        default=2.5, gt=0.0, le=10.0,
+        default=1.7, gt=0.0, le=10.0,
         description="Pan's feedback: view degrees per second of turn per degree the person is off where the plan "
                     "ends (SIMC on the fitted delay: 2-3)",
     )
-    tilt_gain: float = Field(default=2.0, gt=0.0, le=10.0, description="Tilt's feedback, degrees per second per degree off")
+    tilt_gain: float = Field(default=1.7, gt=0.0, le=10.0, description="Tilt's feedback, degrees per second per degree off")
     pan_speed: float = Field(
-        default=60.0, gt=0.0, le=150.0,
+        default=48.0, gt=0.0, le=150.0,
         description="Top speed of pan's planned move and of its feedback, degrees of view per second: the servo's own "
                     "576 servo degrees a second is 150",
     )
     tilt_speed: float = Field(
-        default=12.0, gt=0.0, le=67.0,
+        default=13.0, gt=0.0, le=67.0,
         description="Top speed of tilt's, degrees of view per second: 12 is 150 tilt servo degrees a second",
     )
     pan_acceleration: float = Field(
@@ -196,7 +196,7 @@ class HeadAimParams(NodeParams):
                     "ringing of about pan_acceleration / pan_frequency^2 in the 1.9 Hz mode (0.18 degrees at 25)",
     )
     tilt_acceleration: float = Field(
-        default=25.0, gt=0.0, le=1000.0,
+        default=22.0, gt=0.0, le=1000.0,
         description="Tilt's acceleration, degrees of view per second squared: its 6 Hz mode rings a / 1442 per change",
     )
     shaper: bool = Field(
@@ -205,7 +205,7 @@ class HeadAimParams(NodeParams):
                     "and tilt's modes): A1 of it now and A2 half a ringing period (0.28 s on pan) later",
     )
     reach: float = Field(
-        default=0.8, ge=0.0, le=1.0,
+        default=0.26, ge=0.0, le=1.0,
         description="Share of the way to someone newly believed that the planned move turns; the feedback closes the "
                     "rest. The move stops short of them while reach x (real gearing x real pixels per degree, over "
                     "those assumed, x the parallax of a camera ahead of the pan axis, about 1.09) <= 1",
@@ -213,22 +213,22 @@ class HeadAimParams(NodeParams):
 
     # Where the person will be
     tracking_alpha: float = Field(
-        default=0.5, gt=0.0, le=1.0,
+        default=0.89, gt=0.0, le=1.0,
         description="Share of each new estimate's surprise taken into the tracked direction (an alpha-beta tracker)",
     )
     tracking_beta: float = Field(
-        default=0.03, ge=0.0, le=1.0,
+        default=0.001, ge=0.0, le=1.0,
         description="Share of each new estimate's surprise, per frame interval, taken into the tracked speed",
     )
     prediction_gain: float = Field(
-        default=0.5, ge=0.0, le=1.5,
+        default=0.47, ge=0.0, le=1.5,
         description="Share of the tracked speed the head leads the person by, and feeds forward: 0 aims where they "
                     "were. A walker who stops is overshot by about the lead",
     )
     prediction_lead: float = Field(
-        default=0.1, ge=0.0, le=0.5,
-        description="Seconds ahead of now the head aims, its own delay: pan's 0.044 s dead time plus about "
-                    "2 x damping / frequency of its mode, 0.058 s",
+        default=0.043, ge=0.0, le=0.5,
+        description="Seconds ahead of now the head aims and the waist's planned turn is taken: about its own "
+                    "delay, pan's 0.044 s dead time plus 2 x damping / frequency of its mode, 0.058 s (tuned shorter)",
     )
     follow_offset: float = Field(
         default=10.0, ge=0.0, le=40.0,
@@ -241,7 +241,7 @@ class HeadAimParams(NodeParams):
                     "learns their speed: a person the head follows holds their place; one it still turns to closes in",
     )
     min_target_speed: float = Field(
-        default=6.0, ge=0.0, le=30.0,
+        default=5.4, ge=0.0, le=30.0,
         description="Degrees per second a person must be tracked moving at before the head leads them: still people, "
                     "detection jitter and the estimate's drift as the head lands (up to 0.4 x its speed with the "
                     "gearing 40 % off) give no lead",
@@ -253,7 +253,7 @@ class HeadAimParams(NodeParams):
         description="Seconds after the last sighting for which the head still leads where the person was going; then it holds",
     )
     counter_rotation: float = Field(
-        default=1.0, ge=0.0, le=1.5,
+        default=1.13, ge=0.0, le=1.5,
         description="Share of the body's planned turn over prediction_lead that the head counter-rotates against "
                     "ahead of time, as its own commands take that long to reach the camera; 0 counters only the "
                     "turn so far",
@@ -262,12 +262,12 @@ class HeadAimParams(NodeParams):
     # The settled band: hysteresis around the linkages' play, so jitter never moves a settled head
     pan_settle: float = Field(default=0.3, ge=0.0, le=5.0, description="A turning pan settles once within this many degrees of its aim")
     pan_resume: float = Field(
-        default=0.6, ge=0.0, le=5.0,
+        default=0.9, ge=0.0, le=5.0,
         description="A settled pan turns again once its aim is further than this, degrees: about pan's 0.65 degrees of play",
     )
-    tilt_settle: float = Field(default=0.25, ge=0.0, le=5.0, description="A turning tilt settles within this many degrees of its aim")
+    tilt_settle: float = Field(default=0.2, ge=0.0, le=5.0, description="A turning tilt settles within this many degrees of its aim")
     tilt_resume: float = Field(
-        default=0.5, ge=0.0, le=5.0,
+        default=1.0, ge=0.0, le=5.0,
         description="A settled tilt turns again once its aim is further than this, degrees: tilt's play is only 0.15, "
                     "but its few degrees of reach make jitter the larger share",
     )
@@ -298,6 +298,31 @@ class HeadAimParams(NodeParams):
         if self.pan_settle > self.pan_resume or self.tilt_settle > self.tilt_resume:
             raise ValueError("A settle band must not exceed its resume band")
         return self
+
+
+# The head's two tunings, found by simulator/tuning.py on the plant fitted to the robot (2026-11-07). The defaults
+# above are "calm", which the robot launches: its acceleration at most 25 degrees of view per second squared, robust
+# on the 59 random plants and the gearing and pixel-scale corners. "Responsive" centres a 20-degree step within 1 s
+# (the least acceleration that does, with the shaper on), but its planned move overshoots 2.4-3 degrees when the
+# gearing is 15 % above the fit (or 30 %, as pan has measured), so it waits until the gearing is measured to +-10 %.
+RESPONSIVE = {  # The responsive tuning (docs/control-design.md): HeadAimParams(**RESPONSIVE) runs it
+    'pan_gain': 2.9,
+    'tilt_gain': 1.7,
+    'pan_speed': 133.0,
+    'tilt_speed': 9.9,
+    'pan_acceleration': 110.0,
+    'tilt_acceleration': 63.0,
+    'reach': 0.8,
+    'tracking_alpha': 0.69,
+    'tracking_beta': 0.009,
+    'prediction_gain': 0.28,
+    'prediction_lead': 0.12,
+    'min_target_speed': 5.8,
+    'pan_settle': 0.49,
+    'pan_resume': 1.1,
+    'tilt_settle': 0.11,
+    'tilt_resume': 0.59,
+}
 
 
 def play(output: float, driver: float, slack: float) -> float:
@@ -374,7 +399,8 @@ class Track:
 
 
 class HeadAim:
-    """Feed `observe` each fresh target and call `update` every control tick for the servo commands.
+    """Feed `frame` each fresh frame and `observe` each fresh target in one, and call `update` every control tick
+    for the servo commands.
 
     `body` is how far the body has turned (degrees, in pan's sense) by the waist's model; only its changes
     over the last second matter.
@@ -444,8 +470,8 @@ class HeadAim:
         self.history: deque[tuple[float, float, float, float, bool]] = deque()
         self.planned: deque[tuple[float, float, float]] = deque()  # (time, pan, tilt planned move) before shaping
         self.last_update: float | None = None
-        self.last_frame: float | None = None  # The capture time of the newest frame counted
-        self.frames: deque[float] = deque(maxlen=FRAMES_KEPT)  # Recent capture times, to learn the frame period
+        self.last_frame: float | None = None  # The capture time of the newest detection counted
+        self.frames: deque[float] = deque(maxlen=FRAMES_KEPT)  # Recent frames' capture times, to learn the frame period
         self.offsets: deque[tuple[float, float, float]] = deque()  # (capture time, the person's angle across and down)
 
     @property
@@ -491,19 +517,17 @@ class HeadAim:
             before = entry
         return before[1:]
 
-    def _count_frame(self, seen: float) -> bool:
-        """Count a frame captured at `seen` once; False for one counted already or older."""
-        if self.last_frame is not None and seen <= self.last_frame:
-            return False
-        self.last_frame = seen
-        self.frames.append(seen)
-        return True
+    def frame(self, *, now: float, captured: float | None = None) -> None:
+        """A fresh frame from the camera, with or without anyone in it: the frame period is learned from these."""
+        seen = captured if captured is not None else now - self.params.assumed_latency
+        if not self.frames or seen > self.frames[-1]:
+            self.frames.append(seen)
 
     def frame_period(self) -> float:
-        """Seconds between the camera's frames: the shortest gap between recent sightings (dropped frames only
-        lengthen gaps), or FRAME_PERIOD until two have come."""
-        gaps = [b - a for a, b in zip(self.frames, list(self.frames)[1:]) if b > a]
-        return min(max(min(gaps), 1 / 240), 0.5) if gaps else FRAME_PERIOD
+        """Seconds between the camera's frames: the median gap between recent frames, which late deliveries and
+        dropped frames leave alone while under half of them, or FRAME_PERIOD until two have come."""
+        gaps = sorted(b - a for a, b in zip(self.frames, list(self.frames)[1:]) if b > a)
+        return min(max(gaps[len(gaps) // 2], 1 / 240), 0.5) if gaps else FRAME_PERIOD
 
     def _confirmed(self, seen: float) -> bool:
         """Whether the candidate, just seen in a frame captured at `seen`, has been seen in confirm_frames of the
@@ -518,8 +542,10 @@ class HeadAim:
         """One detection: the target's offset in pixels from the aim point, in a frame captured at `captured`."""
         p = self.params
         seen = captured if captured is not None else now - p.assumed_latency
-        if now - seen > p.stale_after or not self._count_frame(seen):
+        if now - seen > p.stale_after or (self.last_frame is not None and seen <= self.last_frame):
             return  # Too old to steer by, or a frame already counted
+        self.last_frame = seen
+        self.frame(now=now, captured=captured)
         pan_then, tilt_then, body_then, steady = self._pointing(seen)
         focal = p.px_per_degree * 180.0 / math.pi  # The pinhole's focal length in pixels
         seen_x, seen_y = math.degrees(math.atan(error_x / focal)), math.degrees(math.atan(error_y / focal))
@@ -625,7 +651,8 @@ class HeadAim:
             rate = min(max(closing + wanted_rate, -speed), speed)
             self.correction_rate[axis] += max(-acceleration * dt, min(acceleration * dt, rate - self.correction_rate[axis]))
             self.correction[axis] += self.correction_rate[axis] * dt
-            if abs(off) <= settle and wanted_rate == 0.0 and abs(self.correction_rate[axis]) <= STILL_RATE and not self.planning(axis):
+            band = 0.0 if aim > high or aim < low else settle  # Beyond its reach it settles only at the end
+            if abs(off) <= band and wanted_rate == 0.0 and abs(self.correction_rate[axis]) <= STILL_RATE and not self.planning(axis):
                 self.settled[axis], self.correction_rate[axis] = True, 0.0
         # The span is the feedback's only limit, and its anti-windup: it stops at the end, and turns back at once.
         # Held there, it keeps the end's own speed as the body turns, so it leaves the end smoothly once it must

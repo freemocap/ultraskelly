@@ -75,21 +75,21 @@ class WaistDriveParams(NodeParams):
 
     # When to move: mid-ranging on the head's settled pan offset
     start_offset: float = Field(
-        default=10.0, ge=0.0, le=60.0,
+        default=15.0, ge=0.0, le=60.0,
         description="Degrees of view the head's settled pan must sit off its middle, held start_hold, to start a "
                     "move: about half the head's reach",
     )
-    start_hold: float = Field(default=0.4, ge=0.0, le=5.0, description="Seconds the head must hold that offset first")
+    start_hold: float = Field(default=0.47, ge=0.0, le=5.0, description="Seconds the head must hold that offset first")
     start_now: float = Field(
-        default=19.0, ge=0.0, le=90.0,
+        default=21.0, ge=0.0, le=90.0,
         description="Degrees off the body's front beyond which a move starts at once: about the head's reach, "
                     "19 degrees of view with pan's servo window",
     )
     leave: float = Field(
-        default=3.0, ge=0.0, le=30.0, description="Degrees of the person's offset a move leaves for the head, rather than centring",
+        default=0.0, ge=0.0, le=30.0, description="Degrees of the person's offset a move leaves for the head, rather than centring",
     )
-    min_move: float = Field(default=4.0, ge=0.0, le=30.0, description="Degrees; a smaller move is left to the head")
-    rest: float = Field(default=1.0, ge=0.0, le=10.0, description="Seconds after a move before the next may start")
+    min_move: float = Field(default=6.4, ge=0.0, le=30.0, description="Degrees; a smaller move is left to the head")
+    rest: float = Field(default=0.6, ge=0.0, le=10.0, description="Seconds after a move before the next may start")
     reverse_rest: float = Field(
         default=2.0, ge=0.0, le=10.0, description="Seconds after a move before one the other way may start, unless past start_now",
     )
@@ -98,13 +98,13 @@ class WaistDriveParams(NodeParams):
     kick_throttle: float = Field(
         default=0.8, ge=0.0, le=1.0, description="Drive of the short kick that breaks the waist loose: above breakaway",
     )
-    kick_seconds: float = Field(default=0.05, ge=0.0, le=0.5, description="Seconds the kick lasts: 30-80 ms suggested")
+    kick_seconds: float = Field(default=0.046, ge=0.0, le=0.5, description="Seconds the kick lasts: 30-80 ms suggested")
     run_throttle: float = Field(
-        default=0.55, ge=0.0, le=1.0, description="Least running drive, safely above the stall: the move's slowest speed",
+        default=0.53, ge=0.0, le=1.0, description="Least running drive, safely above the stall: the move's slowest speed",
     )
     max_throttle: float = Field(default=0.8, ge=0.0, le=1.0, description="Largest running drive (the actuator limit is 0.8)")
     closing_gain: float = Field(
-        default=2.0, gt=0.0, le=20.0,
+        default=0.84, gt=0.0, le=20.0,
         description="Degrees a second of turn wanted per degree still to go, on top of the person's own speed away",
     )
     plan_ahead: float = Field(
@@ -114,7 +114,7 @@ class WaistDriveParams(NodeParams):
                     "delays them 0.07 s more on average",
     )
     lead_time: float = Field(
-        default=0.0, ge=0.0, le=3.0,
+        default=0.5, ge=0.0, le=3.0,
         description="Seconds of a walker's speed a move stops ahead of them by, so it need not turn again so soon: "
                     "the waist cannot run slower than about 25 degrees a second toward positive pan, so it follows "
                     "slower walkers that way in moves",

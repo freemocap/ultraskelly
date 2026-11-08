@@ -57,16 +57,17 @@ def test_polarity_follows_the_person():
 
 def test_mid_ranging_starts_on_a_held_settled_head_offset_or_at_once_past_its_reach():
     hold = round(PARAMS.start_hold / TICK)
+    out, inside, beyond = PARAMS.start_offset + 2.0, PARAMS.start_offset - 2.0, PARAMS.start_now + 5.0
     def started(person, ticks, **head):
         drive = WaistDrive(PARAMS)
         follow(drive, person, ticks, **head)
         return drive.phase is not WaistState.IDLE
-    assert not started(12.0, 2 * hold, offset=12.0, settled=False)  # The head is still turning: wait
-    assert not started(8.0, 2 * hold, offset=8.0, settled=True)  # Inside the band: the head keeps it
-    assert not started(12.0, hold - 2, offset=12.0, settled=True)  # Not held long enough yet
-    assert started(12.0, hold + 2, offset=12.0, settled=True)
-    assert started(25.0, 2, offset=19.0, settled=False)  # Beyond the head's reach: at once
-    assert not started(25.0, 50, offset=19.0, settled=False, planning=True)  # But only once the head has turned
+    assert not started(out, 2 * hold, offset=out, settled=False)  # The head is still turning: wait
+    assert not started(inside, 2 * hold, offset=inside, settled=True)  # Inside the band: the head keeps it
+    assert not started(out, hold - 2, offset=out, settled=True)  # Not held long enough yet
+    assert started(out, hold + 2, offset=out, settled=True)
+    assert started(beyond, 2, offset=19.0, settled=False)  # Beyond the head's reach: at once
+    assert not started(beyond, 50, offset=19.0, settled=False, planning=True)  # But only once the head has turned
 
 
 def test_no_move_smaller_than_min_move_and_a_rest_between_moves():
