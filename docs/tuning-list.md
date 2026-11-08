@@ -7,22 +7,19 @@ strike items out with the commit that settles them.
 
 ## Following
 
-1. **Waist and head together.** The waist went back on untuned on 2026-11-07, and the owner
-   saw it overshoot and lag. In the simulator with the waist on, the full scenarios fail at
-   every deadband: "far" swings 14-20 degrees past the person, and "left" and "right" end
-   2-5 degrees off ([audit](audit-2026.md#slower-pan-tighter-centring-2026-11-07)).
-2. **When the waist may start.** A move starts only once the head has held still for
-   `head_settle` (0.3 s). The tighter deadband (0.12) keeps the head making small
-   corrections, so the waist starts later or not at all. In `tests/test_bot_recovery.py`,
-   any deadband under 0.39 kept it from ever starting. Count small corrections as still, or
-   tie `head_settle` to the deadband.
-3. **Pan speed against lag.** A 30 degree a second cap on pan's servo was "way too slow" and
-   came off the same day. The robot runs at full speed with a gentler acceleration, 25 degrees
-   a second squared instead of 34. In the simulator the cap hardly changed settling (median
-   1.56 s against 1.53). What makes the head slow is `reach` and `smoothing`, not top speed.
-   Re-tune them with the waist on.
-4. **Centring deadband.** 0.12 is checked only in the head battery. Watch the robot for
-   hunting, small back-and-forth moves, from detection noise and pan's 2.5 degrees of slack.
+1. ~~**Waist and head together.**~~ Rebuilt and tuned together in the simulator on 2026-11-07
+   ([control-design.md](control-design.md#outcome-in-the-simulator-2026-11-07)): no full scenario
+   swings past the person any more (worst 0.54 degrees, body 0.13, against 15.4 and 6.4). Still
+   failing: "walk-away" (the waist's fast side cannot run slower than about 26 deg/s) and, with the
+   calm head, a third small head turn when someone beyond its reach is on that side. Check on the
+   robot.
+2. ~~**When the waist may start.**~~ It starts on the head's settled offset (a hysteresis band, 0.3
+   in and 0.9 out), held 0.47 s past 15 degrees, or at once past 21 once the head's move has landed.
+3. ~~**Pan speed against lag.**~~ The old `reach` and `smoothing` are gone: the head aims from a
+   model of where the camera pointed. Calm (launched): head battery median settle 1.11 s against
+   1.48; responsive centres 20 degrees within 1 s but needs the gearing measured to ±10 %.
+4. **Centring band.** 0.3 degrees in, 0.9 out on pan (0.2 and 1.0 on tilt), checked in the
+   simulator only. Watch the robot for small back-and-forth moves.
 5. **The head's constant wobble.** The IMU shows about ±0.5 degrees at about 2 Hz,
    unexplained.
 
@@ -63,6 +60,14 @@ strike items out with the commit that settles them.
     levelling in the picture. A linkage giving 0.5 degrees or more per servo degree would
     make levelling useful. Until then, measure roll's travel past ±30 (power cuts: item 8)
     before raising `span` (at most 30 now).
+
+## Waist model (2026-11-07)
+
+The camera-measured ramp of 2026-11-07 shows the real waist breaking loose at about 0.33-0.38 drive,
+not 0.65, at about 30 deg/s that way. When the per-direction fit lands, update `plant.WAIST` (the
+simulated robot; the random plants follow it) and `WaistDriveParams`' `breakaway`, `stall`,
+`speed_negative`, `speed_positive`, `time_constant`, `brake_time` and `coast_time` (the controller's
+model, panel-tunable), then re-run `python -m ultraskelly.simulator.tuning waist` and `check`.
 
 ## Plan (2026-11-07)
 
