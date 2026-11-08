@@ -197,9 +197,9 @@ def test_the_controllers_take_a_change_at_their_next_step():
     async def scenario():
         sim = Simulation(Settings(scenario="manual", yaw=30, pitch=5))  # Someone well to the side: the waist turns
         tuning = Tuning(SimpleNamespace(orientation=sim.head.params, mouth=sim.mouth.params), on_change=sim.head.retune)
-        tuning.set({"waist": {"enabled": False}, "jaw": {"lock_timeout": 0.5}, "aim": {"deadband": 0.3}})
+        tuning.set({"waist": {"enabled": False}, "jaw": {"lock_timeout": 0.5}, "aim": {"pan_settle": 0.4}})
         assert sim.head.waist_drive.params.enabled is False and sim.mouth.params.lock_timeout == 0.5
-        assert sim.head.head_aim.params.deadband == 0.3
+        assert sim.head.head_aim.params.pan_settle == 0.4
         throttles = []
         for _ in range(600):
             await sim.step()
@@ -221,7 +221,7 @@ def test_a_new_gearing_mid_turn_does_not_make_the_head_jump():
                         on_change=sim.head.retune if retune else None)
         for _ in range(1500):  # Until the head has turned well toward them and still turns
             await sim.step()
-            if abs(sim.head.pan_angle - 90) > 12 and sim.head.head_aim.turning[0]:
+            if abs(sim.head.pan_angle - 90) > 12 and not sim.head.head_aim.settled[0]:
                 break
         else:
             raise AssertionError("The head never turned")
@@ -241,35 +241,35 @@ def test_saved_settings_are_merged_over_the_launch_values_at_the_next_start(tmp_
     config = launch_config(tuning=path)  # No file yet: the launch values, and nowhere else to look
     assert config.tuning.file == str(path) and config.tuning.saved == {} and config.tuning.problems == []
     tuning = Tuning(config, config.tuning)
-    launched = config.orientation.aim.deadband
-    tuning.set({"aim": {"deadband": 0.25, "pan_range": [20, 160]}, "waist": {"enabled": False}})
+    launched = config.orientation.aim.pan_settle
+    tuning.set({"aim": {"pan_settle": 0.25, "pan_range": [20, 160]}, "waist": {"enabled": False}})
     asyncio.run(tuning.save())
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["groups"] == {"aim": {"deadband": 0.25, "pan_range": [20.0, 160.0]}, "waist": {"enabled": False}}
+    assert saved["groups"] == {"aim": {"pan_settle": 0.25, "pan_range": [20.0, 160.0]}, "waist": {"enabled": False}}
     assert list(path.parent.iterdir()) == [path]  # Written whole: no draft left beside it
 
     again = launch_config(tuning=path)
-    assert (again.orientation.aim.deadband, again.orientation.aim.pan_range, again.orientation.waist.enabled) == (0.25, (20.0, 160.0), False)
-    assert again.tuning.defaults["aim"]["deadband"] == launched  # What Reset returns to: the launch value
+    assert (again.orientation.aim.pan_settle, again.orientation.aim.pan_range, again.orientation.waist.enabled) == (0.25, (20.0, 160.0), False)
+    assert again.tuning.defaults["aim"]["pan_settle"] == launched  # What Reset returns to: the launch value
     assert again.tuning.saved_at == saved["saved_at"]
     state = Tuning(again, again.tuning).state()
-    assert [group["changed"] for group in state["groups"]] == [["pan_range", "deadband"], [], ["enabled"], []]
+    assert [group["changed"] for group in state["groups"]] == [["pan_range", "pan_settle"], [], ["enabled"], []]
     assert all(group["unsaved"] == [] for group in state["groups"])  # The next start runs what is running
 
 
 def test_a_saved_setting_that_no_longer_fits_is_skipped_and_the_rest_apply(tmp_path):
     path = tmp_path / "tuning.json"
     path.write_text(json.dumps({"saved_at": "2026-11-07T21:14:03", "groups": {
-        "aim": {"deadband": 0.25, "renamed_since": 3, "max_speed": 9999, "pan_channel": 4},
-        "waist": {"min_throttle": 0.05},  # Under release_throttle: the waist's own rule refuses it
+        "aim": {"pan_settle": 0.25, "renamed_since": 3, "pan_speed": 9999, "pan_channel": 4},
+        "waist": {"run_throttle": 0.1},  # Under the stall: the waist's own rule refuses it
         "gone": {"x": 1},
     }}), encoding="utf-8")
     config = launch_config(tuning=path)
-    assert config.orientation.aim.deadband == 0.25 and config.tuning.saved == {"aim": {"deadband": 0.25}}
-    assert config.orientation.aim.max_speed == launch_config().orientation.aim.max_speed
-    assert config.orientation.waist.min_throttle == launch_config().orientation.waist.min_throttle
+    assert config.orientation.aim.pan_settle == 0.25 and config.tuning.saved == {"aim": {"pan_settle": 0.25}}
+    assert config.orientation.aim.pan_speed == launch_config().orientation.aim.pan_speed
+    assert config.orientation.waist.run_throttle == launch_config().orientation.waist.run_throttle
     problems = "\n".join(config.tuning.problems)
-    for expected in ("aim.renamed_since: no such setting", "aim.max_speed: Input should be less than or equal to 600",
+    for expected in ("aim.renamed_since: no such setting", "aim.pan_speed: Input should be less than or equal to 150",
                      "aim.pan_channel: no such setting", "waist: Value error, Throttles must satisfy", "gone: no such group"):
         assert expected in problems
     assert Tuning(config, config.tuning).state()["problems"] == config.tuning.problems
@@ -289,10 +289,10 @@ def test_a_failed_save_leaves_the_old_file_whole(tmp_path, monkeypatch):
     path = tmp_path / "tuning.json"
     config = launch_config(tuning=path)
     tuning = Tuning(config, config.tuning)
-    tuning.set({"aim": {"deadband": 0.25}})
+    tuning.set({"aim": {"pan_settle": 0.25}})
     asyncio.run(tuning.save())
     old = path.read_text(encoding="utf-8")
-    tuning.set({"aim": {"deadband": 0.3}})
+    tuning.set({"aim": {"pan_settle": 0.35}})
 
     def power_cut(*args):
         raise OSError("No space left on device")
@@ -300,7 +300,7 @@ def test_a_failed_save_leaves_the_old_file_whole(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         asyncio.run(tuning.save())
     assert path.read_text(encoding="utf-8") == old
-    assert tuning.state()["groups"][0]["unsaved"] == ["deadband"]  # Still not saved
+    assert tuning.state()["groups"][0]["unsaved"] == ["pan_settle"]  # Still not saved
 
 
 def test_saves_from_two_screens_at_once_are_written_one_after_the_other(tmp_path, monkeypatch):
@@ -308,7 +308,7 @@ def test_saves_from_two_screens_at_once_are_written_one_after_the_other(tmp_path
     must not overlap, or the file renamed into place could hold a mix of the two."""
     config = launch_config(tuning=tmp_path / "tuning.json")
     tuning = Tuning(config, config.tuning)
-    tuning.set({"aim": {"deadband": 0.25}})
+    tuning.set({"aim": {"pan_settle": 0.25}})
     busy, overlapped, guard, write = [0], [], threading.Lock(), tuning_module.write_whole
 
     def slow_write(path, text):
@@ -325,7 +325,7 @@ def test_saves_from_two_screens_at_once_are_written_one_after_the_other(tmp_path
         await asyncio.gather(tuning.save(), tuning.save())
     asyncio.run(both())
     assert overlapped == [False, False]
-    assert json.loads((tmp_path / "tuning.json").read_text(encoding="utf-8"))["groups"] == {"aim": {"deadband": 0.25}}
+    assert json.loads((tmp_path / "tuning.json").read_text(encoding="utf-8"))["groups"] == {"aim": {"pan_settle": 0.25}}
     assert [path.name for path in tmp_path.iterdir()] == ["tuning.json"]
 
 
@@ -356,19 +356,19 @@ def test_the_routes_set_reset_and_save_and_answer_with_the_state(tmp_path):
         state = await (await client.get("/api/tuning")).json()
         assert state["ok"] and [group["key"] for group in state["groups"]] == ["aim", "roll", "waist", "jaw"]
         assert state["file"] == str(tmp_path / "tuning.json") and state["saved_at"] is None
-        reply = await client.post("/api/tuning", json={"aim": {"deadband": 0.25}, "jaw": {"lock_timeout": 0.5}})
+        reply = await client.post("/api/tuning", json={"aim": {"pan_settle": 0.25}, "jaw": {"lock_timeout": 0.5}})
         body = await reply.json()
-        assert reply.status == 200 and body["changed"] == ["aim.deadband", "jaw.lock_timeout"]
-        assert body["groups"][0]["changed"] == ["deadband"] and body["groups"][0]["unsaved"] == ["deadband"]
+        assert reply.status == 200 and body["changed"] == ["aim.pan_settle", "jaw.lock_timeout"]
+        assert body["groups"][0]["changed"] == ["pan_settle"] and body["groups"][0]["unsaved"] == ["pan_settle"]
         reply = await client.post("/api/tuning/save", json={})
         assert reply.status == 200 and (await reply.json())["saved_at"]
         assert json.loads((tmp_path / "tuning.json").read_text(encoding="utf-8"))["groups"] == {
-            "aim": {"deadband": 0.25}, "jaw": {"lock_timeout": 0.5}}
+            "aim": {"pan_settle": 0.25}, "jaw": {"lock_timeout": 0.5}}
         reply = await client.post("/api/tuning/reset", json={"group": "jaw", "setting": "lock_timeout"})
         body = await reply.json()
         assert body["changed"] == ["jaw.lock_timeout"] and body["groups"][3]["unsaved"] == ["lock_timeout"]
         reply = await client.post("/api/tuning/reset", json={})
-        assert (await reply.json())["changed"] == ["aim.deadband"] and config.orientation.aim.deadband == 0.12
+        assert (await reply.json())["changed"] == ["aim.pan_settle"] and config.orientation.aim.pan_settle == launch_config().orientation.aim.pan_settle
     serve(scenario, tuning)
 
 
@@ -400,13 +400,13 @@ def test_the_replay_stand_in_keeps_its_tuning_where_it_is_told(tmp_path):
     into its controllers as they run, in place."""
     from ultraskelly.replay import create_controllers
     path = tmp_path / "tuning.json"
-    path.write_text(json.dumps({"groups": {"aim": {"deadband": 0.3}}}), encoding="utf-8")
+    path.write_text(json.dumps({"groups": {"aim": {"pan_settle": 0.4}}}), encoding="utf-8")
 
     async def scenario():
         bus, orientation, mouth = create_controllers()
         settings = SimpleNamespace(orientation=orientation.params, mouth=mouth.params)
         started = load_tuning(settings, path)
-        assert orientation.head_aim.params.deadband == 0.3 and orientation.head_aim.params is orientation.params.aim
+        assert orientation.head_aim.params.pan_settle == 0.4 and orientation.head_aim.params is orientation.params.aim
         assert Tuning(settings, started).state()["groups"][0]["unsaved"] == []
         bus.close()
     asyncio.run(scenario())

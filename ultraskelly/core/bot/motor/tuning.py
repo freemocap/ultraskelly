@@ -18,7 +18,7 @@ A setting's default is the launch configuration's own value (launch_config), bef
 tuning: what Reset returns to, and what the Tune window marks a setting as differing from. Save
 keeps the settings that differ from their defaults in TUNING_FILE,
 
-    {"saved_at": "2026-11-07T21:14:03", "groups": {"aim": {"deadband": 0.2}, "waist": {"enabled": false}}}
+    {"saved_at": "2026-11-07T21:14:03", "groups": {"aim": {"pan_settle": 0.2}, "waist": {"enabled": false}}}
 
 replaced whole (written beside it, flushed, then renamed over it), so a power cut leaves the old
 file or the new one. As the bot starts, launch_config merges it over its own values (load_tuning).

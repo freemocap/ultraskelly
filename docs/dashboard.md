@@ -182,7 +182,7 @@ exposes all the controls" (2026-11-07): the one window on this page that opens o
   (`ActuatorLimits`) still clamp every command.
 - **Marks.** A setting that differs from its default is drawn in the accent colour with
   ↺ to put it back; a dot marks one not yet saved. The default is the launch
-  configuration's value (`launch_config`, such as the head's 0.12 deadband), not the
+  configuration's value (`launch_config`, such as the head's 0.3 degree settled band), not the
   class's.
 - **Save** keeps the settings that differ from their defaults in
   `~/.config/ultraskelly/tuning.json` of the bot's user, replaced whole (written beside
@@ -196,8 +196,8 @@ The routes (`ultraskelly/ui/tuning_routes.py`) answer as the motor tests' do: JS
 only, 400 with the reason, nothing changed.
 
     GET  /api/tuning           each group's schema and values, which differ, which are not saved
-    POST /api/tuning           {"aim": {"deadband": 0.2}, "waist": {"enabled": false}}
-    POST /api/tuning/reset     {} everything, {"group": "aim"}, {"group": "aim", "setting": "deadband"}
+    POST /api/tuning           {"aim": {"pan_settle": 0.2}, "waist": {"enabled": false}}
+    POST /api/tuning/reset     {} everything, {"group": "aim"}, {"group": "aim", "setting": "pan_settle"}
     POST /api/tuning/save      {}
 
 ## Panels
