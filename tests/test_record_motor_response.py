@@ -23,8 +23,9 @@ from ultraskelly.simulator import plant
 class FakeRobot:
     """The simulated waist on a fake clock; the camera reports its turn `latency` seconds late."""
 
-    def __init__(self, sign: int = 1, latency: float = 0.25, silent_after: float = float("inf")) -> None:
-        self.waist, self.sign = plant.Waist(plant.WAIST), sign
+    def __init__(self, sign: int = 1, latency: float = 0.25, silent_after: float = float("inf"), blind: bool = False) -> None:
+        self.waist, self.sign, self.blind = plant.Waist(plant.WAIST), sign, blind
+        self.pan = 90.0
         self.time, self.latency, self.silent_after = 0.0, latency, silent_after
         self.drive: float | None = 0.0
         self.history: list[tuple[float, float]] = [(0.0, 0.0)]
@@ -48,6 +49,8 @@ class FakeRobot:
         self.commands.append((self.time, name, value))
         if name == "waist":
             self.drive = value
+        elif name == "pan":
+            self.pan = value
         else:
             assert WINDOWS[name][0] <= value <= WINDOWS[name][1], (name, value)
 
@@ -55,7 +58,8 @@ class FakeRobot:
         if self.time > self.silent_after:
             return None, float("inf")
         index = bisect.bisect_right(self.times, self.time - self.latency) - 1
-        return (self.history[index][1] if index >= 0 else 0.0), self.latency
+        seen = (self.history[index][1] if index >= 0 else 0.0) + plant.PAN.gain * (self.pan - 90.0)  # The camera's turn
+        return (0.0 if self.blind else seen), self.latency
 
 
 def test_the_head_plan_stays_in_its_windows_and_steps_every_size_both_ways():
@@ -89,6 +93,16 @@ def test_the_waist_stays_near_its_start_and_finds_its_drive_sign(sign):
     assert abs(robot.waist.angle) < 20.0
     assert session.waist_way == sign  # Learned from the first part's turn
     assert robot.commands[-1] == (robot.commands[-1][0], "waist", 0.0)
+
+
+def test_a_monitor_that_cannot_see_a_known_turn_never_lets_the_waist_move():
+    # 2026-11-07: with an uncalibrated OAK's placeholder intrinsics the monitor read every turn as none
+    robot = FakeRobot(blind=True)
+    session = Session(send=robot.send, turn=robot.turn, clock=robot)
+    session.waist(waist_plan(0.8))
+    assert not session.waist_ok
+    assert all(value in (0.0, None) for _, name, value in robot.commands if name == "waist")
+    assert session.segments[-1]["name"] == "monitor check" and not session.segments[-1]["passed"]
 
 
 def test_a_silent_camera_stops_the_waist_and_skips_its_remaining_parts():

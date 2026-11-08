@@ -54,6 +54,8 @@ WAIST_LIMIT = 60.0  # Degrees from the start the waist may be seen turned; past 
 RECENTRE_WITHIN = 8.0  # Degrees: close enough to the start to begin the next waist part
 WAIST_KICK = (0.8, 0.06)  # Drive and seconds that break the waist loose before a hold
 MONITOR_STALE = 1.0  # Seconds without a measured waist turn that stop the waist
+LENS_DEGREES = 67.2  # The OAK-1's view across its 640x480 frames, from its frames (its spec says 66)
+CHECK_PAN = (110.0, 3.0, 8.0)  # Pan the head here before the waist moves: the monitor must see 3-8 degrees
 
 LADDERS = {"pan": [2, 5, 10, 20, 40], "tilt": [5, 10, 20, 40], "roll": [10, 20, 30, 45]}  # Step sizes, servo degrees
 
@@ -256,7 +258,26 @@ class Session:
         self.send("waist", 0.0)
         self.clock.sleep(1.0)
 
+    def monitor_sees(self) -> bool:
+        """Whether the waist monitor sees a known turn: the head panned to CHECK_PAN's angle shows as a few
+        degrees, and back at its middle as none. A monitor that cannot, cannot guard the waist either."""
+        angle, low, high = CHECK_PAN
+        self.send("pan", angle)
+        self.clock.sleep(1.5)
+        turned = self._fresh_turn()
+        self.send("pan", MIDDLE)
+        self.clock.sleep(1.5)
+        back = self._fresh_turn()
+        seen = turned is not None and back is not None and low <= turned - back <= high and abs(back) < 1.5
+        self.segments.append({"name": "monitor check", "start": self.clock.now(), "end": self.clock.now(),
+                              "turned": turned, "back": back, "passed": seen})
+        return seen
+
     def waist(self, plan: list[WaistPart]) -> None:
+        if not self.monitor_sees():
+            self.waist_ok = False
+            self.send("waist", 0.0)
+            return
         learned = False
         for part in plan:
             if not self.waist_ok:
@@ -337,10 +358,11 @@ def frame_transformation(frame) -> dict:
 
 
 class WaistMonitor:
-    """The waist's turn from the start, measured five times a second from the newest frame, features only."""
+    """The waist's turn from the start, measured about four times a second from the newest frame, features only,
+    the robot's own parts in the picture masked (`mask`: 0 there, at the frames' size)."""
 
-    def __init__(self, keeper: FrameKeeper, camera) -> None:
-        self.keeper, self.camera = keeper, camera.scaled((SIZE[0] // 2, SIZE[1] // 2))
+    def __init__(self, keeper: FrameKeeper, camera, mask=None) -> None:
+        self.keeper, self.camera, self.mask = keeper, camera, mask
         self.tracker, self.reading = None, (None, math.inf)
         self.rows: list[tuple] = []
         self.stop = threading.Event()
@@ -361,15 +383,29 @@ class WaistMonitor:
             if self.keeper.latest is None:
                 continue
             stamp, jpeg = self.keeper.latest
-            grey = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_2)
-            if self.tracker is None:
-                self.tracker = RotationTracker(self.camera, grey, refine=False, new_keyframe_beyond=12.0, features=800)
+            grey = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE)
+            if self.tracker is None:  # In a dim room a half-size picture has too few features to hold on to
+                self.tracker = RotationTracker(self.camera, grey, self_mask=self.mask, refine=False,
+                                               new_keyframe_beyond=12.0, features=1500)
                 self.reading = (0.0, time.monotonic())
                 continue
             found = self.tracker.measure(grey)
             self.rows.append((stamp, found.yaw, found.pitch, found.roll, found.inliers, found.ok, len(self.tracker.keyframes)))
             if found.ok:
                 self.reading = (found.yaw, time.monotonic())
+
+
+def plausible_lens(matrix):
+    """The camera for the waist monitor: the device's intrinsics if they are a real lens's, else the OAK-1's
+    67.2-degree pinhole (its frames' own calibration, 2026-11-07). An uncalibrated OAK-1 reports placeholder
+    intrinsics (a focal length under a pixel), with which every turn reads as none."""
+    import numpy as np
+
+    from ultraskelly.simulator.camera_rotation import Camera
+
+    if matrix is not None and 200.0 <= float(matrix[0][0]) <= 2000.0:
+        return Camera(np.array(matrix, dtype=float), SIZE)
+    return Camera.from_field_of_view(SIZE, LENS_DEGREES)
 
 
 def camera_settings(rows: list[tuple], cap: float = 0.010) -> dict:
@@ -393,11 +429,17 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print the plan's length and exit")
     parser.add_argument("--exposure-cap", type=float, default=0.010,
                         help="Longest exposure (s) the camera may lock at in a dim room: sharper below, darker")
+    parser.add_argument("--waist-only", action="store_true", help="The still part and the waist's parts, no head parts")
+    parser.add_argument("--self-mask", type=Path, default=None,
+                        help="A 640x480 image, black where the robot itself is in the picture (analyze_motor_response's "
+                             "self-mask.png): kept out of the waist monitor's features")
     parser.add_argument("--camera-only", action="store_true",
                         help="Lock the camera and record 5 s still, without opening the motor boards")
     args = parser.parse_args()
     rng = random.Random(args.seed)
     head, waist_parts = head_plan(rng), waist_plan(args.waist_top)
+    if args.waist_only:
+        head = []
     print(f"plan: {plan_seconds(head, waist_parts) / 60:.1f} min of scripted motion, "
           f"{sum(len(s) for _, _, s in head)} head steps, {len(waist_parts)} waist parts")
     if args.dry_run:
@@ -406,6 +448,7 @@ def main() -> None:
     from ultraskelly.core.bot.sensory.oak_models import without_telemetry
 
     without_telemetry()
+    import cv2
     import depthai as dai
     import numpy as np
 
@@ -487,16 +530,17 @@ def main() -> None:
         session_info["camera"] = settings
         session_info["frame_transformation"] = keeper.calibration
         print("camera:", settings)
-        matrix = keeper.calibration.get("matrix") or session_info["device_calibration"].get("matrix")
-        lens = Camera(np.array(matrix), SIZE) if matrix else Camera.from_field_of_view(SIZE, 67.0)
-        monitor = WaistMonitor(keeper, lens)
+        lens = plausible_lens(session_info["device_calibration"].get("matrix") or keeper.calibration.get("matrix"))
+        robot = None if args.self_mask is None else cv2.imread(str(args.self_mask), cv2.IMREAD_GRAYSCALE)
+        monitor = WaistMonitor(keeper, lens, robot)
         session = Session(send=send, turn=monitor.turn)
         with session.part("still", seconds=5.0 if args.camera_only else NOISE_FLOOR):
             time.sleep(5.0 if args.camera_only else NOISE_FLOOR)
         if args.camera_only:
             return
         monitor.thread.start()
-        session.head(head)
+        if not args.waist_only:
+            session.head(head)
         for name in ("pan", "tilt", "roll"):  # Settle the head's slack one way before the waist turns it
             send(name, MIDDLE - 5.0)
         time.sleep(0.5)
