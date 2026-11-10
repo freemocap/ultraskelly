@@ -1,3 +1,23 @@
-@freemocap/client browser bundle (AGPL-3.0-or-later; bundles zod and cbor-x, both MIT)
-built by scripts/update-freemocap-client.sh from packages/freemocap-client
-freemocap sfn26-ultraskelly f729e8aeaba495839d7372c2f20c18c96618f4f6
+{
+  "sdk_revision": "b4814378d0b8d8b72022fcf2f561e4baf806edd8",
+  "package": "@freemocap/client",
+  "package_lock_sha256": "18a399a522bf3fd661aa5e3e164541b2106032f02cd5f11cfe6684edaf56c3f9",
+  "bundle_sha256": "4d911ce649822be3f281fc0cde553f01761cf093db01c7ca0c8caa55c895003f",
+  "node": "v24.21.0",
+  "npm": "12.0.2",
+  "esbuild_flags": [
+    "--bundle",
+    "--format=esm",
+    "--platform=browser",
+    "--minify",
+    "--legal-comments=inline",
+    "--sourcemap=linked"
+  ],
+  "repository": "https://github.com/freemocap/sdk",
+  "license": "AGPL-3.0-or-later",
+  "bundled_licenses": {
+    "cbor-x": "MIT",
+    "zod": "MIT"
+  },
+  "rebuild": "scripts/update-freemocap-client.sh /path/to/sdk"
+}

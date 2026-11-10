@@ -2,7 +2,7 @@
 
 The bot serves its dashboard on port 8080 (`python -m ultraskelly.replay --serve` uses
 127.0.0.1:8081). One read-only WebSocket, `/stream`, carries FreeMoCap's self-describing
-CBOR messages, encoded on the Pi with `freemocap-stream` and decoded in the browser with
+CBOR messages, encoded on the Pi with `freemocap-sdk-stream` and decoded in the browser with
 `@freemocap/client`. This page is the contract between the producer
 (`ultraskelly/ui/runtime_server.py`) and any viewer, including the dashboard.
 
@@ -284,7 +284,7 @@ The dashboard imports the vendored bundle (`/vendor/freemocap-client.js`):
   Copy them before modifying or transferring them, for example to a worker.
 - A malformed image payload is rejected whole rather than drawn in part.
 
-On the producer side, `freemocap-stream` rejects non-integer frame numbers, camera
+On the producer side, `freemocap-sdk-stream` rejects non-integer frame numbers, camera
 indices, widths and heights (NumPy integers are fine, floats are not) and non-finite
 timestamps.
 
@@ -360,13 +360,41 @@ the image path (payload read, JPEG decode, draw) per frame on the frames it capt
 
 ## Moving the SDK
 
-`pyproject.toml` takes `freemocap-stream` from FreeMoCap's `sfn26-ultraskelly` branch, and
-`uv.lock` pins the commit. The browser bundle in `ultraskelly/ui/dashboard/vendor/` is
-built from the same commit, which `freemocap-client.SOURCE` names. Move both together:
+Set the `freemocap-sdk-stream` revision in `pyproject.toml` to a full commit from
+the shared SDK branch. Refresh the lockfile and build the offline browser bundle from
+the same commit in a local checkout of `freemocap/sdk`:
 
-```bash
-uv lock --upgrade-package freemocap-stream
-scripts/update-freemocap-client.sh /path/to/freemocap   # checked out at the locked commit
+```sh
+uv lock
+uv run --locked python scripts/build_sdk_candidate.py /path/to/sdk --vendor
 ```
 
-The packages stay at version `0.1.0-dev.0`, so the commit is what identifies the code.
+Commit the lockfile, bundle, source map and `freemocap-client.SOURCE` together.
+The manifest records the Git revision and bundle checksum.
+
+### Testing a standalone SDK candidate on a development host
+
+From the UltraSkelly checkout, sync its locked Python environment. With Node 22 or later,
+npm, Git, and a local checkout of `freemocap/sdk`, run:
+
+```sh
+uv run --locked python scripts/build_sdk_candidate.py /path/to/sdk
+```
+
+The builder archives the pinned Git revision and builds in a temporary directory. It writes
+an offline ESM bundle and a manifest with the revision, tool versions, lockfile hash and
+bundle hash under `.cache/sdk-candidate/<full-sdk-sha>/`. Supply `--revision <sha>` to
+evaluate a later port.
+
+Run the same replay against the shipped client first, then against the candidate:
+
+```sh
+uv run --locked python -m scripts.stream_acceptance --replay --people 3 --chromium /path/to/chromium
+uv run --locked python -m scripts.stream_acceptance --replay --people 3 --chromium /path/to/chromium --client-bundle .cache/sdk-candidate/<full-sdk-sha>/freemocap-client.js
+```
+
+Each invocation starts and stops a loopback synthetic camera with simulated motors.
+Use `--out <report.json>` for per-check evidence. The page requires both public channel
+APIs and follows the target through shuffled detector rows. It checks the image frame
+number and the matching face overlay against synthetic OAK head pose, present on even
+frames and absent on odd ones. The channel tests remain required when video alone works.

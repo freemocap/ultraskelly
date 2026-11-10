@@ -3,9 +3,10 @@
 // validation, frame resolution, channel views). Results collect in window.acceptance, which
 // scripts/stream_acceptance.py reads. Query: ?stream=ws://host:port/stream&seconds=10
 // &frames=120&people=3 (people: how many the feed shows, 0 for a real camera).
-import {
+import * as sdk from '/vendor/freemocap-client.js';
+const {
   TransportService, MessageDecoder, FrameResolver, resolveChannelViews, readImagePayload, decodeImageBitmaps,
-} from '/vendor/freemocap-client.js';
+} = sdk;
 
 const query = new URLSearchParams(location.search);
 const STREAM = query.get('stream') ?? `ws://${location.hostname}:8080/stream`;
@@ -76,9 +77,20 @@ stream.subscribeToProtocolErrors(error => {
 
 // Channels come first for each frame, then its overlays, then its image.
 const targetByFrame = new Map();
-stream.subscribeToChannels(frame => {
+const api = {subscribeToChannels: typeof stream.subscribeToChannels, resolveChannelViews: typeof resolveChannelViews};
+check('channel_api', Object.values(api).every(type => type === 'function'), api);
+let facePose = null;
+const oak = {measured: 0, unmeasured: 0, mismatches: 0};
+stream.subscribeToChannels?.(frame => {
+  facePose = null;
   if (frame === null) { live.channelResets += 1; return; }
   live.channelFrames += 1;
+  // Synthetic face-0 carries head pose on even camera frames. Odd frames expose stale reuse.
+  const pose = frame.channels.find(view => view.descriptor.kind === 'ultraskelly.head_pose'
+    && view.owner.trackerId === 'face-0' && view.descriptor.camera_id === 'synthetic');
+  facePose = {frameNumber: frame.frameNumber, valid: pose?.rowCount === 1
+    && pose.descriptor.columns.join(',') === 'yaw_deg,pitch_deg,roll_deg' && pose.data.every(Number.isFinite),
+    present: Boolean(pose)};
   for (const view of frame.channels) {
     if (view.descriptor.kind !== TARGET_CHANNEL) continue;
     live.targetChannels += 1;
@@ -152,6 +164,13 @@ stream.subscribeToImages((buffer, frameNumber) => {
   live.mostPeople = Math.max(live.mostPeople, overlays.length);
   if (overlays.length) live.framesWithPeople += 1;
   checkIdentity(frameNumber, overlays);
+  if (PEOPLE > 0) {
+    const measured = frameNumber % 2 === 0;
+    if (facePose?.frameNumber !== frameNumber || !overlays.some(view => view.trackerId === 'face-0')
+        || (measured ? !facePose.valid : facePose.present)) oak.mismatches += 1;
+    else if (measured) oak.measured += 1;
+    else oak.unmeasured += 1;
+  }
   show({buffer, overlays});
 });
 
@@ -183,6 +202,8 @@ async function run() {
     lastImage,
   });
   const needPeople = Math.max(PEOPLE, 2);
+  check('oak_channels_match_image', oak.measured > 0 && oak.unmeasured > 0 && oak.mismatches === 0,
+        {...oak, applicable: PEOPLE > 0});
   check('several_tracked_subjects', live.mostPeople >= needPeople, {
     mostPeopleInAFrame: live.mostPeople, required: needPeople, framesWithPeople: live.framesWithPeople,
     applicable: PEOPLE > 0 || live.mostPeople >= 2,
@@ -191,12 +212,12 @@ async function run() {
         identity.frames > 0 && identity.consistent === identity.frames && (PEOPLE < 2 || identity.positions.size > 1)
           && (PEOPLE < 3 || identity.middle === identity.frames), {
     framesWithTarget: identity.frames, consistent: identity.consistent, targetRowsSeen: [...identity.positions],
-    middlePerson: identity.middle, problems: identity.problems, applicable: identity.frames > 0,
+    middlePerson: identity.middle, problems: identity.problems, applicable: PEOPLE > 0 || identity.frames > 0,
   });
   const channel = result.targetChannel;
   check('custom_numeric_channel', Boolean(channel) && channel.columns.join() === 'x,y,body_angle_deg'
         && channel.rowCount === 1 && channel.owner.trackerId === 'target' && channel.values.slice(0, 2).every(Number.isFinite), {
-    descriptor: channel ?? null, framesWithChannel: live.targetChannels, applicable: Boolean(channel),
+    descriptor: channel ?? null, framesWithChannel: live.targetChannels, applicable: PEOPLE > 0 || Boolean(channel),
   });
 
   // Reconnect mid-stream: the same service after disconnect() (its decoder is reset), and a
@@ -279,7 +300,8 @@ async function timePackets() {
   const protocol = {
     decode_validate: perFrame(framePackets, items => { const fresh = new MessageDecoder(); for (const bytes of items) fresh.decode(bytes); }),
     resolve_frame: perFrame(frames, items => { const resolver = new FrameResolver(); for (const frame of items) resolver.resolve(frame); }),
-    channel_views: perFrame(frames, items => { for (const frame of items) resolveChannelViews(frame); }),
+    channel_views: resolveChannelViews
+      ? perFrame(frames, items => { for (const frame of items) resolveChannelViews(frame); }) : null,
     robot_state_decode: perFrame(statePackets, items => { const fresh = new MessageDecoder(); for (const bytes of items) fresh.decode(bytes); }),
   };
   const payloads = frames.map(frame => readImagePayload(frame.image));

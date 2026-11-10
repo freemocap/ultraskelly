@@ -6,8 +6,7 @@ sample, float32 columns `time` (seconds after `start_time`), `ax`, `ay`, `az` (m
 the clock of every other time on the stream.
 """
 import numpy as np
-from freemocap_stream import encode_message
-from freemocap_stream.frames import channel_block
+from freemocap_sdk.stream import channel_block, encode_message
 
 from ultraskelly.core.pubsub.bot_topics import ImuMessage
 

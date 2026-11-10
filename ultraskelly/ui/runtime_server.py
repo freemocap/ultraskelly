@@ -1,6 +1,6 @@
 """Live telemetry for the dashboard, streamed the way FreeMoCap streams to its browser.
 
-`/stream` is one WebSocket of self-describing CBOR messages (freemocap-stream).
+`/stream` is one WebSocket of self-describing CBOR messages (freemocap-sdk-stream).
 FreeMoCap `frame` messages carry each camera's JPEG with the poses detected in that
 very image (a stereo camera's two images travel together in one message);
 `robot_state` messages carry the bot's snapshot. The browser decodes them
@@ -22,7 +22,7 @@ from typing import Callable
 
 import numpy as np
 from aiohttp import WSMsgType, web
-from freemocap_stream import (
+from freemocap_sdk.stream import (
     OVERLAY_2D,
     Latest,
     PayloadImage,

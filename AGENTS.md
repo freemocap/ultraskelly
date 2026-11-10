@@ -27,8 +27,8 @@ step methods, clock injection, model assumptions, launch commands, and verificat
   The current DC motor throttle is not a measured waist or jaw angle.
 - Keep the viewer local and account-free. Foxglove, its SDK, and MCAP were explicitly
   rejected. At the owner's direction (2026-11-02) state and video travel on FreeMoCap's
-  self-describing CBOR stream: `/stream`, encoded with `freemocap-stream` and decoded by
-  the vendored `@freemocap/client` (both from FreeMoCap's `sfn26-ultraskelly` branch).
+  self-describing CBOR stream: `/stream`, encoded with `freemocap-sdk-stream` and decoded by
+  the vendored `@freemocap/client`. Both use the shared SDK commit pinned in `pyproject.toml`.
   Rebuild the bundle with `scripts/update-freemocap-client.sh` when that pin moves.
 - Keep this file short. Put findings, acceptance criteria, and research links in
   the audit; update it when evidence changes. Retain hardware experiments until

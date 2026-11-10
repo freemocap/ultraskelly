@@ -10,7 +10,7 @@ camera's pose in the head frame. docs/depth-stream.md describes it for consumers
 import zlib
 
 import numpy as np
-from freemocap_stream import encode_message
+from freemocap_sdk.stream import encode_message
 
 from ultraskelly.core.bot.sensory.head_frame import nominal_camera_to_head
 from ultraskelly.core.pubsub.bot_topics import DepthFrameMessage

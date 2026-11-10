@@ -35,15 +35,20 @@ FILES: dict[str, tuple[Path, str]] = {
 }
 
 
-def page_app() -> web.Application:
+def page_app(client_bundle: Path | None = None) -> web.Application:
     """The acceptance page and the vendored client, with explicit content types."""
+    files = FILES.copy()
+    if client_bundle is not None:
+        files["/vendor/freemocap-client.js"] = (client_bundle, "text/javascript")
+        del files["/vendor/freemocap-client.js.map"]
+
     async def serve(request: web.Request) -> web.Response:
-        path, content_type = FILES[request.path]
+        path, content_type = files[request.path]
         return web.Response(body=path.read_bytes(), content_type=content_type, charset="utf-8",
                             headers={"Cache-Control": "no-store"})
 
     app = web.Application()
-    for route in FILES:
+    for route in files:
         app.router.add_get(route, serve)
     return app
 
@@ -102,7 +107,7 @@ class DevTools:
 async def run_checks(args: argparse.Namespace) -> dict:
     host = args.page_host or network_address()
     port = args.page_port or free_port()
-    runner = web.AppRunner(page_app(), access_log=None)
+    runner = web.AppRunner(page_app(args.client_bundle), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, host, port).start()
     query = f"stream={args.stream}&seconds={args.seconds}&frames={args.frames}&people={args.people}"
@@ -160,15 +165,22 @@ def main() -> None:
     parser.add_argument("--stream", default="ws://127.0.0.1:8080/stream", help="The /stream WebSocket to check")
     parser.add_argument("--people", type=int, default=0,
                         help="People the feed shows (replay --serve --people N); 0 for a real camera")
+    parser.add_argument("--replay", action="store_true",
+                        help="Start a temporary local synthetic camera and simulated motors for this check")
     parser.add_argument("--seconds", type=float, default=10.0, help="Length of the live window")
     parser.add_argument("--frames", type=int, default=120, help="Frames to time the image path and protocol on")
     parser.add_argument("--chromium", default="chromium", help="Chromium or Chrome executable")
     parser.add_argument("--page-host", help="Address to serve the page on (default: this machine's network address)")
     parser.add_argument("--page-port", type=int, default=0, help="Port to serve the page on (default: any free port)")
     parser.add_argument("--out", type=Path, help="Also write the results to this JSON file")
+    parser.add_argument("--client-bundle", type=Path, help="Serve this offline ESM bundle for this test only")
     args = parser.parse_args()
+    if args.client_bundle is not None and not args.client_bundle.is_file():
+        parser.error(f"Client bundle does not exist: {args.client_bundle}")
 
-    result = asyncio.run(run_checks(args))
+    if args.replay and not 1 <= args.people <= 8:
+        parser.error("--replay requires --people 1 through 8")
+    result = asyncio.run(check_replay(args) if args.replay else run_checks(args))
     text = json.dumps(result, indent=1)
     if args.out:
         args.out.write_text(text + "\n")
@@ -177,8 +189,30 @@ def main() -> None:
               if not check.get("pass") and check.get("applicable", True)]
     if not result.get("done"):
         failed.append("the page did not finish")
+    elif result.get("errors"):
+        failed.extend(result["errors"])
     print(f"\n{'FAILED: ' + ', '.join(failed) if failed else 'All applicable checks passed'}", file=sys.stderr)
     sys.exit(1 if failed else 0)
+
+
+async def check_replay(args: argparse.Namespace) -> dict:
+    from ultraskelly.replay import SERVE_INTERVAL, serve
+
+    port = free_port()
+    args.stream = f"ws://127.0.0.1:{port}/stream"
+    args.page_host = args.page_host or "127.0.0.1"
+    serving = asyncio.create_task(serve(port, SERVE_INTERVAL, people=args.people))
+    checks = asyncio.create_task(run_checks(args))
+    try:
+        done, _ = await asyncio.wait([serving, checks], return_when=asyncio.FIRST_COMPLETED)
+        if serving in done:
+            serving.result()
+            raise RuntimeError("Replay stopped during acceptance")
+        return checks.result()
+    finally:
+        for task in (serving, checks):
+            task.cancel()
+        await asyncio.gather(serving, checks, return_exceptions=True)
 
 
 if __name__ == "__main__":

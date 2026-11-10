@@ -8,7 +8,7 @@ MediaPipe's 468 face landmarks. Each hand, on the frames hands are looked for, i
 handedness channel. docs/stream.md describes every column.
 """
 import numpy as np
-from freemocap_stream import BOXES_2D, OVERLAY_2D, channel_block, connection_group, tracker_observation
+from freemocap_sdk.stream import BOXES_2D, OVERLAY_2D, channel_block, connection_group, tracker_observation
 
 from ultraskelly.core.bot.sensory.mediapipe_hands import HAND_BONES, HAND_POINTS
 from ultraskelly.core.bot.sensory.yunet import LANDMARKS
